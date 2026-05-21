@@ -25,7 +25,7 @@ def main():
             response = query_claude(text, args.prompt)
             segments = parse_timestamps(response)
         except Exception as e:
-            print(f"{filename}:  [warning: API error — {e}]")
+            print(f"{filename}:  [warning: API error — {e}]", file=sys.stderr)
             continue
 
         if segments:
