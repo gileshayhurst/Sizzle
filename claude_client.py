@@ -1,5 +1,7 @@
 import anthropic
 
+_client = anthropic.Anthropic()
+
 _SYSTEM_PROMPT = """You are a transcript analyst. Given a timestamped video transcript and a topic prompt, identify the timestamp ranges where the speaker directly addresses the prompt topic.
 
 Return ONLY the timestamp ranges in the format: M:SS-M:SS
@@ -14,8 +16,7 @@ Rules:
 
 
 def query_claude(transcript: str, prompt: str) -> str:
-    client = anthropic.Anthropic()
-    message = client.messages.create(
+    message = _client.messages.create(
         model="claude-opus-4-7",
         max_tokens=256,
         system=_SYSTEM_PROMPT,
