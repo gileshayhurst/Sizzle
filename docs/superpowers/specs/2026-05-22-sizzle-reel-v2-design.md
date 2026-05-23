@@ -11,6 +11,8 @@ An expansion of the existing sizzle reel CLI tool. The original tool accepted pr
 python sizzle.py <videos_folder> "<prompt>" [--output sizzle_reel.mp4]
 ```
 
+`--output` defaults to `sizzle_reel.mp4` in the current working directory.
+
 **Example:**
 ```
 python sizzle.py ./interviews "What do people say about the hospitality of the waiters?" --output highlights.mp4
@@ -29,7 +31,7 @@ Sizzle reel saved to highlights.mp4
 Three sequential stages:
 
 **Stage 1 — Transcription**
-Scan the input folder for video files. For each video, check if a `.txt` transcript already exists with the same base name in the same folder. If it does, skip transcription. If not, run Whisper locally and save the transcript as `{video_name}.txt` alongside the video. This cache means re-running with a different prompt does not re-transcribe.
+Scan the input folder for video files (`.mp4`, `.mov`, `.avi`, `.mkv`). For each video, check if a `.txt` transcript already exists with the same base name in the same folder. If it does, skip transcription. If not, run Whisper locally (using the `base` model — fast but less accurate; switch to `small` or `medium` for noisy audio or non-English content) and save the transcript as `{video_name}.txt` alongside the video. This cache means re-running with a different prompt does not re-transcribe.
 
 **Stage 2 — Timestamp extraction (existing)**
 Pass each transcript and the user's prompt to Claude. Parse the response into `M:SS-M:SS` timestamp ranges. This stage is unchanged from v1.
