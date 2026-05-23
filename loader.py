@@ -1,6 +1,6 @@
 from pathlib import Path
 
-_VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv"}
+_VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
 
 
 def load_transcripts(folder_path: str) -> dict[str, str]:
