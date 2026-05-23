@@ -1,12 +1,13 @@
 import os
 import subprocess
 import tempfile
+from pathlib import Path
 
 
 def check_ffmpeg() -> None:
     try:
-        subprocess.run(["ffmpeg", "-version"], capture_output=True)
-    except FileNotFoundError:
+        subprocess.run(["ffmpeg", "-version"], capture_output=True, check=True)
+    except (FileNotFoundError, subprocess.CalledProcessError):
         raise RuntimeError(
             "ffmpeg not found. Install it with:\n"
             "  Windows: winget install ffmpeg\n"
@@ -38,7 +39,7 @@ def stitch_clips(clip_paths: list[str], output_path: str) -> None:
     with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
         concat_list_path = f.name
         for path in clip_paths:
-            f.write(f"file '{path}'\n")
+            f.write(f"file '{Path(path).as_posix()}'\n")
     try:
         subprocess.run(
             [

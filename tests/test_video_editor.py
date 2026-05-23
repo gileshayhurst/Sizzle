@@ -1,5 +1,6 @@
 import pytest
 from unittest.mock import MagicMock, patch
+from subprocess import CalledProcessError
 from video_editor import (
     check_ffmpeg,
     parse_timestamp_to_seconds,
@@ -72,3 +73,25 @@ def test_stitch_clips_concat_list_contains_clip_paths(tmp_path):
     assert len(captured) == 1
     assert "/tmp/clip_0.mp4" in captured[0]
     assert "/tmp/clip_1.mp4" in captured[0]
+
+
+def test_extract_clip_propagates_ffmpeg_error():
+    with patch("video_editor.subprocess.run", side_effect=CalledProcessError(1, "ffmpeg")):
+        with pytest.raises(CalledProcessError):
+            extract_clip("in.mp4", 0.0, 5.0, "out.mp4")
+
+
+def test_stitch_clips_propagates_ffmpeg_error(tmp_path):
+    output = str(tmp_path / "out.mp4")
+    call_count = 0
+
+    def mock_run(cmd, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1 and "-f" in cmd and "concat" in cmd:
+            raise CalledProcessError(1, "ffmpeg")
+        return MagicMock()
+
+    with patch("video_editor.subprocess.run", side_effect=mock_run):
+        with pytest.raises(CalledProcessError):
+            stitch_clips(["/tmp/clip_0.mp4"], output)
