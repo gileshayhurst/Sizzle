@@ -8,8 +8,9 @@ def _seconds_to_timestamp(seconds: float) -> str:
     return f"{m}:{s:02d}"
 
 
-def transcribe_video(video_path: str) -> str:
-    model = whisper.load_model("base")
+def transcribe_video(video_path: str, model=None) -> str:
+    if model is None:
+        model = whisper.load_model("base")
     result = model.transcribe(video_path)
     lines = []
     for segment in result["segments"]:
