@@ -19,7 +19,7 @@ def test_raises_file_not_found_on_missing_folder():
 
 def test_raises_value_error_on_no_txt_files(tmp_path):
     (tmp_path / "notes.md").write_text("some notes")
-    with pytest.raises(ValueError, match="No .txt files found"):
+    with pytest.raises(ValueError, match=r"No \.txt files found"):
         load_transcripts(str(tmp_path))
 
 
