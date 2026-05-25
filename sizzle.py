@@ -81,7 +81,7 @@ def main():
                 start_str, end_str = segment.split("-")
                 start_sec = parse_timestamp_to_seconds(start_str)
                 end_sec = parse_timestamp_to_seconds(end_str)
-                clip_path = os.path.join(tmp_dir, f"clip_{clip_index:04d}.mp4")
+                clip_path = os.path.join(tmp_dir, f"clip_{clip_index:04d}{video_path.suffix}")
                 try:
                     extract_clip(str(video_path), start_sec, end_sec, clip_path)
                     clip_paths.append(clip_path)
