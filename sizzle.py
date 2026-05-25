@@ -39,7 +39,7 @@ def main():
         sys.exit(1)
 
     if args.output is None:
-        args.output = "sizzle_reel" + video_paths[0].suffix
+        args.output = Path(args.folder).name + video_paths[0].suffix
 
     print("Loading Whisper model...", file=sys.stderr)
     whisper_model = whisper.load_model("base")
