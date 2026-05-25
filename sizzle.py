@@ -20,8 +20,8 @@ def main():
     parser.add_argument("folder", help="Path to folder containing video files")
     parser.add_argument("--prompt", nargs="+", required=True, help="Topic to search for in the videos")
     parser.add_argument(
-        "--output", default="sizzle_reel.webm",
-        help="Output file path (default: sizzle_reel.webm)"
+        "--output", default=None,
+        help="Output file path (default: sizzle_reel.<source_extension>)"
     )
     args = parser.parse_args()
     args.prompt = " ".join(args.prompt)
@@ -37,6 +37,9 @@ def main():
     except (FileNotFoundError, ValueError) as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
+
+    if args.output is None:
+        args.output = "sizzle_reel" + video_paths[0].suffix
 
     print("Loading Whisper model...", file=sys.stderr)
     whisper_model = whisper.load_model("base")
