@@ -20,8 +20,8 @@ def main():
     parser.add_argument("folder", help="Path to folder containing video files")
     parser.add_argument("prompt", help="Topic to search for in the videos")
     parser.add_argument(
-        "--output", default="sizzle_reel.mp4",
-        help="Output file path (default: sizzle_reel.mp4)"
+        "--output", default="sizzle_reel.webm",
+        help="Output file path (default: sizzle_reel.webm)"
     )
     args = parser.parse_args()
 
