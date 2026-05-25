@@ -47,13 +47,17 @@ def test_extract_clip_calls_correct_ffmpeg_args():
 
 
 def test_stitch_clips_calls_ffmpeg_concat(tmp_path):
-    output = str(tmp_path / "out.mp4")
+    output = str(tmp_path / "out.webm")
     with patch("video_editor.subprocess.run") as mock_run:
-        stitch_clips(["/tmp/clip_0.mp4", "/tmp/clip_1.mp4"], output)
+        stitch_clips(["/tmp/clip_0.webm", "/tmp/clip_1.webm"], output)
     args = mock_run.call_args[0][0]
     assert "-f" in args
     assert "concat" in args
     assert output in args
+    assert "-c" in args
+    assert "copy" in args
+    assert "libx264" not in args
+    assert "aac" not in args
 
 
 def test_stitch_clips_concat_list_contains_clip_paths(tmp_path):
