@@ -18,12 +18,13 @@ def main():
         description="Generate a sizzle reel from relevant segments across video files."
     )
     parser.add_argument("folder", help="Path to folder containing video files")
-    parser.add_argument("prompt", help="Topic to search for in the videos")
+    parser.add_argument("prompt", nargs="+", help="Topic to search for in the videos")
     parser.add_argument(
         "--output", default="sizzle_reel.webm",
         help="Output file path (default: sizzle_reel.webm)"
     )
     args = parser.parse_args()
+    args.prompt = " ".join(args.prompt)
 
     try:
         check_ffmpeg()
