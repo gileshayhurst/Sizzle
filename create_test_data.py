@@ -799,7 +799,16 @@ def generate_video(output_path: str, duration: int, color: str) -> None:
 
 
 def create_test_data(output_dir: str) -> None:
-    pass
+    base = Path(output_dir)
+    for folder_name, business in BUSINESSES.items():
+        folder = base / folder_name
+        folder.mkdir(parents=True, exist_ok=True)
+        for filename, data in business["respondents"].items():
+            txt_path = folder / f"{filename}.txt"
+            mp4_path = folder / f"{filename}.mp4"
+            write_transcript(str(txt_path), data["transcript"])
+            generate_video(str(mp4_path), duration=data["duration"], color=business["color"])
+            print(f"  {folder_name}/{filename}")
 
 
 if __name__ == "__main__":
