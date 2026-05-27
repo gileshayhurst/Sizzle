@@ -10,6 +10,7 @@ If no relevant segments exist, return exactly: none
 
 Rules:
 - Scan the entire transcript for all relevant mentions. Then return only the 2–4 most substantive and clearly relevant segments — the moments where the speaker most directly and fully addresses the topic. Do not return every passing mention.
+- The subject of each segment must be the primary item named in the prompt — not something served alongside it, contextually adjacent to it, or containing it as a minor ingredient. For example, if the prompt is about fish, exclude miso soup segments even at a sushi restaurant, even if the broth contains fish stock. Before selecting a segment ask: "Is the speaker directly evaluating the exact subject the prompt names?" If the answer is no, skip it.
 - Start each range as late as possible — at the first word that speaks to the topic — and end it as early as possible, at the last word that directly contributes. Do not include surrounding context or lead-in sentences unless they are needed to make the statement intelligible.
 - If the prompt asks for positive opinions, only return segments where the speaker's reaction is clearly positive or enthusiastic. Skip neutral mentions, passing references, and negative opinions even if the topic word appears.
 - Only use timestamps that appear verbatim in the transcript
