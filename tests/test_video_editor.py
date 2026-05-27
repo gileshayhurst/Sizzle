@@ -41,9 +41,21 @@ def test_extract_clip_calls_correct_ffmpeg_args():
         "-i", "input.mp4",
         "-ss", "5.0",
         "-to", "30.0",
-        "-c", "copy",
+        "-c:v", "libx264",
+        "-preset", "fast",
+        "-c:a", "aac",
         "clip.mp4",
     ]
+
+
+def test_extract_clip_does_not_use_stream_copy():
+    """Stream copy (-c copy) in extract_clip produces clips that may start on P/B frames,
+    causing a visible freeze at every clip transition when the output is assembled."""
+    with patch("video_editor.subprocess.run") as mock_run:
+        extract_clip("input.mp4", 5.0, 30.0, "clip.mp4")
+    args = mock_run.call_args[0][0]
+    assert "-c" not in args or args[args.index("-c") + 1] != "copy", \
+        "extract_clip must not use -c copy: it produces non-keyframe clip starts that freeze on playback"
 
 
 def test_stitch_clips_calls_ffmpeg_concat(tmp_path):
