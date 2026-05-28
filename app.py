@@ -196,16 +196,18 @@ def _run_generation(job_id: str, folder: str, mode: str,
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         clip_paths: list[str] = []
+        clip_durations: list[float] = []
         clip_index = 0
         for vp, segments in video_segments:
             for seg in segments:
-                start_str, end_str = seg.split("-")
+                start_str, end_str = seg.split("-", 1)
                 start_sec = parse_timestamp_to_seconds(start_str)
                 end_sec = parse_timestamp_to_seconds(end_str)
                 clip_path = os.path.join(tmp_dir, f"clip_{clip_index:04d}{vp.suffix}")
                 try:
                     extract_clip(str(vp), start_sec, end_sec, clip_path)
                     clip_paths.append(clip_path)
+                    clip_durations.append(end_sec - start_sec)
                     clip_index += 1
                 except Exception as exc:
                     _append_log(job_id, f"✗ {vp.name} [{seg}] — extraction failed: {exc}")
@@ -225,10 +227,7 @@ def _run_generation(job_id: str, folder: str, mode: str,
                 job["error"] = f"Stitch failed: {exc}"
             return
 
-    duration = int(sum(
-        parse_timestamp_to_seconds(s.split("-")[1]) - parse_timestamp_to_seconds(s.split("-")[0])
-        for _, segs in video_segments for s in segs
-    ))
+    duration = int(sum(clip_durations))
 
     result = {
         "path": output_path,
@@ -368,6 +367,7 @@ def create_app(testing: bool = False) -> Flask:
         mode = body.get("mode", "highlight")
         selections = body.get("selections", {})
         output_filename = body.get("output_filename", "sizzle_reel.mp4").strip()
+        output_filename = Path(output_filename).name  # strip any path components
 
         if not prompt:
             return jsonify({"error": "prompt is required"}), 400
