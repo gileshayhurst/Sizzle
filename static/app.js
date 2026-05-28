@@ -158,3 +158,150 @@ document.querySelectorAll('.mode-btn').forEach(btn => {
 $('btn-analyze-all').addEventListener('click', () => {
   submitGenerate('all', {});
 });
+
+// ─── Sidebar ──────────────────────────────────────────────────────────────────
+function renderSidebar() {
+  const list = $('sidebar-list');
+  list.innerHTML = '';
+  state.files.forEach(f => {
+    const li = document.createElement('li');
+    li.className = 'sidebar-item' + (f.name === state.activeFile ? ' active' : '');
+    li.dataset.name = f.name;
+
+    const nameDiv = document.createElement('div');
+    nameDiv.className = 'item-name';
+    nameDiv.textContent = f.name;
+
+    const badgeDiv = document.createElement('div');
+    badgeDiv.className = 'item-badge';
+    badgeDiv.id = `badge-${CSS.escape(f.name)}`;
+    updateBadgeEl(badgeDiv, f.name);
+
+    li.appendChild(nameDiv);
+    li.appendChild(badgeDiv);
+    li.addEventListener('click', () => selectFile(f.name));
+    list.appendChild(li);
+  });
+}
+
+function updateBadgeEl(el, filename) {
+  const cb = state.checked[filename]?.size || 0;
+  const hl = state.highlighted[filename]?.size || 0;
+  if (state.mode === 'checkbox') {
+    el.innerHTML = cb > 0 ? `<span class="badge-checked">${cb} checked</span>` : '0 checked';
+  } else {
+    el.innerHTML = hl > 0 ? `<span class="badge-highlighted">${hl} highlighted</span>` : 'none highlighted';
+  }
+}
+
+function refreshBadge(filename) {
+  const el = document.getElementById(`badge-${CSS.escape(filename)}`);
+  if (el) updateBadgeEl(el, filename);
+}
+
+function selectFile(filename) {
+  state.activeFile = filename;
+  $('transcript-filename').textContent = filename.replace(/\.[^.]+$/, '.txt');
+  document.querySelectorAll('.sidebar-item').forEach(li => {
+    li.classList.toggle('active', li.dataset.name === filename);
+  });
+  renderTranscript(filename);
+  updateSelectAllBtn();
+}
+
+function updateSelectAllBtn() {
+  const btn = $('btn-select-all');
+  if (state.mode === 'checkbox') {
+    btn.textContent = 'check all';
+    btn.className = 'select-all-btn checkbox-mode';
+    btn.onclick = () => checkAllInFile(state.activeFile);
+  } else {
+    btn.textContent = 'highlight all';
+    btn.className = 'select-all-btn highlight-mode';
+    btn.onclick = () => highlightAllInFile(state.activeFile);
+  }
+}
+
+// ─── Checkbox mode ────────────────────────────────────────────────────────────
+function renderCheckboxMode(fileObj) {
+  const scroll = $('transcript-scroll');
+  scroll.innerHTML = '';
+  if (!fileObj || fileObj.lines.length === 0) {
+    scroll.textContent = 'No transcript available.';
+    return;
+  }
+
+  // Group by minute
+  const groups = {};
+  fileObj.lines.forEach(line => {
+    const b = line.minute_bucket;
+    if (!groups[b]) groups[b] = { label: `${b}:00 – ${b + 1}:00`, lines: [] };
+    groups[b].lines.push(line);
+  });
+
+  Object.values(groups).forEach(group => {
+    const groupEl = document.createElement('div');
+    groupEl.className = 'minute-group';
+
+    const labelEl = document.createElement('div');
+    labelEl.className = 'minute-label';
+    labelEl.textContent = group.label;
+
+    const checkAllBtn = document.createElement('button');
+    checkAllBtn.className = 'check-all-group';
+    checkAllBtn.textContent = 'check all';
+    checkAllBtn.addEventListener('click', e => {
+      e.stopPropagation();
+      group.lines.forEach(l => state.checked[fileObj.name].add(l.raw));
+      renderCheckboxMode(fileObj);
+      refreshBadge(fileObj.name);
+    });
+    labelEl.appendChild(checkAllBtn);
+    groupEl.appendChild(labelEl);
+
+    group.lines.forEach(line => {
+      const lineEl = document.createElement('div');
+      lineEl.className = 'transcript-line-cb';
+
+      const cbBox = document.createElement('div');
+      cbBox.className = 'cb-box' + (state.checked[fileObj.name].has(line.raw) ? ' checked' : '');
+      cbBox.textContent = state.checked[fileObj.name].has(line.raw) ? '✓' : '';
+
+      const ts = document.createElement('div');
+      ts.className = 'ts-cb';
+      ts.textContent = line.timestamp;
+
+      const text = document.createElement('div');
+      text.className = 'line-text-cb';
+      text.textContent = line.text;
+
+      lineEl.appendChild(cbBox);
+      lineEl.appendChild(ts);
+      lineEl.appendChild(text);
+
+      lineEl.addEventListener('click', () => {
+        const s = state.checked[fileObj.name];
+        if (s.has(line.raw)) { s.delete(line.raw); cbBox.classList.remove('checked'); cbBox.textContent = ''; }
+        else { s.add(line.raw); cbBox.classList.add('checked'); cbBox.textContent = '✓'; }
+        refreshBadge(fileObj.name);
+      });
+
+      groupEl.appendChild(lineEl);
+    });
+    scroll.appendChild(groupEl);
+  });
+}
+
+function checkAllInFile(filename) {
+  const fileObj = state.files.find(f => f.name === filename);
+  if (!fileObj) return;
+  fileObj.lines.forEach(l => state.checked[filename].add(l.raw));
+  renderTranscript(filename);
+  refreshBadge(filename);
+}
+
+function renderTranscript(filename) {
+  const fileObj = state.files.find(f => f.name === filename);
+  if (state.mode === 'checkbox') renderCheckboxMode(fileObj);
+  else renderHighlightMode(fileObj);
+}
