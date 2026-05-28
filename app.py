@@ -112,8 +112,11 @@ def create_app(testing: bool = False) -> Flask:
         def _transcribe():
             model = _get_whisper_model()
             for i, vp in enumerate(needs_transcription):
-                if _jobs[job_id]["cancel"].is_set():
-                    _jobs[job_id]["status"] = "cancelled"
+                with _jobs_lock:
+                    cancel_event = _jobs[job_id]["cancel"]
+                if cancel_event.is_set():
+                    with _jobs_lock:
+                        _jobs[job_id]["status"] = "cancelled"
                     return
                 _append_log(job_id, f"⟳ {vp.name} — transcribing...")
                 try:
@@ -122,6 +125,8 @@ def create_app(testing: bool = False) -> Flask:
                     _append_log(job_id, f"✓ {vp.name} — done")
                 except Exception as exc:
                     _append_log(job_id, f"✗ {vp.name} — failed: {exc}")
+                    with _jobs_lock:
+                        _jobs[job_id]["error"] = f"{vp.name}: {exc}"
                 with _jobs_lock:
                     _jobs[job_id]["done"] = i + 1
             with _jobs_lock:
