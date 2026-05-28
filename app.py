@@ -156,9 +156,8 @@ def create_app(testing: bool = False) -> Flask:
     def cancel_job(job_id):
         with _jobs_lock:
             job = _jobs.get(job_id)
-        if job:
-            job["cancel"].set()
-            with _jobs_lock:
+            if job:
+                job["cancel"].set()
                 _jobs[job_id]["status"] = "cancelled"
         return jsonify({"ok": True})
 

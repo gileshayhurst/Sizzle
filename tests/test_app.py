@@ -94,3 +94,5 @@ def test_cancel_job(client):
     resp = client.delete(f"/jobs/{job_id}")
     assert resp.status_code == 200
     assert cancel_event.is_set()
+    with _jobs_lock:
+        assert _jobs[job_id]["status"] == "cancelled"
