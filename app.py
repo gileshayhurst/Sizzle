@@ -114,6 +114,146 @@ def _group_by_minute(lines: list[dict]) -> list[dict]:
     return result
 
 
+def _load_library() -> list:
+    if not LIBRARY_PATH.exists():
+        return []
+    try:
+        with LIBRARY_PATH.open(encoding="utf-8") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return []
+
+
+def _save_library(entries: list) -> None:
+    with LIBRARY_PATH.open("w", encoding="utf-8") as f:
+        json.dump(entries, f, indent=2, ensure_ascii=False)
+
+
+def _library_add(entry: dict) -> None:
+    with _library_lock:
+        entries = _load_library()
+        entries.insert(0, entry)
+        _save_library(entries)
+
+
+def _run_generation(job_id: str, folder: str, mode: str,
+                    selections: dict, prompt: str, output_filename: str) -> None:
+    job = _jobs[job_id]
+    try:
+        video_paths = scan_videos(folder)
+    except Exception as exc:
+        with _jobs_lock:
+            job["status"] = "error"
+            job["error"] = str(exc)
+        return
+
+    video_segments: list[tuple] = []
+
+    for i, vp in enumerate(video_paths):
+        if job["cancel"].is_set():
+            with _jobs_lock:
+                job["status"] = "cancelled"
+            return
+
+        if mode == "all":
+            txt = vp.with_suffix(".txt")
+            if not txt.exists():
+                continue
+            transcript = txt.read_text(encoding="utf-8")
+        else:
+            lines = selections.get(vp.name, [])
+            if not lines:
+                continue
+            transcript = "\n".join(lines)
+
+        _append_log(job_id, f"⟳ {vp.name} — analyzing...")
+        try:
+            response = query_claude(transcript, prompt)
+            segments = parse_timestamps(response)
+        except Exception as exc:
+            _append_log(job_id, f"✗ {vp.name} — API error: {exc}")
+            with _jobs_lock:
+                job["done"] = i + 1
+            continue
+
+        if segments:
+            _append_log(job_id, f"✓ {vp.name} — found: {', '.join(segments)}")
+            video_segments.append((vp, segments))
+        else:
+            _append_log(job_id, f"· {vp.name} — no relevant segments")
+
+        with _jobs_lock:
+            job["done"] = i + 1
+
+    if not video_segments:
+        with _jobs_lock:
+            job["status"] = "error"
+            job["error"] = "No relevant segments found in any video"
+        return
+
+    _append_log(job_id, "· Extracting clips...")
+    output_path = str(Path(folder) / output_filename)
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        clip_paths: list[str] = []
+        clip_index = 0
+        for vp, segments in video_segments:
+            for seg in segments:
+                start_str, end_str = seg.split("-")
+                start_sec = parse_timestamp_to_seconds(start_str)
+                end_sec = parse_timestamp_to_seconds(end_str)
+                clip_path = os.path.join(tmp_dir, f"clip_{clip_index:04d}{vp.suffix}")
+                try:
+                    extract_clip(str(vp), start_sec, end_sec, clip_path)
+                    clip_paths.append(clip_path)
+                    clip_index += 1
+                except Exception as exc:
+                    _append_log(job_id, f"✗ {vp.name} [{seg}] — extraction failed: {exc}")
+
+        if not clip_paths:
+            with _jobs_lock:
+                job["status"] = "error"
+                job["error"] = "No clips could be extracted"
+            return
+
+        _append_log(job_id, "· Stitching reel...")
+        try:
+            stitch_clips(clip_paths, output_path)
+        except Exception as exc:
+            with _jobs_lock:
+                job["status"] = "error"
+                job["error"] = f"Stitch failed: {exc}"
+            return
+
+    duration = int(sum(
+        parse_timestamp_to_seconds(s.split("-")[1]) - parse_timestamp_to_seconds(s.split("-")[0])
+        for _, segs in video_segments for s in segs
+    ))
+
+    result = {
+        "path": output_path,
+        "filename": output_filename,
+        "clip_count": len(clip_paths),
+        "duration_seconds": duration,
+    }
+
+    _append_log(job_id, f"✓ Done — saved to {output_filename}")
+    with _jobs_lock:
+        job["status"] = "done"
+        job["result"] = result
+
+    _library_add({
+        "id": str(uuid.uuid4()),
+        "filename": output_filename,
+        "path": output_path,
+        "source_folder": Path(folder).name + "/",
+        "prompt": prompt,
+        "duration_seconds": duration,
+        "clip_count": len(clip_paths),
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+    })
+
+
 def create_app(testing: bool = False) -> Flask:
     app = Flask(__name__)
     app.config["TESTING"] = testing
@@ -219,6 +359,38 @@ def create_app(testing: bool = False) -> Flask:
                 lines = _parse_transcript_lines(txt_path.read_text(encoding="utf-8"))
             files.append({"name": vp.name, "lines": lines})
         return jsonify({"files": files})
+
+    @app.post("/generate")
+    def generate():
+        body = request.get_json() or {}
+        folder = body.get("folder", "").strip()
+        prompt = body.get("prompt", "").strip()
+        mode = body.get("mode", "highlight")
+        selections = body.get("selections", {})
+        output_filename = body.get("output_filename", "sizzle_reel.mp4").strip()
+
+        if not prompt:
+            return jsonify({"error": "prompt is required"}), 400
+        if not folder or not Path(folder).exists():
+            return jsonify({"error": "Folder not found"}), 404
+
+        try:
+            check_ffmpeg()
+        except RuntimeError as exc:
+            return jsonify({"error": str(exc)}), 500
+
+        try:
+            video_paths = scan_videos(folder)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 422
+
+        job_id = _new_job("generation", len(video_paths))
+        threading.Thread(
+            target=_run_generation,
+            args=(job_id, folder, mode, selections, prompt, output_filename),
+            daemon=True,
+        ).start()
+        return jsonify({"job_id": job_id})
 
     return app
 

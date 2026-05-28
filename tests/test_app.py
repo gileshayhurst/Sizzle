@@ -129,3 +129,33 @@ def test_transcripts_endpoint_returns_structured_data(client, tmp_path):
     assert f["lines"][0]["timestamp"] == "0:05"
     assert f["lines"][0]["minute_bucket"] == 0
     assert f["lines"][1]["minute_bucket"] == 1
+
+
+def test_generate_returns_job_id(client, tmp_path):
+    (tmp_path / "vid.mp4").touch()
+    (tmp_path / "vid.txt").write_text("[0:05] Speaker: Hello.", encoding="utf-8")
+
+    with patch("app.query_claude", return_value="0:05-0:10"), \
+         patch("app.extract_clip"), \
+         patch("app.stitch_clips"), \
+         patch("app.check_ffmpeg"):
+        resp = client.post("/generate", json={
+            "folder": str(tmp_path),
+            "mode": "highlight",
+            "selections": {"vid.mp4": ["[0:05] Speaker: Hello."]},
+            "prompt": "greetings",
+            "output_filename": "out.mp4",
+        })
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert "job_id" in data
+
+
+def test_generate_missing_prompt_returns_400(client, tmp_path):
+    resp = client.post("/generate", json={
+        "folder": str(tmp_path),
+        "mode": "highlight",
+        "selections": {},
+        "output_filename": "out.mp4",
+    })
+    assert resp.status_code == 400
