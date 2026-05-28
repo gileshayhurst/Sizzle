@@ -1,5 +1,6 @@
 import json
 import os
+import re as _re
 import tempfile
 import threading
 import uuid
@@ -72,6 +73,45 @@ def _pick_directory() -> str | None:
     t.start()
     t.join()
     return result["path"]
+
+
+_LINE_RE = _re.compile(r'^\[(\d+:\d{2})\]\s+\w+:\s+(.*)')
+
+
+def _parse_transcript_lines(raw_text: str) -> list[dict]:
+    lines = []
+    for raw in raw_text.splitlines():
+        raw = raw.strip()
+        if not raw:
+            continue
+        m = _LINE_RE.match(raw)
+        if not m:
+            continue
+        ts, text = m.group(1), m.group(2)
+        seconds = parse_timestamp_to_seconds(ts)
+        lines.append({
+            "raw": raw,
+            "timestamp": ts,
+            "text": text,
+            "seconds": seconds,
+            "minute_bucket": int(seconds) // 60,
+        })
+    return lines
+
+
+def _group_by_minute(lines: list[dict]) -> list[dict]:
+    buckets: dict[int, list] = {}
+    for line in lines:
+        b = line["minute_bucket"]
+        buckets.setdefault(b, []).append(line)
+    result = []
+    for b in sorted(buckets):
+        result.append({
+            "bucket": b,
+            "label": f"{b}:00 – {b + 1}:00",
+            "lines": buckets[b],
+        })
+    return result
 
 
 def create_app(testing: bool = False) -> Flask:
@@ -160,6 +200,25 @@ def create_app(testing: bool = False) -> Flask:
                 job["cancel"].set()
                 _jobs[job_id]["status"] = "cancelled"
         return jsonify({"ok": True})
+
+    @app.get("/transcripts")
+    def get_transcripts():
+        folder = request.args.get("folder", "").strip()
+        if not folder or not Path(folder).exists():
+            return jsonify({"error": "Folder not found"}), 404
+        try:
+            video_paths = scan_videos(folder)
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 422
+        files = []
+        for vp in video_paths:
+            txt_path = vp.with_suffix(".txt")
+            if not txt_path.exists():
+                lines = []
+            else:
+                lines = _parse_transcript_lines(txt_path.read_text(encoding="utf-8"))
+            files.append({"name": vp.name, "lines": lines})
+        return jsonify({"files": files})
 
     return app
 

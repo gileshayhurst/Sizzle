@@ -96,3 +96,36 @@ def test_cancel_job(client):
     assert cancel_event.is_set()
     with _jobs_lock:
         assert _jobs[job_id]["status"] == "cancelled"
+
+
+def test_group_by_minute_buckets_lines():
+    from app import _group_by_minute
+    lines = [
+        {"timestamp": "0:05", "seconds": 5.0,  "minute_bucket": 0, "raw": "a", "text": "a"},
+        {"timestamp": "0:50", "seconds": 50.0, "minute_bucket": 0, "raw": "b", "text": "b"},
+        {"timestamp": "1:10", "seconds": 70.0, "minute_bucket": 1, "raw": "c", "text": "c"},
+    ]
+    groups = _group_by_minute(lines)
+    assert len(groups) == 2
+    assert groups[0]["label"] == "0:00 – 1:00"
+    assert len(groups[0]["lines"]) == 2
+    assert groups[1]["label"] == "1:00 – 2:00"
+    assert len(groups[1]["lines"]) == 1
+
+
+def test_transcripts_endpoint_returns_structured_data(client, tmp_path):
+    (tmp_path / "vid.mp4").touch()
+    (tmp_path / "vid.txt").write_text(
+        "[0:05] Speaker: Hello world.\n[1:10] Speaker: Second line.",
+        encoding="utf-8"
+    )
+    resp = client.get(f"/transcripts?folder={tmp_path}")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert len(data["files"]) == 1
+    f = data["files"][0]
+    assert f["name"] == "vid.mp4"
+    assert len(f["lines"]) == 2
+    assert f["lines"][0]["timestamp"] == "0:05"
+    assert f["lines"][0]["minute_bucket"] == 0
+    assert f["lines"][1]["minute_bucket"] == 1
