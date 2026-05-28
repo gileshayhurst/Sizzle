@@ -1,3 +1,4 @@
 anthropic
 openai-whisper
 pytest
+flask>=2.0
