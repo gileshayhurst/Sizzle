@@ -159,3 +159,29 @@ def test_generate_missing_prompt_returns_400(client, tmp_path):
         "output_filename": "out.mp4",
     })
     assert resp.status_code == 400
+
+
+def test_library_starts_empty(client, tmp_path, monkeypatch):
+    monkeypatch.setattr("app.LIBRARY_PATH", tmp_path / "lib.json")
+    resp = client.get("/library")
+    assert resp.status_code == 200
+    assert resp.get_json() == []
+
+
+def test_library_delete_removes_entry(client, tmp_path, monkeypatch):
+    import app as app_module
+    import json
+    lib_path = tmp_path / "lib.json"
+    monkeypatch.setattr(app_module, "LIBRARY_PATH", lib_path)
+    # Seed one entry
+    lib_path.write_text(json.dumps([{"id": "abc123", "filename": "x.mp4"}]), encoding="utf-8")
+    resp = client.delete("/library/abc123")
+    assert resp.status_code == 200
+    assert resp.get_json()["ok"] is True
+    remaining = json.loads(lib_path.read_text(encoding="utf-8"))
+    assert remaining == []
+
+
+def test_video_endpoint_not_found(client):
+    resp = client.get("/video/nonexistent-job-id")
+    assert resp.status_code == 404

@@ -392,6 +392,40 @@ def create_app(testing: bool = False) -> Flask:
         ).start()
         return jsonify({"job_id": job_id})
 
+    @app.get("/video/<job_id>")
+    def serve_video(job_id):
+        with _jobs_lock:
+            job = _jobs.get(job_id)
+        if not job or not job.get("result"):
+            return jsonify({"error": "not found"}), 404
+        path = Path(job["result"]["path"])
+        if not path.is_file():
+            return jsonify({"error": "file not found on disk"}), 404
+        return send_file(str(path), conditional=True)
+
+    @app.get("/library-video/<entry_id>")
+    def serve_library_video(entry_id):
+        entries = _load_library()
+        entry = next((e for e in entries if e["id"] == entry_id), None)
+        if not entry:
+            return jsonify({"error": "not found"}), 404
+        path = Path(entry["path"])
+        if not path.is_file():
+            return jsonify({"error": "file not found on disk"}), 404
+        return send_file(str(path), conditional=True)
+
+    @app.get("/library")
+    def get_library():
+        return jsonify(_load_library())
+
+    @app.delete("/library/<entry_id>")
+    def delete_library_entry(entry_id):
+        with _library_lock:
+            entries = _load_library()
+            entries = [e for e in entries if e["id"] != entry_id]
+            _save_library(entries)
+        return jsonify({"ok": True})
+
     return app
 
 
