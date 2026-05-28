@@ -75,7 +75,7 @@ def _pick_directory() -> str | None:
     return result["path"]
 
 
-_LINE_RE = _re.compile(r'^\[(\d+:\d{2})\]\s+\w+:\s+(.*)')
+_LINE_RE = _re.compile(r'^\[(\d+:\d{2})\]\s+\w+:\s*(.*)')
 
 
 def _parse_transcript_lines(raw_text: str) -> list[dict]:
