@@ -78,7 +78,7 @@ async function openFolder(folder) {
     // Needs transcription
     showScreen('screen-transcribing');
     $('topbar-controls').classList.add('hidden');
-    pollTranscription(data.job_id, data.files, folder);
+    pollTranscription(data.job_id, folder);
   } else {
     await loadTranscripts(folder);
     showWorkspace();
@@ -86,17 +86,16 @@ async function openFolder(folder) {
 }
 
 // ─── Transcription polling ────────────────────────────────────────────────────
-function pollTranscription(jobId, files, folder) {
-  const total = files.length;
+function pollTranscription(jobId, folder) {
   let lastLogLen = 0;
 
   const interval = setInterval(async () => {
     const resp = await fetch(`/status/${jobId}`);
     const job = await resp.json();
 
-    const pct = total > 0 ? Math.round((job.done / total) * 100) : 0;
+    const pct = job.total > 0 ? Math.round((job.done / job.total) * 100) : 0;
     $('transcribe-bar').style.width = pct + '%';
-    $('transcribe-subtitle').textContent = `Transcribing ${job.done} / ${total} videos...`;
+    $('transcribe-subtitle').textContent = `Transcribing ${job.done} / ${job.total} videos...`;
 
     const newLines = job.log.slice(lastLogLen);
     newLines.forEach(msg => appendLog('transcribe-log', msg));
@@ -309,6 +308,7 @@ function renderTranscript(filename) {
 // ─── Highlight mode ───────────────────────────────────────────────────────────
 let _dragActive = false;
 let _dragSetTo = null;   // true = highlighting, false = un-highlighting
+document.addEventListener('mouseup', () => { _dragActive = false; });
 
 function renderHighlightMode(fileObj) {
   const scroll = $('transcript-scroll');
@@ -370,7 +370,6 @@ function renderHighlightMode(fileObj) {
     refreshBadge(fileObj.name);
   });
 
-  document.addEventListener('mouseup', () => { _dragActive = false; }, { once: false });
 }
 
 function _applyHighlight(filename, lineEl, setTo) {
@@ -511,6 +510,10 @@ async function loadLibrary() {
   renderLibrary(entries);
 }
 
+function escAttr(s) {
+  return String(s ?? '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
 function renderLibrary(entries) {
   const grid = $('library-grid');
   grid.innerHTML = '';
@@ -539,12 +542,12 @@ function renderLibrary(entries) {
         <div class="reel-duration">${durStr}</div>
       </div>
       <div class="reel-body">
-        <div class="reel-name" title="${entry.filename}">${entry.filename}</div>
-        <div class="reel-meta">${dateStr} · ${entry.clip_count || 0} clips · ${entry.source_folder || ''}</div>
-        <div class="reel-prompt" title="${entry.prompt}">"${entry.prompt}"</div>
+        <div class="reel-name" title="${escAttr(entry.filename)}">${escAttr(entry.filename)}</div>
+        <div class="reel-meta">${escAttr(dateStr)} · ${entry.clip_count || 0} clips · ${escAttr(entry.source_folder || '')}</div>
+        <div class="reel-prompt" title="${escAttr(entry.prompt)}">"${escAttr(entry.prompt)}"</div>
         <div class="reel-actions">
           <button class="reel-btn play" data-id="${entry.id}">▶ Play</button>
-          <button class="reel-btn show" data-id="${entry.id}" data-path="${entry.path}">📂 Show</button>
+          <button class="reel-btn show" data-id="${entry.id}" data-path="${escAttr(entry.path)}">📂 Show</button>
           <button class="reel-btn delete" data-id="${entry.id}">🗑</button>
         </div>
       </div>`;
