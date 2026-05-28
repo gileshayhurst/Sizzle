@@ -136,6 +136,32 @@ def create_app(testing: bool = False) -> Flask:
         threading.Thread(target=_transcribe, daemon=True).start()
         return jsonify({"job_id": job_id, "files": filenames, "folder": folder})
 
+    @app.get("/status/<job_id>")
+    def job_status(job_id):
+        with _jobs_lock:
+            job = _jobs.get(job_id)
+        if job is None:
+            return jsonify({"error": "not found"}), 404
+        return jsonify({
+            "type": job["type"],
+            "status": job["status"],
+            "total": job["total"],
+            "done": job["done"],
+            "log": list(job["log"]),
+            "result": job["result"],
+            "error": job["error"],
+        })
+
+    @app.delete("/jobs/<job_id>")
+    def cancel_job(job_id):
+        with _jobs_lock:
+            job = _jobs.get(job_id)
+        if job:
+            job["cancel"].set()
+            with _jobs_lock:
+                _jobs[job_id]["status"] = "cancelled"
+        return jsonify({"ok": True})
+
     return app
 
 

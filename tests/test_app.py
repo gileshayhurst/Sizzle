@@ -43,3 +43,54 @@ def test_load_folder_no_videos_returns_422(client, tmp_path):
     (tmp_path / "notes.txt").write_text("hello", encoding="utf-8")
     resp = client.post("/load-folder", json={"folder": str(tmp_path)})
     assert resp.status_code == 422
+
+
+def test_status_returns_job_state(client):
+    # Manually inject a job
+    from app import _jobs, _jobs_lock
+    import threading
+    job_id = "test-job-123"
+    with _jobs_lock:
+        _jobs[job_id] = {
+            "type": "transcription",
+            "status": "running",
+            "total": 3,
+            "done": 1,
+            "log": ["✓ video1.mp4 — done"],
+            "result": None,
+            "error": None,
+            "cancel": threading.Event(),
+        }
+    resp = client.get(f"/status/{job_id}")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["status"] == "running"
+    assert data["done"] == 1
+    assert data["total"] == 3
+    assert "✓ video1.mp4 — done" in data["log"]
+
+
+def test_status_unknown_job_returns_404(client):
+    resp = client.get("/status/nonexistent-id")
+    assert resp.status_code == 404
+
+
+def test_cancel_job(client):
+    from app import _jobs, _jobs_lock
+    import threading
+    job_id = "cancel-test-456"
+    cancel_event = threading.Event()
+    with _jobs_lock:
+        _jobs[job_id] = {
+            "type": "generation",
+            "status": "running",
+            "total": 2,
+            "done": 0,
+            "log": [],
+            "result": None,
+            "error": None,
+            "cancel": cancel_event,
+        }
+    resp = client.delete(f"/jobs/{job_id}")
+    assert resp.status_code == 200
+    assert cancel_event.is_set()
