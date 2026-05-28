@@ -503,3 +503,86 @@ $('btn-open-folder').addEventListener('click', async () => {
     body: JSON.stringify({ folder: state.folder }),
   });
 });
+
+// ─── Library ──────────────────────────────────────────────────────────────────
+async function loadLibrary() {
+  const resp = await fetch('/library');
+  const entries = await resp.json();
+  renderLibrary(entries);
+}
+
+function renderLibrary(entries) {
+  const grid = $('library-grid');
+  grid.innerHTML = '';
+  $('library-count').textContent = `Generated Reels (${entries.length})`;
+
+  if (entries.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'library-empty';
+    empty.textContent = 'No reels generated yet.';
+    grid.appendChild(empty);
+    return;
+  }
+
+  entries.forEach(entry => {
+    const card = document.createElement('div');
+    card.className = 'reel-card';
+
+    const mins = Math.floor((entry.duration_seconds || 0) / 60);
+    const secs = (entry.duration_seconds || 0) % 60;
+    const durStr = `${mins}:${String(secs).padStart(2,'0')}`;
+    const dateStr = entry.created_at ? entry.created_at.split('T')[0] : '';
+
+    card.innerHTML = `
+      <div class="reel-thumb" data-id="${entry.id}">
+        <div class="reel-play-icon">▶</div>
+        <div class="reel-duration">${durStr}</div>
+      </div>
+      <div class="reel-body">
+        <div class="reel-name" title="${entry.filename}">${entry.filename}</div>
+        <div class="reel-meta">${dateStr} · ${entry.clip_count || 0} clips · ${entry.source_folder || ''}</div>
+        <div class="reel-prompt" title="${entry.prompt}">"${entry.prompt}"</div>
+        <div class="reel-actions">
+          <button class="reel-btn play" data-id="${entry.id}">▶ Play</button>
+          <button class="reel-btn show" data-id="${entry.id}" data-path="${entry.path}">📂 Show</button>
+          <button class="reel-btn delete" data-id="${entry.id}">🗑</button>
+        </div>
+      </div>`;
+
+    // Thumb click = play
+    card.querySelector('.reel-thumb').addEventListener('click', () => openLibraryPlayer(entry));
+    card.querySelector('.reel-btn.play').addEventListener('click', () => openLibraryPlayer(entry));
+
+    // Show in explorer
+    card.querySelector('.reel-btn.show').addEventListener('click', async () => {
+      const folder = entry.path.replace(/[\\/][^\\/]+$/, '');
+      await fetch('/open-folder', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ folder }),
+      });
+    });
+
+    // Delete
+    card.querySelector('.reel-btn.delete').addEventListener('click', async () => {
+      await fetch(`/library/${entry.id}`, { method: 'DELETE' });
+      loadLibrary();
+    });
+
+    grid.appendChild(card);
+  });
+}
+
+function openLibraryPlayer(entry) {
+  $('library-source').src = `/library-video/${entry.id}`;
+  $('library-video').load();
+  $('library-player-meta').textContent =
+    `"${entry.prompt}" — ${entry.source_folder}`;
+  $('library-player-overlay').classList.remove('hidden');
+}
+
+$('btn-close-player').addEventListener('click', () => {
+  $('library-video').pause();
+  $('library-source').src = '';
+  $('library-player-overlay').classList.add('hidden');
+});
