@@ -392,3 +392,114 @@ function highlightAllInFile(filename) {
   renderTranscript(filename);
   refreshBadge(filename);
 }
+
+// ─── Generate ─────────────────────────────────────────────────────────────────
+$('btn-generate').addEventListener('click', () => {
+  const mode = state.mode;
+  const selections = {};
+  state.files.forEach(f => {
+    const lines = mode === 'checkbox'
+      ? [...(state.checked[f.name] || [])]
+      : [...(state.highlighted[f.name] || [])];
+    if (lines.length > 0) selections[f.name] = lines;
+  });
+  submitGenerate(mode, selections);
+});
+
+async function submitGenerate(mode, selections) {
+  const prompt = $('prompt-input').value.trim();
+  if (!prompt) { alert('Please enter a prompt before generating.'); return; }
+
+  const outputFilename = $('output-filename').value.trim() || 'sizzle_reel.mp4';
+
+  showScreen('screen-generating');
+  $('gen-log').innerHTML = '';
+  $('gen-bar').style.width = '0%';
+  $('topbar-controls').classList.add('hidden');
+
+  const resp = await fetch('/generate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      folder: state.folder,
+      mode,
+      selections,
+      prompt,
+      output_filename: outputFilename,
+    }),
+  });
+  const { job_id, error } = await resp.json();
+  if (!resp.ok) {
+    appendLog('gen-log', `✗ ${error || 'Failed to start generation'}`);
+    return;
+  }
+
+  state.currentJobId = job_id;
+  pollGeneration(job_id);
+}
+
+function pollGeneration(jobId) {
+  let lastLogLen = 0;
+
+  const interval = setInterval(async () => {
+    const resp = await fetch(`/status/${jobId}`);
+    const job = await resp.json();
+
+    const pct = job.total > 0 ? Math.round((job.done / job.total) * 100) : 0;
+    $('gen-bar').style.width = Math.max(pct, 5) + '%';
+
+    const newLines = job.log.slice(lastLogLen);
+    newLines.forEach(msg => appendLog('gen-log', msg));
+    lastLogLen = job.log.length;
+
+    if (job.status === 'done') {
+      clearInterval(interval);
+      $('gen-bar').style.width = '100%';
+      state.resultJobId = jobId;
+      showResult(job.result);
+    } else if (job.status === 'error') {
+      clearInterval(interval);
+      appendLog('gen-log', `✗ Error: ${job.error}`);
+      $('topbar-controls').classList.remove('hidden');
+    } else if (job.status === 'cancelled') {
+      clearInterval(interval);
+      showScreen('screen-workspace');
+      $('topbar-controls').classList.remove('hidden');
+    }
+  }, 2000);
+
+  $('btn-cancel-gen').onclick = async () => {
+    await fetch(`/jobs/${jobId}`, { method: 'DELETE' });
+    clearInterval(interval);
+  };
+}
+
+function showResult(result) {
+  showScreen('screen-result');
+  $('topbar-controls').classList.remove('hidden');
+
+  const src = `/video/${state.resultJobId}`;
+  $('result-source').src = src;
+  $('result-video').load();
+
+  $('result-filename').textContent = result.filename;
+  const mins = Math.floor(result.duration_seconds / 60);
+  const secs = result.duration_seconds % 60;
+  $('result-info').textContent =
+    `${mins}:${String(secs).padStart(2,'0')} · ${result.clip_count} clips · saved to folder`;
+}
+
+$('btn-new-reel').addEventListener('click', () => {
+  $('result-video').pause();
+  $('result-source').src = '';
+  showScreen('screen-workspace');
+  $('topbar-controls').classList.remove('hidden');
+});
+
+$('btn-open-folder').addEventListener('click', async () => {
+  await fetch('/open-folder', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ folder: state.folder }),
+  });
+});

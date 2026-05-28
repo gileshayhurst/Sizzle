@@ -426,6 +426,14 @@ def create_app(testing: bool = False) -> Flask:
             _save_library(entries)
         return jsonify({"ok": True})
 
+    @app.post("/open-folder")
+    def open_folder_in_explorer():
+        folder = (request.get_json() or {}).get("folder", "").strip()
+        if folder and Path(folder).exists():
+            import subprocess
+            subprocess.Popen(['explorer', folder])
+        return jsonify({"ok": True})
+
     return app
 
 
