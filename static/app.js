@@ -305,3 +305,90 @@ function renderTranscript(filename) {
   if (state.mode === 'checkbox') renderCheckboxMode(fileObj);
   else renderHighlightMode(fileObj);
 }
+
+// ─── Highlight mode ───────────────────────────────────────────────────────────
+let _dragActive = false;
+let _dragSetTo = null;   // true = highlighting, false = un-highlighting
+
+function renderHighlightMode(fileObj) {
+  const scroll = $('transcript-scroll');
+  scroll.innerHTML = '';
+  if (!fileObj || fileObj.lines.length === 0) {
+    scroll.textContent = 'No transcript available.';
+    return;
+  }
+
+  fileObj.lines.forEach(line => {
+    const lineEl = document.createElement('div');
+    lineEl.className = 'transcript-line-hl' +
+      (state.highlighted[fileObj.name].has(line.raw) ? ' highlighted' : '');
+    lineEl.dataset.raw = line.raw;
+
+    const bar = document.createElement('div');
+    bar.className = 'hl-bar';
+
+    const ts = document.createElement('div');
+    ts.className = 'ts-hl';
+    ts.textContent = line.timestamp;
+
+    const text = document.createElement('div');
+    text.className = 'line-text-hl';
+    text.textContent = line.text;
+
+    lineEl.appendChild(bar);
+    lineEl.appendChild(ts);
+    lineEl.appendChild(text);
+    scroll.appendChild(lineEl);
+  });
+
+  // ── Drag-to-brush ──────────────────────────────────────────────────────────
+  scroll.addEventListener('mousedown', e => {
+    const lineEl = e.target.closest('.transcript-line-hl');
+    if (!lineEl) return;
+    e.preventDefault();
+    _dragActive = true;
+    const raw = lineEl.dataset.raw;
+    const hl = state.highlighted[fileObj.name];
+    // Determine whether this drag is a highlight or un-highlight pass
+    _dragSetTo = !hl.has(raw);
+    _applyHighlight(fileObj.name, lineEl, _dragSetTo);
+    refreshBadge(fileObj.name);
+  });
+
+  scroll.addEventListener('mousemove', e => {
+    if (!_dragActive) return;
+    const lineEl = e.target.closest('.transcript-line-hl');
+    if (!lineEl) {
+      // Auto-scroll when near edges
+      const rect = scroll.getBoundingClientRect();
+      const threshold = 40;
+      if (e.clientY < rect.top + threshold) scroll.scrollTop -= 8;
+      else if (e.clientY > rect.bottom - threshold) scroll.scrollTop += 8;
+      return;
+    }
+    _applyHighlight(fileObj.name, lineEl, _dragSetTo);
+    refreshBadge(fileObj.name);
+  });
+
+  document.addEventListener('mouseup', () => { _dragActive = false; }, { once: false });
+}
+
+function _applyHighlight(filename, lineEl, setTo) {
+  const raw = lineEl.dataset.raw;
+  const hl = state.highlighted[filename];
+  if (setTo) {
+    hl.add(raw);
+    lineEl.classList.add('highlighted');
+  } else {
+    hl.delete(raw);
+    lineEl.classList.remove('highlighted');
+  }
+}
+
+function highlightAllInFile(filename) {
+  const fileObj = state.files.find(f => f.name === filename);
+  if (!fileObj) return;
+  fileObj.lines.forEach(l => state.highlighted[filename].add(l.raw));
+  renderTranscript(filename);
+  refreshBadge(filename);
+}
