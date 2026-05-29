@@ -230,3 +230,42 @@ def test_make_title_card_escapes_special_characters():
     assert "\\'" in joined        # apostrophe escaped
     assert "%%" in joined          # percent escaped
     assert "\\:" in joined         # colon escaped
+
+
+def test_title_card_inserted_between_videos(client, tmp_path):
+    """make_title_card is called once between two source videos."""
+    import time
+
+    (tmp_path / "alpha.mp4").touch()
+    (tmp_path / "alpha.txt").write_text("[0:05] Speaker: Hello.", encoding="utf-8")
+    (tmp_path / "beta.mp4").touch()
+    (tmp_path / "beta.txt").write_text("[0:10] Speaker: World.", encoding="utf-8")
+
+    with patch("app.query_claude", return_value="0:05-0:10"), \
+         patch("app.extract_clip"), \
+         patch("app.stitch_clips"), \
+         patch("app.check_ffmpeg"), \
+         patch("app.get_video_dimensions", return_value=(1920, 1080)), \
+         patch("app.make_title_card") as mock_card:
+
+        resp = client.post("/generate", json={
+            "folder": str(tmp_path),
+            "mode": "all",
+            "selections": {},
+            "prompt": "highlights",
+            "output_filename": "out.mp4",
+        })
+        assert resp.status_code == 200
+        job_id = resp.get_json()["job_id"]
+
+        # Poll until the background thread finishes (max 5 s)
+        for _ in range(25):
+            status = client.get(f"/status/{job_id}").get_json()["status"]
+            if status in ("done", "error", "cancelled"):
+                break
+            time.sleep(0.2)
+
+    # Exactly one title card — between alpha and beta
+    assert mock_card.call_count == 1
+    # First positional arg is the video name (stem only, no extension)
+    assert mock_card.call_args[0][0] == "beta"

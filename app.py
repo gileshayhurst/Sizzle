@@ -276,7 +276,21 @@ def _run_generation(job_id: str, folder: str, mode: str,
         clip_paths: list[str] = []
         clip_durations: list[float] = []
         clip_index = 0
+        prev_vp = None
         for vp, segments in video_segments:
+            # Insert a title card between consecutive source videos
+            if prev_vp is not None:
+                card_path = os.path.join(tmp_dir, f"clip_{clip_index:04d}.mp4")
+                try:
+                    width, height = get_video_dimensions(str(vp))
+                    make_title_card(Path(vp.name).stem, width, height, card_path)
+                    clip_paths.append(card_path)
+                    clip_index += 1
+                    # Do NOT append to clip_durations — title cards are not content
+                except Exception as exc:
+                    _append_log(job_id, f"· Could not create title card for {vp.name}: {exc}")
+            prev_vp = vp
+
             for seg in segments:
                 start_str, end_str = seg.split("-", 1)
                 start_sec = parse_timestamp_to_seconds(start_str)
