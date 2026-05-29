@@ -187,14 +187,11 @@ async function runAnalyze() {
 
     state.lastPrompt = prompt;
 
-    // Apply returned highlights to every file, replacing prior selections
+    // Apply returned highlights to BOTH sets so mode-switching preserves analysis
     state.files.forEach(f => {
       const lines = data.highlights[f.name] || [];
-      if (state.mode === 'checkbox') {
-        state.checked[f.name] = new Set(lines);
-      } else {
-        state.highlighted[f.name] = new Set(lines);
-      }
+      state.checked[f.name] = new Set(lines);
+      state.highlighted[f.name] = new Set(lines);
     });
 
     if (state.activeFile) renderTranscript(state.activeFile);
