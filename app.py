@@ -192,7 +192,7 @@ def make_title_card(
         .replace("%", "%%")
     )
     fontsize = max(24, height // 15)
-    subprocess.run(
+    result = subprocess.run(
         [
             "ffmpeg", "-y",
             "-f", "lavfi", "-i", f"color=black:size={width}x{height}:rate=30",
@@ -206,9 +206,12 @@ def make_title_card(
             "-t", str(duration),
             output_path,
         ],
-        check=True,
+        check=False,
         capture_output=True,
     )
+    if result.returncode != 0:
+        print(result.stderr.decode(errors="replace"), file=__import__("sys").stderr)
+        result.check_returncode()
 
 
 def _run_generation(job_id: str, folder: str, mode: str,
