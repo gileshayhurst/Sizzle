@@ -19,7 +19,6 @@
     <!-- Shown only in Create tab, after folder loaded -->
     <div id="topbar-controls" class="hidden">
       <span id="folder-badge" class="folder-badge"></span>
-      <button id="btn-analyze-all" class="analyze-all-btn">✓ Analyze Everything</button>
       <div class="mode-toggle">
         <button class="mode-btn active" data-mode="checkbox">☑ Checkbox</button>
         <button class="mode-btn" data-mode="highlight">✦ Highlight</button>
@@ -69,19 +68,21 @@
           <span id="transcript-filename" class="transcript-filename"></span>
           <button id="btn-select-all" class="select-all-btn"></button>
         </div>
+        <div id="analyze-bar">
+          <input id="analyze-input" type="text" class="footer-input analyze-input"
+                 placeholder="Describe what you're looking for…">
+          <button id="btn-analyze" class="btn-analyze">Analyze</button>
+        </div>
+        <div id="analyze-error" class="error-msg hidden" style="padding:3px 14px;font-size:10px;"></div>
         <div id="transcript-scroll" class="transcript-scroll"></div>
         <footer id="workspace-footer">
           <div class="footer-field">
             <label class="footer-label">Output filename</label>
             <input id="output-filename" type="text" class="footer-input filename-input" value="sizzle_reel.mp4">
           </div>
-          <div class="footer-field footer-field-grow">
-            <label class="footer-label">Prompt</label>
-            <input id="prompt-input" type="text" class="footer-input prompt-input" placeholder="e.g. best bites of black cod...">
-          </div>
           <div class="footer-field footer-field-btn">
             <label class="footer-label">&nbsp;</label>
-            <button id="btn-generate" class="btn-generate">▶ Generate Reel</button>
+            <button id="btn-generate" class="btn-generate" disabled>▶ Generate Reel</button>
           </div>
         </footer>
       </section>
