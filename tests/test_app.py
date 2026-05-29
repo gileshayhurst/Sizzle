@@ -320,3 +320,51 @@ def test_make_title_card_does_not_wrap_short_title():
     cmd = mock_run.call_args[0][0]
     vf_arg = cmd[cmd.index("-vf") + 1]
     assert vf_arg.count("drawtext=") == 1
+
+
+def test_group_lines_into_segments_single_contiguous_block():
+    from app import _group_lines_into_segments
+    lines = [
+        {"raw": "a", "seconds": 5.0},
+        {"raw": "b", "seconds": 10.0},
+        {"raw": "c", "seconds": 15.0},
+        {"raw": "d", "seconds": 20.0},  # unselected
+    ]
+    result = _group_lines_into_segments(lines, {"a", "b", "c"})
+    # end = first unselected line (d) at 20.0
+    assert result == [(5.0, 20.0)]
+
+
+def test_group_lines_into_segments_two_clusters():
+    from app import _group_lines_into_segments
+    lines = [
+        {"raw": "a", "seconds": 5.0},
+        {"raw": "b", "seconds": 10.0},  # unselected — splits the groups
+        {"raw": "c", "seconds": 15.0},
+        {"raw": "d", "seconds": 20.0},
+    ]
+    result = _group_lines_into_segments(lines, {"a", "c", "d"})
+    # segment 1: a(5.0) ends at b(10.0)
+    # segment 2: c,d — last line + 10 = 30.0
+    assert result == [(5.0, 10.0), (15.0, 30.0)]
+
+
+def test_group_lines_into_segments_all_selected():
+    from app import _group_lines_into_segments
+    lines = [
+        {"raw": "a", "seconds": 5.0},
+        {"raw": "b", "seconds": 10.0},
+    ]
+    result = _group_lines_into_segments(lines, {"a", "b"})
+    # No line after the group — end = last.seconds + 10
+    assert result == [(5.0, 20.0)]
+
+
+def test_group_lines_into_segments_none_selected():
+    from app import _group_lines_into_segments
+    lines = [
+        {"raw": "a", "seconds": 5.0},
+        {"raw": "b", "seconds": 10.0},
+    ]
+    result = _group_lines_into_segments(lines, set())
+    assert result == []

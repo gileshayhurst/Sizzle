@@ -133,6 +133,35 @@ def _group_by_minute(lines: list[dict]) -> list[dict]:
     return result
 
 
+def _group_lines_into_segments(
+    all_lines: list[dict], selected_raws: set[str]
+) -> list[tuple[float, float]]:
+    """Convert selected transcript lines into (start_sec, end_sec) clip ranges.
+
+    Lines are grouped into segments: any unselected line between two selected
+    lines ends the current segment and starts a new one.
+
+    End time = seconds of the first line AFTER the segment (the next line in the
+    full transcript, whether selected or not). If the segment runs to the end of
+    the transcript, end = last_line.seconds + 10.
+    """
+    segments: list[tuple[float, float]] = []
+    current: list[dict] = []
+
+    for line in all_lines:
+        if line["raw"] in selected_raws:
+            current.append(line)
+        else:
+            if current:
+                segments.append((current[0]["seconds"], line["seconds"]))
+                current = []
+
+    if current:
+        segments.append((current[0]["seconds"], current[-1]["seconds"] + 10.0))
+
+    return segments
+
+
 def _load_library() -> list:
     if not LIBRARY_PATH.exists():
         return []
