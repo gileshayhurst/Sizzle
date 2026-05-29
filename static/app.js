@@ -8,6 +8,7 @@ const state = {
   highlighted: {},    // {filename: Set<raw_line_string>}
   currentJobId: null,
   resultJobId: null,
+  lastPrompt: '',     // prompt used for the most recent Analyze call
 };
 
 // ─── DOM refs ─────────────────────────────────────────────────────────────────
@@ -127,6 +128,7 @@ function showWorkspace() {
   $('topbar-controls').classList.remove('hidden');
   renderSidebar();
   if (state.files.length > 0) selectFile(state.files[0].name);
+  updateGenerateBtn();
 }
 
 // ─── Log helper ───────────────────────────────────────────────────────────────
@@ -150,13 +152,74 @@ document.querySelectorAll('.mode-btn').forEach(btn => {
     state.mode = btn.dataset.mode;
     if (state.activeFile) renderTranscript(state.activeFile);
     updateSelectAllBtn();
+    updateGenerateBtn();
   });
 });
 
-// ─── Analyze Everything ───────────────────────────────────────────────────────
-$('btn-analyze-all').addEventListener('click', () => {
-  submitGenerate('all', {});
+// ─── Analyze bar ──────────────────────────────────────────────────────────────
+$('btn-analyze').addEventListener('click', runAnalyze);
+$('analyze-input').addEventListener('keydown', e => {
+  if (e.key === 'Enter') runAnalyze();
 });
+
+async function runAnalyze() {
+  const prompt = $('analyze-input').value.trim();
+  if (!prompt) return;
+
+  $('btn-analyze').textContent = 'Analyzing…';
+  $('btn-analyze').disabled = true;
+  $('analyze-input').disabled = true;
+  $('analyze-error').classList.add('hidden');
+
+  try {
+    const resp = await fetch('/analyze', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ folder: state.folder, prompt }),
+    });
+    const data = await resp.json();
+
+    if (!resp.ok) {
+      $('analyze-error').textContent = data.error || 'Analyze failed';
+      $('analyze-error').classList.remove('hidden');
+      return;
+    }
+
+    state.lastPrompt = prompt;
+
+    // Apply returned highlights to every file, replacing prior selections
+    state.files.forEach(f => {
+      const lines = data.highlights[f.name] || [];
+      if (state.mode === 'checkbox') {
+        state.checked[f.name] = new Set(lines);
+      } else {
+        state.highlighted[f.name] = new Set(lines);
+      }
+    });
+
+    if (state.activeFile) renderTranscript(state.activeFile);
+    state.files.forEach(f => refreshBadge(f.name));
+    updateGenerateBtn();
+
+  } catch (err) {
+    $('analyze-error').textContent = 'Network error: ' + err.message;
+    $('analyze-error').classList.remove('hidden');
+  } finally {
+    $('btn-analyze').textContent = 'Analyze';
+    $('btn-analyze').disabled = false;
+    $('analyze-input').disabled = false;
+  }
+}
+
+function updateGenerateBtn() {
+  const hasAny = state.files.some(f => {
+    const s = state.mode === 'checkbox'
+      ? state.checked[f.name]
+      : state.highlighted[f.name];
+    return s && s.size > 0;
+  });
+  $('btn-generate').disabled = !hasAny;
+}
 
 // ─── Sidebar ──────────────────────────────────────────────────────────────────
 function renderSidebar() {
@@ -301,6 +364,7 @@ function checkAllInFile(filename) {
   fileObj.lines.forEach(l => state.checked[filename].add(l.raw));
   renderTranscript(filename);
   refreshBadge(filename);
+  updateGenerateBtn();
 }
 
 function renderTranscript(filename) {
@@ -394,6 +458,7 @@ function highlightAllInFile(filename) {
   fileObj.lines.forEach(l => state.highlighted[filename].add(l.raw));
   renderTranscript(filename);
   refreshBadge(filename);
+  updateGenerateBtn();
 }
 
 // ─── Generate ─────────────────────────────────────────────────────────────────
@@ -410,9 +475,7 @@ $('btn-generate').addEventListener('click', () => {
 });
 
 async function submitGenerate(mode, selections) {
-  const prompt = $('prompt-input').value.trim();
-  if (!prompt) { alert('Please enter a prompt before generating.'); return; }
-
+  const prompt = state.lastPrompt || $('analyze-input').value.trim();
   const outputFilename = $('output-filename').value.trim() || 'sizzle_reel.mp4';
 
   showScreen('screen-generating');
