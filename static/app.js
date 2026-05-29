@@ -376,10 +376,17 @@ function renderTranscript(filename) {
 // ─── Highlight mode ───────────────────────────────────────────────────────────
 let _dragActive = false;
 let _dragSetTo = null;   // true = highlighting, false = un-highlighting
+let _hlAbortController = null;  // cancels stale mousedown/mousemove listeners
 document.addEventListener('mouseup', () => { _dragActive = false; });
 
 function renderHighlightMode(fileObj) {
   const scroll = $('transcript-scroll');
+
+  // Abort previous listeners before re-rendering
+  if (_hlAbortController) _hlAbortController.abort();
+  _hlAbortController = new AbortController();
+  const { signal } = _hlAbortController;
+
   scroll.innerHTML = '';
   if (!fileObj || fileObj.lines.length === 0) {
     scroll.textContent = 'No transcript available.';
@@ -421,7 +428,8 @@ function renderHighlightMode(fileObj) {
     _dragSetTo = !hl.has(raw);
     _applyHighlight(fileObj.name, lineEl, _dragSetTo);
     refreshBadge(fileObj.name);
-  });
+    updateGenerateBtn();
+  }, { signal });
 
   scroll.addEventListener('mousemove', e => {
     if (!_dragActive) return;
@@ -436,7 +444,8 @@ function renderHighlightMode(fileObj) {
     }
     _applyHighlight(fileObj.name, lineEl, _dragSetTo);
     refreshBadge(fileObj.name);
-  });
+    updateGenerateBtn();
+  }, { signal });
 
 }
 
