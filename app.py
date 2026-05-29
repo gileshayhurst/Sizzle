@@ -283,7 +283,7 @@ def _run_generation(job_id: str, folder: str, mode: str,
                 card_path = os.path.join(tmp_dir, f"clip_{clip_index:04d}.mp4")
                 try:
                     width, height = get_video_dimensions(str(vp))
-                    make_title_card(Path(vp.name).stem, width, height, card_path)
+                    make_title_card(vp.stem, width, height, card_path)
                     clip_paths.append(card_path)
                     clip_index += 1
                     # Do NOT append to clip_durations — title cards are not content
@@ -324,7 +324,7 @@ def _run_generation(job_id: str, folder: str, mode: str,
     result = {
         "path": output_path,
         "filename": output_filename,
-        "clip_count": len(clip_paths),
+        "clip_count": len(clip_durations),
         "duration_seconds": duration,
     }
 
@@ -340,7 +340,7 @@ def _run_generation(job_id: str, folder: str, mode: str,
         "source_folder": Path(folder).name + "/",
         "prompt": prompt,
         "duration_seconds": duration,
-        "clip_count": len(clip_paths),
+        "clip_count": len(clip_durations),
         "created_at": datetime.now().isoformat(timespec="seconds"),
     })
 

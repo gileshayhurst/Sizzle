@@ -265,6 +265,8 @@ def test_title_card_inserted_between_videos(client, tmp_path):
                 break
             time.sleep(0.2)
 
+        assert status == "done", f"Job ended in unexpected state: {status}"
+
     # Exactly one title card — between alpha and beta
     assert mock_card.call_count == 1
     # First positional arg is the video name (stem only, no extension)
