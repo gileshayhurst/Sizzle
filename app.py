@@ -462,7 +462,7 @@ def _run_analyze(folder: str, prompt: str) -> dict:
 
         highlights[vp.name] = matched
 
-    if errors and not any(highlights.values()):
+    if len(errors) == len(video_paths) and not any(highlights.values()):
         return {"error": "; ".join(errors)}
 
     return {"highlights": highlights}
