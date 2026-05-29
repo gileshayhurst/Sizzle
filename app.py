@@ -294,6 +294,13 @@ def make_title_card(
 
 def _run_generation(job_id: str, folder: str, mode: str,
                     selections: dict, prompt: str, output_filename: str) -> None:
+    """Extract and stitch clips from selected transcript lines.
+
+    No Claude call — clip ranges come from _group_lines_into_segments().
+    Segment title cards ("Segment N") are inserted between non-contiguous
+    selected clusters within a single video. Video-name title cards are
+    inserted between different source videos (existing behaviour).
+    """
     job = _jobs[job_id]
     try:
         video_paths = scan_videos(folder)
@@ -305,46 +312,37 @@ def _run_generation(job_id: str, folder: str, mode: str,
 
     video_segments: list[tuple] = []
 
-    for i, vp in enumerate(video_paths):
+    for vp in video_paths:
         if job["cancel"].is_set():
             with _jobs_lock:
                 job["status"] = "cancelled"
             return
 
-        if mode == "all":
-            txt = vp.with_suffix(".txt")
-            if not txt.exists():
-                continue
-            transcript = txt.read_text(encoding="utf-8")
-        else:
-            lines = selections.get(vp.name, [])
-            if not lines:
-                continue
-            transcript = "\n".join(lines)
-
-        _append_log(job_id, f"⟳ {vp.name} — analyzing...")
-        try:
-            response = query_claude(transcript, prompt)
-            segments = parse_timestamps(response)
-        except Exception as exc:
-            _append_log(job_id, f"✗ {vp.name} — API error: {exc}")
-            with _jobs_lock:
-                job["done"] = i + 1
+        selected_raws = selections.get(vp.name, [])
+        if not selected_raws:
             continue
 
-        if segments:
-            _append_log(job_id, f"✓ {vp.name} — found: {', '.join(segments)}")
-            video_segments.append((vp, segments))
+        txt_path = vp.with_suffix(".txt")
+        if not txt_path.exists():
+            _append_log(job_id, f"· {vp.name} — no transcript, skipping")
+            continue
+
+        all_lines = _parse_transcript_lines(txt_path.read_text(encoding="utf-8"))
+        segs = _group_lines_into_segments(all_lines, set(selected_raws))
+
+        if segs:
+            _append_log(job_id, f"✓ {vp.name} — {len(segs)} segment(s)")
+            video_segments.append((vp, segs))
         else:
-            _append_log(job_id, f"· {vp.name} — no relevant segments")
+            _append_log(job_id, f"· {vp.name} — selections produced no segments")
 
         with _jobs_lock:
-            job["done"] = i + 1
+            job["done"] += 1
 
     if not video_segments:
         with _jobs_lock:
             job["status"] = "error"
-            job["error"] = "No relevant segments found in any video"
+            job["error"] = "No segments found in selections"
         return
 
     _append_log(job_id, "· Extracting clips...")
@@ -354,9 +352,11 @@ def _run_generation(job_id: str, folder: str, mode: str,
         clip_paths: list[str] = []
         clip_durations: list[float] = []
         clip_index = 0
+        seg_num = 1
         prev_vp = None
-        for vp, segments in video_segments:
-            # Insert a title card between consecutive source videos
+
+        for vp, segs in video_segments:
+            # Video-name title card between different source videos
             if prev_vp is not None:
                 card_path = os.path.join(tmp_dir, f"clip_{clip_index:04d}.mp4")
                 try:
@@ -364,15 +364,23 @@ def _run_generation(job_id: str, folder: str, mode: str,
                     make_title_card(vp.stem, width, height, card_path)
                     clip_paths.append(card_path)
                     clip_index += 1
-                    # Do NOT append to clip_durations — title cards are not content
                 except Exception as exc:
                     _append_log(job_id, f"· Could not create title card for {vp.name}: {exc}")
             prev_vp = vp
 
-            for seg in segments:
-                start_str, end_str = seg.split("-", 1)
-                start_sec = parse_timestamp_to_seconds(start_str)
-                end_sec = parse_timestamp_to_seconds(end_str)
+            for seg_idx, (start_sec, end_sec) in enumerate(segs):
+                # Segment title card between non-contiguous segments in same video
+                if seg_idx > 0:
+                    card_path = os.path.join(tmp_dir, f"clip_{clip_index:04d}.mp4")
+                    try:
+                        width, height = get_video_dimensions(str(vp))
+                        make_title_card(f"Segment {seg_num}", width, height, card_path)
+                        clip_paths.append(card_path)
+                        clip_index += 1
+                        seg_num += 1
+                    except Exception as exc:
+                        _append_log(job_id, f"· Could not create segment {seg_num} card: {exc}")
+
                 clip_path = os.path.join(tmp_dir, f"clip_{clip_index:04d}{vp.suffix}")
                 try:
                     extract_clip(str(vp), start_sec, end_sec, clip_path)
@@ -380,7 +388,10 @@ def _run_generation(job_id: str, folder: str, mode: str,
                     clip_durations.append(end_sec - start_sec)
                     clip_index += 1
                 except Exception as exc:
-                    _append_log(job_id, f"✗ {vp.name} [{seg}] — extraction failed: {exc}")
+                    _append_log(
+                        job_id,
+                        f"✗ {vp.name} [{start_sec:.1f}-{end_sec:.1f}] — extraction failed: {exc}",
+                    )
 
         if not clip_paths:
             with _jobs_lock:
@@ -592,14 +603,12 @@ def create_app(testing: bool = False) -> Flask:
     def generate():
         body = request.get_json() or {}
         folder = body.get("folder", "").strip()
-        prompt = body.get("prompt", "").strip()
+        prompt = body.get("prompt", "").strip()   # optional — stored for library only
         mode = body.get("mode", "highlight")
         selections = body.get("selections", {})
         output_filename = body.get("output_filename", "sizzle_reel.mp4").strip()
-        output_filename = Path(output_filename).name  # strip any path components
+        output_filename = Path(output_filename).name
 
-        if not prompt:
-            return jsonify({"error": "prompt is required"}), 400
         if not folder or not Path(folder).exists():
             return jsonify({"error": "Folder not found"}), 404
 
@@ -613,7 +622,8 @@ def create_app(testing: bool = False) -> Flask:
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 422
 
-        job_id = _new_job("generation", len(video_paths))
+        selected_count = sum(1 for p in video_paths if selections.get(p.name))
+        job_id = _new_job("generation", max(selected_count, 1))
         threading.Thread(
             target=_run_generation,
             args=(job_id, folder, mode, selections, prompt, output_filename),

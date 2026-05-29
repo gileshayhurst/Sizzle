@@ -151,14 +151,21 @@ def test_generate_returns_job_id(client, tmp_path):
     assert "job_id" in data
 
 
-def test_generate_missing_prompt_returns_400(client, tmp_path):
-    resp = client.post("/generate", json={
-        "folder": str(tmp_path),
-        "mode": "highlight",
-        "selections": {},
-        "output_filename": "out.mp4",
-    })
-    assert resp.status_code == 400
+def test_generate_accepts_empty_prompt(client, tmp_path):
+    """prompt is now optional at generate time (stored for library only)."""
+    (tmp_path / "vid.mp4").touch()
+    (tmp_path / "vid.txt").write_text("[0:05] Speaker: Hello.", encoding="utf-8")
+    with patch("app.extract_clip"), \
+         patch("app.stitch_clips"), \
+         patch("app.check_ffmpeg"):
+        resp = client.post("/generate", json={
+            "folder": str(tmp_path),
+            "mode": "highlight",
+            "selections": {"vid.mp4": ["[0:05] Speaker: Hello."]},
+            "output_filename": "out.mp4",
+        })
+    assert resp.status_code == 200
+    assert "job_id" in resp.get_json()
 
 
 def test_library_starts_empty(client, tmp_path, monkeypatch):
@@ -241,8 +248,7 @@ def test_title_card_inserted_between_videos(client, tmp_path):
     (tmp_path / "beta.mp4").touch()
     (tmp_path / "beta.txt").write_text("[0:10] Speaker: World.", encoding="utf-8")
 
-    with patch("app.query_claude", return_value="0:05-0:10"), \
-         patch("app.extract_clip"), \
+    with patch("app.extract_clip"), \
          patch("app.stitch_clips"), \
          patch("app.check_ffmpeg"), \
          patch("app.get_video_dimensions", return_value=(1920, 1080)), \
@@ -250,15 +256,17 @@ def test_title_card_inserted_between_videos(client, tmp_path):
 
         resp = client.post("/generate", json={
             "folder": str(tmp_path),
-            "mode": "all",
-            "selections": {},
-            "prompt": "highlights",
+            "mode": "highlight",
+            "selections": {
+                "alpha.mp4": ["[0:05] Speaker: Hello."],
+                "beta.mp4": ["[0:10] Speaker: World."],
+            },
+            "prompt": "",
             "output_filename": "out.mp4",
         })
         assert resp.status_code == 200
         job_id = resp.get_json()["job_id"]
 
-        # Poll until the background thread finishes (max 5 s)
         for _ in range(25):
             status = client.get(f"/status/{job_id}").get_json()["status"]
             if status in ("done", "error", "cancelled"):
@@ -267,9 +275,8 @@ def test_title_card_inserted_between_videos(client, tmp_path):
 
         assert status == "done", f"Job ended in unexpected state: {status}"
 
-    # Exactly one title card — between alpha and beta
+    # One video-name title card between alpha and beta
     assert mock_card.call_count == 1
-    # First positional arg is the video name (stem only, no extension)
     assert mock_card.call_args[0][0] == "beta"
 
 
@@ -403,3 +410,50 @@ def test_analyze_no_matches_returns_empty_list(client, tmp_path):
         resp = client.post("/analyze", json={"folder": str(tmp_path), "prompt": "food"})
     assert resp.status_code == 200
     assert resp.get_json()["highlights"]["vid.mp4"] == []
+
+
+def test_segment_title_cards_inserted_within_video(client, tmp_path):
+    """Segment title cards appear between non-contiguous clusters in the same video."""
+    import time
+
+    (tmp_path / "vid.mp4").touch()
+    # Two lines with a gap line between them — will produce 2 segments
+    (tmp_path / "vid.txt").write_text(
+        "[0:05] Speaker: First line.\n"
+        "[0:15] Speaker: Gap line.\n"
+        "[0:25] Speaker: Second cluster.",
+        encoding="utf-8",
+    )
+
+    with patch("app.extract_clip"), \
+         patch("app.stitch_clips"), \
+         patch("app.check_ffmpeg"), \
+         patch("app.get_video_dimensions", return_value=(1920, 1080)), \
+         patch("app.make_title_card") as mock_card:
+
+        resp = client.post("/generate", json={
+            "folder": str(tmp_path),
+            "mode": "highlight",
+            "selections": {
+                "vid.mp4": [
+                    "[0:05] Speaker: First line.",
+                    "[0:25] Speaker: Second cluster.",
+                ],
+            },
+            "prompt": "",
+            "output_filename": "out.mp4",
+        })
+        assert resp.status_code == 200
+        job_id = resp.get_json()["job_id"]
+
+        for _ in range(25):
+            status = client.get(f"/status/{job_id}").get_json()["status"]
+            if status in ("done", "error", "cancelled"):
+                break
+            time.sleep(0.2)
+
+        assert status == "done", f"Job ended in unexpected state: {status}"
+
+    # One segment card between the two clusters (no cross-video card, only one video)
+    assert mock_card.call_count == 1
+    assert mock_card.call_args[0][0] == "Segment 1"
