@@ -179,6 +179,38 @@ def get_video_dimensions(video_path: str) -> tuple[int, int]:
         return (1920, 1080)
 
 
+def make_title_card(
+    name: str, width: int, height: int, output_path: str, duration: float = 5.0
+) -> None:
+    """Generate a black title card with white centred text, encoded H.264/AAC."""
+    # Escape special characters for ffmpeg drawtext filter
+    safe = (
+        name
+        .replace("\\", "\\\\")
+        .replace("'", "\\'")
+        .replace(":", "\\:")
+        .replace("%", "%%")
+    )
+    fontsize = max(24, height // 15)
+    subprocess.run(
+        [
+            "ffmpeg", "-y",
+            "-f", "lavfi", "-i", f"color=black:size={width}x{height}:rate=30",
+            "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000",
+            "-vf", (
+                f"drawtext=text='{safe}':fontcolor=white:fontsize={fontsize}"
+                f":x=(w-text_w)/2:y=(h-text_h)/2"
+            ),
+            "-c:v", "libx264", "-preset", "fast",
+            "-c:a", "aac",
+            "-t", str(duration),
+            output_path,
+        ],
+        check=True,
+        capture_output=True,
+    )
+
+
 def _run_generation(job_id: str, folder: str, mode: str,
                     selections: dict, prompt: str, output_filename: str) -> None:
     job = _jobs[job_id]

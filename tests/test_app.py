@@ -204,3 +204,29 @@ def test_get_video_dimensions_falls_back_on_failure():
     with patch("app.subprocess.run", side_effect=Exception("ffprobe missing")):
         w, h = get_video_dimensions("/fake/video.mp4")
     assert (w, h) == (1920, 1080)
+
+
+def test_make_title_card_calls_ffmpeg_with_correct_args():
+    from app import make_title_card
+    with patch("app.subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0)
+        make_title_card("My Video", 1920, 1080, "/tmp/card.mp4", duration=5.0)
+    mock_run.assert_called_once()
+    cmd = mock_run.call_args[0][0]
+    joined = " ".join(cmd)
+    assert cmd[0] == "ffmpeg"
+    assert "1920x1080" in joined
+    assert "My Video" in joined
+    assert "/tmp/card.mp4" in joined
+    assert "5.0" in joined
+
+
+def test_make_title_card_escapes_special_characters():
+    from app import make_title_card
+    with patch("app.subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0)
+        make_title_card("It's 50% Done: Really", 1280, 720, "/tmp/card.mp4")
+    joined = " ".join(mock_run.call_args[0][0])
+    assert "\\'" in joined        # apostrophe escaped
+    assert "%%" in joined          # percent escaped
+    assert "\\:" in joined         # colon escaped
