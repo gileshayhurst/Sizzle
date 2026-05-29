@@ -205,8 +205,7 @@ def make_title_card(
 
     fontsize = max(24, height // 15)
 
-    # Wrap text to fit within ~85 % of frame width.
-    # Arial average char width ≈ 0.6 × fontsize; be conservative to avoid overflow.
+    # Wrap to ~85% of frame width; Arial avg char width ≈ 0.6 × fontsize.
     chars_per_line = max(10, int(width * 0.85 / (fontsize * 0.6)))
     lines = textwrap.wrap(name, chars_per_line) or [name]
 
@@ -218,10 +217,6 @@ def make_title_card(
              .replace("%", "%%")
         )
 
-    # \n in the filter string is ffmpeg's drawtext newline sequence
-    safe = "\\n".join(_escape(line) for line in lines)
-    line_spacing = ":line_spacing=8" if len(lines) > 1 else ""
-
     # Prefix fontfile= to bypass fontconfig (crashes on Windows without a config file)
     font = _find_system_font()
     if font:
@@ -230,15 +225,31 @@ def make_title_card(
     else:
         fontfile_arg = ""
 
+    # Use one drawtext filter per line so each line is individually x-centred.
+    # ffmpeg's \n escape in text= is unreliable; stacking filters is more robust.
+    line_height = int(fontsize * 1.2)
+    spacing = 8
+    n = len(lines)
+    total_h = n * line_height + (n - 1) * spacing
+
+    filters = []
+    for i, line in enumerate(lines):
+        if n == 1:
+            y_expr = "(h-text_h)/2"
+        else:
+            y_off = i * (line_height + spacing)
+            y_expr = f"(h-{total_h})/2+{y_off}"
+        filters.append(
+            f"drawtext={fontfile_arg}text='{_escape(line)}':fontcolor=white"
+            f":fontsize={fontsize}:x=(w-text_w)/2:y={y_expr}"
+        )
+
     result = subprocess.run(
         [
             "ffmpeg", "-y",
             "-f", "lavfi", "-i", f"color=black:size={width}x{height}:rate=30",
             "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000",
-            "-vf", (
-                f"drawtext={fontfile_arg}text='{safe}':fontcolor=white:fontsize={fontsize}"
-                f":x=(w-text_w)/2:y=(h-text_h)/2{line_spacing}"
-            ),
+            "-vf", ",".join(filters),
             "-c:v", "libx264", "-preset", "fast",
             "-c:a", "aac",
             "-t", str(duration),

@@ -297,9 +297,9 @@ def test_make_title_card_omits_fontfile_when_none_found():
 
 
 def test_make_title_card_wraps_long_title():
-    """Title too wide for the frame is split into multiple lines."""
+    """Long title is split into multiple drawtext filters (one per line)."""
     from app import make_title_card
-    # 640×352, fontsize=24 → chars_per_line≈37; this 58-char title must wrap
+    # 640×352, fontsize=24, chars_per_line≈37 — this 55-char title must wrap
     long_name = "New York Japanese restaurant Nobu Downtown food reviews"
     with patch("app.subprocess.run") as mock_run, \
          patch("app._find_system_font", return_value=None):
@@ -307,12 +307,11 @@ def test_make_title_card_wraps_long_title():
         make_title_card(long_name, 640, 352, "/tmp/card.mp4")
     cmd = mock_run.call_args[0][0]
     vf_arg = cmd[cmd.index("-vf") + 1]
-    # drawtext newline sequence must be present
-    assert "\\n" in vf_arg
+    assert vf_arg.count("drawtext=") > 1
 
 
 def test_make_title_card_does_not_wrap_short_title():
-    """Short titles that fit on one line are not wrapped."""
+    """Short titles that fit on one line use a single drawtext filter."""
     from app import make_title_card
     with patch("app.subprocess.run") as mock_run, \
          patch("app._find_system_font", return_value=None):
@@ -320,4 +319,4 @@ def test_make_title_card_does_not_wrap_short_title():
         make_title_card("Nobu", 1920, 1080, "/tmp/card.mp4")
     cmd = mock_run.call_args[0][0]
     vf_arg = cmd[cmd.index("-vf") + 1]
-    assert "\\n" not in vf_arg
+    assert vf_arg.count("drawtext=") == 1
