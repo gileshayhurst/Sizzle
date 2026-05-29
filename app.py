@@ -168,10 +168,14 @@ def get_video_dimensions(video_path: str) -> tuple[int, int]:
             ],
             capture_output=True,
             check=True,
+            text=True,
+            encoding="utf-8",
         )
-        w, h = result.stdout.decode().strip().split(",")
+        w, h = result.stdout.strip().split(",")
         return int(w), int(h)
-    except Exception:
+    except Exception as exc:
+        print(f"Warning: could not probe dimensions for {video_path}: {exc}",
+              file=__import__("sys").stderr)
         return (1920, 1080)
 
 

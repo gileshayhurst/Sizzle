@@ -190,7 +190,7 @@ def test_video_endpoint_not_found(client):
 def test_get_video_dimensions_returns_width_height():
     from app import get_video_dimensions
     with patch("app.subprocess.run") as mock_run:
-        mock_run.return_value = MagicMock(stdout=b"1920,1080\n", returncode=0)
+        mock_run.return_value = MagicMock(stdout="1920,1080\n", returncode=0)
         w, h = get_video_dimensions("/fake/video.mp4")
     assert w == 1920
     assert h == 1080
