@@ -271,3 +271,26 @@ def test_title_card_inserted_between_videos(client, tmp_path):
     assert mock_card.call_count == 1
     # First positional arg is the video name (stem only, no extension)
     assert mock_card.call_args[0][0] == "beta"
+
+
+def test_make_title_card_includes_fontfile_when_font_found():
+    """fontfile= is injected into the drawtext filter when a system font is found."""
+    from app import make_title_card
+    with patch("app.subprocess.run") as mock_run, \
+         patch("app._find_system_font", return_value="C:/Windows/Fonts/arial.ttf"):
+        mock_run.return_value = MagicMock(returncode=0)
+        make_title_card("Test", 1920, 1080, "/tmp/card.mp4")
+    joined = " ".join(mock_run.call_args[0][0])
+    assert "fontfile=" in joined
+    assert "arial.ttf" in joined
+
+
+def test_make_title_card_omits_fontfile_when_none_found():
+    """No fontfile= is added when _find_system_font returns None (non-Windows / no font)."""
+    from app import make_title_card
+    with patch("app.subprocess.run") as mock_run, \
+         patch("app._find_system_font", return_value=None):
+        mock_run.return_value = MagicMock(returncode=0)
+        make_title_card("Test", 1920, 1080, "/tmp/card.mp4")
+    joined = " ".join(mock_run.call_args[0][0])
+    assert "fontfile=" not in joined

@@ -155,6 +155,24 @@ def _library_add(entry: dict) -> None:
         _save_library(entries)
 
 
+def _find_system_font() -> str | None:
+    """Return a path to a TTF font on this system, or None if none found.
+
+    On Windows the drawtext filter crashes when fontconfig has no config file.
+    Specifying an explicit fontfile bypasses fontconfig entirely.
+    """
+    candidates = [
+        Path("C:/Windows/Fonts/arial.ttf"),
+        Path("C:/Windows/Fonts/calibri.ttf"),
+        Path("C:/Windows/Fonts/verdana.ttf"),
+        Path("C:/Windows/Fonts/times.ttf"),
+    ]
+    for p in candidates:
+        if p.exists():
+            return str(p)
+    return None
+
+
 def get_video_dimensions(video_path: str) -> tuple[int, int]:
     """Return (width, height) of the first video stream. Falls back to 1920×1080."""
     try:
@@ -192,13 +210,20 @@ def make_title_card(
         .replace("%", "%%")
     )
     fontsize = max(24, height // 15)
+    # Prefix fontfile= to bypass fontconfig (crashes on Windows without a config file)
+    font = _find_system_font()
+    if font:
+        escaped_font = font.replace("\\", "/").replace(":", "\\:")
+        fontfile_arg = f"fontfile='{escaped_font}':"
+    else:
+        fontfile_arg = ""
     result = subprocess.run(
         [
             "ffmpeg", "-y",
             "-f", "lavfi", "-i", f"color=black:size={width}x{height}:rate=30",
             "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000",
             "-vf", (
-                f"drawtext=text='{safe}':fontcolor=white:fontsize={fontsize}"
+                f"drawtext={fontfile_arg}text='{safe}':fontcolor=white:fontsize={fontsize}"
                 f":x=(w-text_w)/2:y=(h-text_h)/2"
             ),
             "-c:v", "libx264", "-preset", "fast",
