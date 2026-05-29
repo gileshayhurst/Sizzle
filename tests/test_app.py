@@ -368,3 +368,38 @@ def test_group_lines_into_segments_none_selected():
     ]
     result = _group_lines_into_segments(lines, set())
     assert result == []
+
+
+def test_analyze_returns_highlights(client, tmp_path):
+    (tmp_path / "vid.mp4").touch()
+    (tmp_path / "vid.txt").write_text(
+        "[0:05] Speaker: Hello world.\n[0:15] Speaker: Black cod is amazing.",
+        encoding="utf-8",
+    )
+    with patch("app.query_claude", return_value="0:05-0:20"):
+        resp = client.post("/analyze", json={"folder": str(tmp_path), "prompt": "food"})
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert "highlights" in data
+    assert "vid.mp4" in data["highlights"]
+    # both lines fall within 0:05-0:20
+    assert len(data["highlights"]["vid.mp4"]) == 2
+
+
+def test_analyze_missing_prompt_returns_400(client, tmp_path):
+    resp = client.post("/analyze", json={"folder": str(tmp_path)})
+    assert resp.status_code == 400
+
+
+def test_analyze_missing_folder_returns_404(client):
+    resp = client.post("/analyze", json={"folder": "/nonexistent/xyz", "prompt": "food"})
+    assert resp.status_code == 404
+
+
+def test_analyze_no_matches_returns_empty_list(client, tmp_path):
+    (tmp_path / "vid.mp4").touch()
+    (tmp_path / "vid.txt").write_text("[0:05] Speaker: Hello.", encoding="utf-8")
+    with patch("app.query_claude", return_value="none"):
+        resp = client.post("/analyze", json={"folder": str(tmp_path), "prompt": "food"})
+    assert resp.status_code == 200
+    assert resp.get_json()["highlights"]["vid.mp4"] == []

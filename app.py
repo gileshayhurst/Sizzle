@@ -423,6 +423,51 @@ def _run_generation(job_id: str, folder: str, mode: str,
     })
 
 
+def _run_analyze(folder: str, prompt: str) -> dict:
+    """Call Claude on every transcript in folder. Returns per-video matched raw lines."""
+    try:
+        video_paths = scan_videos(folder)
+    except Exception as exc:
+        return {"error": str(exc)}
+
+    highlights: dict[str, list[str]] = {}
+    errors: list[str] = []
+
+    for vp in video_paths:
+        txt_path = vp.with_suffix(".txt")
+        if not txt_path.exists() or txt_path.stat().st_size == 0:
+            highlights[vp.name] = []
+            continue
+
+        transcript = txt_path.read_text(encoding="utf-8")
+        all_lines = _parse_transcript_lines(transcript)
+
+        try:
+            response = query_claude(transcript, prompt)
+            ranges = parse_timestamps(response) or []
+        except Exception as exc:
+            errors.append(f"{vp.name}: {exc}")
+            highlights[vp.name] = []
+            continue
+
+        matched: list[str] = []
+        for seg in ranges:
+            start_str, end_str = seg.split("-", 1)
+            start_sec = parse_timestamp_to_seconds(start_str)
+            end_sec = parse_timestamp_to_seconds(end_str)
+            for line in all_lines:
+                if start_sec - 0.5 <= line["seconds"] <= end_sec + 0.5:
+                    if line["raw"] not in matched:
+                        matched.append(line["raw"])
+
+        highlights[vp.name] = matched
+
+    if errors and not any(highlights.values()):
+        return {"error": "; ".join(errors)}
+
+    return {"highlights": highlights}
+
+
 def create_app(testing: bool = False) -> Flask:
     app = Flask(__name__)
     app.config["TESTING"] = testing
@@ -528,6 +573,20 @@ def create_app(testing: bool = False) -> Flask:
                 lines = _parse_transcript_lines(txt_path.read_text(encoding="utf-8"))
             files.append({"name": vp.name, "lines": lines})
         return jsonify({"files": files})
+
+    @app.post("/analyze")
+    def analyze():
+        body = request.get_json() or {}
+        folder = body.get("folder", "").strip()
+        prompt = body.get("prompt", "").strip()
+        if not prompt:
+            return jsonify({"error": "prompt is required"}), 400
+        if not folder or not Path(folder).exists():
+            return jsonify({"error": "Folder not found"}), 404
+        result = _run_analyze(folder, prompt)
+        if "error" in result:
+            return jsonify(result), 500
+        return jsonify(result)
 
     @app.post("/generate")
     def generate():
