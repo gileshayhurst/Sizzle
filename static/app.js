@@ -285,6 +285,14 @@ function updateSelectAllBtn() {
 }
 
 // ─── Checkbox mode ────────────────────────────────────────────────────────────
+function _updateHeaderCbState(cbEl, lines, s) {
+  const count = lines.filter(l => s.has(l.raw)).length;
+  const all = count === lines.length;
+  const some = count > 0 && !all;
+  cbEl.className = 'cb-box' + (all ? ' checked' : some ? ' indeterminate' : '');
+  cbEl.textContent = all ? '✓' : some ? '–' : '';
+}
+
 function renderCheckboxMode(fileObj) {
   const scroll = $('transcript-scroll');
   scroll.innerHTML = '';
@@ -301,45 +309,58 @@ function renderCheckboxMode(fileObj) {
     groups[b].lines.push(line);
   });
 
-  Object.values(groups).forEach(group => {
-    const s = state.checked[fileObj.name];
-    const checkedCount = group.lines.filter(l => s.has(l.raw)).length;
-    const allChecked = checkedCount === group.lines.length;
-    const someChecked = checkedCount > 0 && !allChecked;
+  const s = state.checked[fileObj.name];
 
+  Object.values(groups).forEach(group => {
     const groupEl = document.createElement('div');
     groupEl.className = 'minute-group';
 
-    // Single clickable header with one checkbox for the whole minute segment
+    // ── Minute header with select-all checkbox ─────────────────────────────
     const labelEl = document.createElement('div');
     labelEl.className = 'minute-label-cb';
 
-    const cbBox = document.createElement('div');
-    cbBox.className = 'cb-box' + (allChecked ? ' checked' : someChecked ? ' indeterminate' : '');
-    cbBox.textContent = allChecked ? '✓' : someChecked ? '–' : '';
+    const headerCb = document.createElement('div');
+    _updateHeaderCbState(headerCb, group.lines, s);
 
     const labelText = document.createElement('span');
     labelText.textContent = group.label;
 
-    labelEl.appendChild(cbBox);
+    labelEl.appendChild(headerCb);
     labelEl.appendChild(labelText);
 
     labelEl.addEventListener('click', () => {
+      const allChecked = group.lines.every(l => s.has(l.raw));
       if (allChecked) {
         group.lines.forEach(l => s.delete(l.raw));
       } else {
         group.lines.forEach(l => s.add(l.raw));
       }
-      renderCheckboxMode(fileObj);
+      // Mutate DOM in place — no re-render
+      group.lines.forEach(l => {
+        const lineEl = groupEl.querySelector(`[data-line-raw="${CSS.escape(l.raw)}"]`);
+        if (lineEl) {
+          const cb = lineEl.querySelector('.cb-box-line');
+          const checked = s.has(l.raw);
+          cb.className = 'cb-box cb-box-line' + (checked ? ' checked' : '');
+          cb.textContent = checked ? '✓' : '';
+        }
+      });
+      _updateHeaderCbState(headerCb, group.lines, s);
       refreshBadge(fileObj.name);
+      updateGenerateBtn();
     });
 
     groupEl.appendChild(labelEl);
 
-    // Lines are display-only — no individual checkboxes
+    // ── Individual lines with per-line checkboxes ──────────────────────────
     group.lines.forEach(line => {
       const lineEl = document.createElement('div');
       lineEl.className = 'transcript-line-cb';
+      lineEl.dataset.lineRaw = line.raw;
+
+      const lineCb = document.createElement('div');
+      lineCb.className = 'cb-box cb-box-line' + (s.has(line.raw) ? ' checked' : '');
+      lineCb.textContent = s.has(line.raw) ? '✓' : '';
 
       const ts = document.createElement('div');
       ts.className = 'ts-cb';
@@ -349,8 +370,26 @@ function renderCheckboxMode(fileObj) {
       text.className = 'line-text-cb';
       text.textContent = line.text;
 
+      lineEl.appendChild(lineCb);
       lineEl.appendChild(ts);
       lineEl.appendChild(text);
+
+      lineEl.addEventListener('click', () => {
+        const checked = s.has(line.raw);
+        if (checked) {
+          s.delete(line.raw);
+          lineCb.className = 'cb-box cb-box-line';
+          lineCb.textContent = '';
+        } else {
+          s.add(line.raw);
+          lineCb.className = 'cb-box cb-box-line checked';
+          lineCb.textContent = '✓';
+        }
+        _updateHeaderCbState(headerCb, group.lines, s);
+        refreshBadge(fileObj.name);
+        updateGenerateBtn();
+      });
+
       groupEl.appendChild(lineEl);
     });
 
