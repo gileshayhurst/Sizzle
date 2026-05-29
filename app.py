@@ -1,11 +1,30 @@
 import json
 import os
 import re as _re
+import shutil
+import subprocess
 import tempfile
 import threading
 import uuid
 from datetime import datetime
 from pathlib import Path
+
+# Load ANTHROPIC_API_KEY from a .env file in the project root if not already set.
+_env_file = Path(__file__).parent / ".env"
+if not os.environ.get("ANTHROPIC_API_KEY") and _env_file.exists():
+    for _line in _env_file.read_text(encoding="utf-8-sig").splitlines():
+        _line = _line.strip()
+        if _line.startswith("ANTHROPIC_API_KEY=") and not _line.startswith("#"):
+            os.environ["ANTHROPIC_API_KEY"] = _line.split("=", 1)[1].strip().strip('"').strip("'")
+            break
+
+# WinGet installs ffmpeg to a user-local path that isn't on the subprocess PATH.
+# Patch it in at startup so all child processes (ffmpeg, whisper) can find it.
+if not shutil.which("ffmpeg"):
+    _winget_base = Path.home() / "AppData/Local/Microsoft/WinGet/Packages"
+    for _bin in sorted(_winget_base.glob("Gyan.FFmpeg*/*/bin")):
+        os.environ["PATH"] = str(_bin) + os.pathsep + os.environ.get("PATH", "")
+        break
 
 from flask import Flask, jsonify, render_template, request, send_file
 
@@ -134,6 +153,26 @@ def _library_add(entry: dict) -> None:
         entries = _load_library()
         entries.insert(0, entry)
         _save_library(entries)
+
+
+def get_video_dimensions(video_path: str) -> tuple[int, int]:
+    """Return (width, height) of the first video stream. Falls back to 1920×1080."""
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe", "-v", "error",
+                "-select_streams", "v:0",
+                "-show_entries", "stream=width,height",
+                "-of", "csv=p=0",
+                video_path,
+            ],
+            capture_output=True,
+            check=True,
+        )
+        w, h = result.stdout.decode().strip().split(",")
+        return int(w), int(h)
+    except Exception:
+        return (1920, 1080)
 
 
 def _run_generation(job_id: str, folder: str, mode: str,

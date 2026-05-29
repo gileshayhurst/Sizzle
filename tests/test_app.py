@@ -185,3 +185,22 @@ def test_library_delete_removes_entry(client, tmp_path, monkeypatch):
 def test_video_endpoint_not_found(client):
     resp = client.get("/video/nonexistent-job-id")
     assert resp.status_code == 404
+
+
+def test_get_video_dimensions_returns_width_height():
+    from app import get_video_dimensions
+    with patch("app.subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(stdout=b"1920,1080\n", returncode=0)
+        w, h = get_video_dimensions("/fake/video.mp4")
+    assert w == 1920
+    assert h == 1080
+    cmd = mock_run.call_args[0][0]
+    assert cmd[0] == "ffprobe"
+    assert "/fake/video.mp4" in cmd
+
+
+def test_get_video_dimensions_falls_back_on_failure():
+    from app import get_video_dimensions
+    with patch("app.subprocess.run", side_effect=Exception("ffprobe missing")):
+        w, h = get_video_dimensions("/fake/video.mp4")
+    assert (w, h) == (1920, 1080)
