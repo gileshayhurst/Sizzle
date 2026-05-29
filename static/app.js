@@ -239,32 +239,44 @@ function renderCheckboxMode(fileObj) {
   });
 
   Object.values(groups).forEach(group => {
+    const s = state.checked[fileObj.name];
+    const checkedCount = group.lines.filter(l => s.has(l.raw)).length;
+    const allChecked = checkedCount === group.lines.length;
+    const someChecked = checkedCount > 0 && !allChecked;
+
     const groupEl = document.createElement('div');
     groupEl.className = 'minute-group';
 
+    // Single clickable header with one checkbox for the whole minute segment
     const labelEl = document.createElement('div');
-    labelEl.className = 'minute-label';
-    labelEl.textContent = group.label;
+    labelEl.className = 'minute-label-cb';
 
-    const checkAllBtn = document.createElement('button');
-    checkAllBtn.className = 'check-all-group';
-    checkAllBtn.textContent = 'check all';
-    checkAllBtn.addEventListener('click', e => {
-      e.stopPropagation();
-      group.lines.forEach(l => state.checked[fileObj.name].add(l.raw));
+    const cbBox = document.createElement('div');
+    cbBox.className = 'cb-box' + (allChecked ? ' checked' : someChecked ? ' indeterminate' : '');
+    cbBox.textContent = allChecked ? '✓' : someChecked ? '–' : '';
+
+    const labelText = document.createElement('span');
+    labelText.textContent = group.label;
+
+    labelEl.appendChild(cbBox);
+    labelEl.appendChild(labelText);
+
+    labelEl.addEventListener('click', () => {
+      if (allChecked) {
+        group.lines.forEach(l => s.delete(l.raw));
+      } else {
+        group.lines.forEach(l => s.add(l.raw));
+      }
       renderCheckboxMode(fileObj);
       refreshBadge(fileObj.name);
     });
-    labelEl.appendChild(checkAllBtn);
+
     groupEl.appendChild(labelEl);
 
+    // Lines are display-only — no individual checkboxes
     group.lines.forEach(line => {
       const lineEl = document.createElement('div');
       lineEl.className = 'transcript-line-cb';
-
-      const cbBox = document.createElement('div');
-      cbBox.className = 'cb-box' + (state.checked[fileObj.name].has(line.raw) ? ' checked' : '');
-      cbBox.textContent = state.checked[fileObj.name].has(line.raw) ? '✓' : '';
 
       const ts = document.createElement('div');
       ts.className = 'ts-cb';
@@ -274,19 +286,11 @@ function renderCheckboxMode(fileObj) {
       text.className = 'line-text-cb';
       text.textContent = line.text;
 
-      lineEl.appendChild(cbBox);
       lineEl.appendChild(ts);
       lineEl.appendChild(text);
-
-      lineEl.addEventListener('click', () => {
-        const s = state.checked[fileObj.name];
-        if (s.has(line.raw)) { s.delete(line.raw); cbBox.classList.remove('checked'); cbBox.textContent = ''; }
-        else { s.add(line.raw); cbBox.classList.add('checked'); cbBox.textContent = '✓'; }
-        refreshBadge(fileObj.name);
-      });
-
       groupEl.appendChild(lineEl);
     });
+
     scroll.appendChild(groupEl);
   });
 }

@@ -135,22 +135,27 @@ body {
 
 /* CHECKBOX MODE */
 .minute-group { border: 1px solid #2a2a4a; border-radius: 6px; margin-bottom: 8px; overflow: hidden; }
+/* minute-label: non-interactive header (used in highlight mode etc.) */
 .minute-label {
   background: #1a1a3a; padding: 5px 10px; font-size: 9px; color: #556;
   text-transform: uppercase; letter-spacing: 0.5px; display: flex;
   align-items: center; gap: 8px; border-bottom: 1px solid #2a2a4a;
 }
-.check-all-group {
-  margin-left: auto; color: #2ecc71; text-decoration: underline;
-  background: none; border: none; cursor: pointer; font-size: 9px; font-family: inherit;
+
+/* minute-label-cb: clickable group header in checkbox mode */
+.minute-label-cb {
+  background: #1a1a3a; padding: 5px 10px; font-size: 9px; color: #8ab4f8;
+  text-transform: uppercase; letter-spacing: 0.5px; display: flex;
+  align-items: center; gap: 8px; border-bottom: 1px solid #2a2a4a;
+  cursor: pointer; user-select: none;
 }
+.minute-label-cb:hover { background: #1e1e44; }
 
 .transcript-line-cb {
   display: flex; align-items: flex-start; gap: 8px; padding: 5px 10px;
-  border-bottom: 1px solid #1f1f38; cursor: pointer; user-select: none;
+  border-bottom: 1px solid #1f1f38;
 }
 .transcript-line-cb:last-child { border-bottom: none; }
-.transcript-line-cb:hover { background: #1a1a30; }
 
 .cb-box {
   width: 14px; height: 14px; border: 1.5px solid #444; border-radius: 3px;
@@ -158,6 +163,7 @@ body {
   justify-content: center; font-size: 10px; transition: background 0.1s;
 }
 .cb-box.checked { background: #2ecc71; border-color: #2ecc71; color: white; }
+.cb-box.indeterminate { background: #1a4a2a; border-color: #2ecc71; color: #2ecc71; }
 
 .ts-cb { color: #e94560; width: 36px; font-size: 10px; flex-shrink: 0; }
 .line-text-cb { color: #ccc; font-size: 10px; line-height: 1.5; }
