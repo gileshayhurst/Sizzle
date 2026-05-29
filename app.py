@@ -201,15 +201,27 @@ def make_title_card(
     name: str, width: int, height: int, output_path: str, duration: float = 5.0
 ) -> None:
     """Generate a black title card with white centred text, encoded H.264/AAC."""
-    # Escape special characters for ffmpeg drawtext filter
-    safe = (
-        name
-        .replace("\\", "\\\\")
-        .replace("'", "\\'")
-        .replace(":", "\\:")
-        .replace("%", "%%")
-    )
+    import textwrap
+
     fontsize = max(24, height // 15)
+
+    # Wrap text to fit within ~85 % of frame width.
+    # Arial average char width ≈ 0.6 × fontsize; be conservative to avoid overflow.
+    chars_per_line = max(10, int(width * 0.85 / (fontsize * 0.6)))
+    lines = textwrap.wrap(name, chars_per_line) or [name]
+
+    def _escape(s: str) -> str:
+        return (
+            s.replace("\\", "\\\\")
+             .replace("'", "\\'")
+             .replace(":", "\\:")
+             .replace("%", "%%")
+        )
+
+    # \n in the filter string is ffmpeg's drawtext newline sequence
+    safe = "\\n".join(_escape(line) for line in lines)
+    line_spacing = ":line_spacing=8" if len(lines) > 1 else ""
+
     # Prefix fontfile= to bypass fontconfig (crashes on Windows without a config file)
     font = _find_system_font()
     if font:
@@ -217,6 +229,7 @@ def make_title_card(
         fontfile_arg = f"fontfile='{escaped_font}':"
     else:
         fontfile_arg = ""
+
     result = subprocess.run(
         [
             "ffmpeg", "-y",
@@ -224,7 +237,7 @@ def make_title_card(
             "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000",
             "-vf", (
                 f"drawtext={fontfile_arg}text='{safe}':fontcolor=white:fontsize={fontsize}"
-                f":x=(w-text_w)/2:y=(h-text_h)/2"
+                f":x=(w-text_w)/2:y=(h-text_h)/2{line_spacing}"
             ),
             "-c:v", "libx264", "-preset", "fast",
             "-c:a", "aac",
