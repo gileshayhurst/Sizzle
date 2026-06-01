@@ -529,9 +529,14 @@ function renderRecentFolders(entries) {
     li.className = 'recent-folder-item';
     const name = entry.path.replace(/\\/g, '/').split('/').filter(Boolean).pop() || entry.path;
     const count = entry.video_count;
-    li.innerHTML =
-      `<span class="recent-folder-name">📁 ${name}/</span>` +
-      `<span class="recent-folder-meta">${count} video${count !== 1 ? 's' : ''} · ${relativeTime(entry.last_opened)}</span>`;
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'recent-folder-name';
+    nameSpan.textContent = `📁 ${name}/`;
+    const metaSpan = document.createElement('span');
+    metaSpan.className = 'recent-folder-meta';
+    metaSpan.textContent = `${count} video${count !== 1 ? 's' : ''} · ${relativeTime(entry.last_opened)}`;
+    li.appendChild(nameSpan);
+    li.appendChild(metaSpan);
     li.addEventListener('click', () => {
       $('folder-path-input').value = entry.path;
       openFolder(entry.path);
