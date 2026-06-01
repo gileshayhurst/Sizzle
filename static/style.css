@@ -42,7 +42,7 @@ body {
   border-radius: 0;
   font-size: 11px;
   cursor: pointer;
-  color: #334;
+  color: #4a6a90;
   background: transparent;
   border: none;
   border-bottom: 2px solid transparent;
@@ -53,7 +53,7 @@ body {
   align-items: center;
   transition: color 0.15s;
 }
-.nav-tab:hover { color: #556; }
+.nav-tab:hover { color: #7a9abf; }
 .nav-tab.active { color: #4d9fff; border-bottom-color: #4d9fff; }
 
 #topbar-controls { display: flex; align-items: center; gap: 10px; margin-left: 4px; }
@@ -66,7 +66,7 @@ body {
 .mode-toggle { display: flex; background: #060a12; border: 1px solid #1a2840; border-radius: 16px; padding: 2px; }
 .mode-btn {
   padding: 4px 14px; border-radius: 14px; font-size: 10px; cursor: pointer;
-  color: #334; background: transparent; border: none; font-family: inherit;
+  color: #5a6a80; background: transparent; border: none; font-family: inherit;
   transition: background 0.15s, color 0.15s;
 }
 .mode-btn.active { background: #1a5fb4; color: white; }
@@ -97,7 +97,6 @@ body {
   justify-content: center;
   gap: 16px;
   padding: 40px;
-  flex-shrink: 0;
 }
 .picker-brand-icon { font-size: 44px; line-height: 1; }
 .picker-brand-title { color: #4d9fff; font-size: 20px; font-weight: 700; letter-spacing: 2px; }
@@ -130,7 +129,7 @@ body {
 }
 .center-card h2 { color: #b8d8ff; font-size: 18px; font-weight: 600; }
 
-.subtitle { color: #3a5070; font-size: 12px; }
+.subtitle { color: #4a7090; font-size: 12px; }
 .folder-input-row { display: flex; gap: 8px; width: 100%; }
 .folder-path-input {
   flex: 1; background: #060a12; border: 1px solid #1a2840;
@@ -150,7 +149,6 @@ body {
   border: 1px solid transparent; transition: background 0.1s, border-color 0.1s;
 }
 .recent-folder-item:hover { background: #0c1524; border-color: #1a2840; }
-.recent-folder-item:first-child { background: #0c1524; border-color: #1a2840; }
 .recent-folder-name { color: #5090d0; font-size: 11px; }
 .recent-folder-meta { color: #2a3a50; font-size: 10px; }
 
@@ -280,6 +278,7 @@ body {
 }
 .footer-field { display: flex; flex-direction: column; gap: 4px; }
 .footer-field-grow { flex: 1; }
+.footer-field-btn { align-self: flex-end; }
 .footer-label { font-size: 9px; color: #2a3a50; text-transform: uppercase; letter-spacing: 0.5px; }
 .footer-input {
   background: #060a12; border: 1px solid #1a2840; border-radius: 4px;
@@ -305,6 +304,7 @@ body {
 }
 .result-filename { color: #5090d0; font-weight: 600; font-size: 12px; }
 .result-info { color: #2a3a50; font-size: 10px; margin-top: 2px; }
+.result-meta { display: flex; flex-direction: column; gap: 2px; }
 .result-actions { display: flex; gap: 8px; }
 
 /* LIBRARY */
