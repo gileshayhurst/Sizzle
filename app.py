@@ -162,6 +162,20 @@ def _group_lines_into_segments(
     return segments
 
 
+def _filter_generated_reels(video_paths: list[Path]) -> list[Path]:
+    """Remove paths that are recorded as generated reels in the library.
+
+    Prevents previously generated sizzle reels saved in the source folder
+    from being re-discovered as source videos on subsequent folder opens.
+    Fails open: if the library cannot be read, all paths are returned unchanged.
+    """
+    try:
+        library_paths = {Path(entry["path"]).resolve() for entry in _load_library()}
+    except Exception:
+        return video_paths
+    return [vp for vp in video_paths if vp.resolve() not in library_paths]
+
+
 def _load_library() -> list:
     if not LIBRARY_PATH.exists():
         return []
@@ -309,6 +323,7 @@ def _run_generation(job_id: str, folder: str, mode: str,
             job["status"] = "error"
             job["error"] = str(exc)
         return
+    video_paths = _filter_generated_reels(video_paths)
 
     video_segments: list[tuple] = []
 
@@ -440,6 +455,7 @@ def _run_analyze(folder: str, prompt: str) -> dict:
         video_paths = scan_videos(folder)
     except Exception as exc:
         return {"error": str(exc)}
+    video_paths = _filter_generated_reels(video_paths)
 
     highlights: dict[str, list[str]] = {}
     errors: list[str] = []
@@ -503,6 +519,10 @@ def create_app(testing: bool = False) -> Flask:
             video_paths = scan_videos(folder)
         except ValueError as e:
             return jsonify({"error": str(e)}), 422
+
+        video_paths = _filter_generated_reels(video_paths)
+        if not video_paths:
+            return jsonify({"error": "No source video files found (folder contains only previously generated reels)"}), 422
 
         filenames = [p.name for p in video_paths]
         needs_transcription = [p for p in video_paths
@@ -575,6 +595,7 @@ def create_app(testing: bool = False) -> Flask:
             video_paths = scan_videos(folder)
         except ValueError as e:
             return jsonify({"error": str(e)}), 422
+        video_paths = _filter_generated_reels(video_paths)
         files = []
         for vp in video_paths:
             txt_path = vp.with_suffix(".txt")
@@ -621,6 +642,7 @@ def create_app(testing: bool = False) -> Flask:
             video_paths = scan_videos(folder)
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 422
+        video_paths = _filter_generated_reels(video_paths)
 
         selected_count = sum(1 for p in video_paths if selections.get(p.name))
         job_id = _new_job("generation", max(selected_count, 1))
