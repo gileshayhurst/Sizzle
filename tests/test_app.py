@@ -500,6 +500,21 @@ def test_recent_folders_deduplicates_on_reopen(client, tmp_path, monkeypatch):
     assert len(recent) == 1
 
 
+def test_recent_folder_updates_video_count_on_reopen(client, tmp_path, monkeypatch):
+    import app as app_module
+    monkeypatch.setattr(app_module, "RECENT_FOLDERS_PATH", tmp_path / "recent.json")
+    (tmp_path / "vid.mp4").touch()
+    (tmp_path / "vid.txt").write_text("[0:05] Speaker: Hi.", encoding="utf-8")
+    client.post("/load-folder", json={"folder": str(tmp_path)})
+    # Add a second video before re-opening
+    (tmp_path / "vid2.mp4").touch()
+    (tmp_path / "vid2.txt").write_text("[0:10] Speaker: Bye.", encoding="utf-8")
+    client.post("/load-folder", json={"folder": str(tmp_path)})
+    recent = client.get("/recent-folders").get_json()
+    assert len(recent) == 1
+    assert recent[0]["video_count"] == 2
+
+
 def test_recent_folders_capped_at_five(client, tmp_path, monkeypatch):
     import app as app_module
     monkeypatch.setattr(app_module, "RECENT_FOLDERS_PATH", tmp_path / "recent.json")

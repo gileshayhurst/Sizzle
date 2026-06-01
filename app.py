@@ -220,8 +220,11 @@ def _save_recent_folder(folder: str, video_count: int) -> None:
             "last_opened": datetime.now().isoformat(timespec="seconds"),
         })
         entries = entries[:5]
-        with RECENT_FOLDERS_PATH.open("w", encoding="utf-8") as f:
-            json.dump(entries, f, indent=2, ensure_ascii=False)
+        try:
+            with RECENT_FOLDERS_PATH.open("w", encoding="utf-8") as f:
+                json.dump(entries, f, indent=2, ensure_ascii=False)
+        except OSError:
+            pass  # history is best-effort; never fail a load-folder for this
 
 
 def _find_system_font() -> str | None:
