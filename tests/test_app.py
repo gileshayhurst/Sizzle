@@ -468,6 +468,51 @@ def test_analyze_no_matches_returns_empty_list(client, tmp_path):
     assert resp.get_json()["highlights"]["vid.mp4"] == []
 
 
+def test_recent_folders_starts_empty(client, tmp_path, monkeypatch):
+    import app as app_module
+    monkeypatch.setattr(app_module, "RECENT_FOLDERS_PATH", tmp_path / "recent.json")
+    resp = client.get("/recent-folders")
+    assert resp.status_code == 200
+    assert resp.get_json() == []
+
+
+def test_load_folder_saves_to_recent(client, tmp_path, monkeypatch):
+    import app as app_module
+    monkeypatch.setattr(app_module, "RECENT_FOLDERS_PATH", tmp_path / "recent.json")
+    (tmp_path / "vid.mp4").touch()
+    (tmp_path / "vid.txt").write_text("[0:05] Speaker: Hi.", encoding="utf-8")
+    client.post("/load-folder", json={"folder": str(tmp_path)})
+    recent = client.get("/recent-folders").get_json()
+    assert len(recent) == 1
+    assert recent[0]["path"] == str(tmp_path)
+    assert recent[0]["video_count"] == 1
+    assert "last_opened" in recent[0]
+
+
+def test_recent_folders_deduplicates_on_reopen(client, tmp_path, monkeypatch):
+    import app as app_module
+    monkeypatch.setattr(app_module, "RECENT_FOLDERS_PATH", tmp_path / "recent.json")
+    (tmp_path / "vid.mp4").touch()
+    (tmp_path / "vid.txt").write_text("[0:05] Speaker: Hi.", encoding="utf-8")
+    client.post("/load-folder", json={"folder": str(tmp_path)})
+    client.post("/load-folder", json={"folder": str(tmp_path)})
+    recent = client.get("/recent-folders").get_json()
+    assert len(recent) == 1
+
+
+def test_recent_folders_capped_at_five(client, tmp_path, monkeypatch):
+    import app as app_module
+    monkeypatch.setattr(app_module, "RECENT_FOLDERS_PATH", tmp_path / "recent.json")
+    for i in range(6):
+        d = tmp_path / f"f{i}"
+        d.mkdir()
+        (d / "vid.mp4").touch()
+        (d / "vid.txt").write_text("[0:05] Speaker: Hi.", encoding="utf-8")
+        client.post("/load-folder", json={"folder": str(d)})
+    recent = client.get("/recent-folders").get_json()
+    assert len(recent) == 5
+
+
 def test_segment_title_cards_inserted_within_video(client, tmp_path):
     """Segment title cards appear between non-contiguous clusters in the same video."""
     import time

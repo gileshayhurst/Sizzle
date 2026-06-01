@@ -35,10 +35,12 @@ from transcriber import transcribe_video
 from video_editor import check_ffmpeg, extract_clip, parse_timestamp_to_seconds, stitch_clips
 
 LIBRARY_PATH = Path(__file__).parent / "sizzle_library.json"
+RECENT_FOLDERS_PATH = Path(__file__).parent / "recent_folders.json"
 
 _jobs: dict = {}
 _jobs_lock = threading.Lock()
 _library_lock = threading.Lock()
+_recent_folders_lock = threading.Lock()
 _whisper_model = None
 _model_lock = threading.Lock()
 
@@ -196,6 +198,30 @@ def _library_add(entry: dict) -> None:
         entries = _load_library()
         entries.insert(0, entry)
         _save_library(entries)
+
+
+def _load_recent_folders() -> list:
+    if not RECENT_FOLDERS_PATH.exists():
+        return []
+    try:
+        with RECENT_FOLDERS_PATH.open(encoding="utf-8") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return []
+
+
+def _save_recent_folder(folder: str, video_count: int) -> None:
+    """Prepend folder to recent_folders.json, deduplicate by path, keep max 5."""
+    with _recent_folders_lock:
+        entries = [e for e in _load_recent_folders() if e.get("path") != folder]
+        entries.insert(0, {
+            "path": folder,
+            "video_count": video_count,
+            "last_opened": datetime.now().isoformat(timespec="seconds"),
+        })
+        entries = entries[:5]
+        with RECENT_FOLDERS_PATH.open("w", encoding="utf-8") as f:
+            json.dump(entries, f, indent=2, ensure_ascii=False)
 
 
 def _find_system_font() -> str | None:
@@ -510,6 +536,10 @@ def create_app(testing: bool = False) -> Flask:
             return jsonify({"path": None})
         return jsonify({"path": path})
 
+    @app.get("/recent-folders")
+    def recent_folders():
+        return jsonify(_load_recent_folders())
+
     @app.post("/load-folder")
     def load_folder():
         folder = (request.get_json() or {}).get("folder", "").strip()
@@ -524,6 +554,7 @@ def create_app(testing: bool = False) -> Flask:
         if not video_paths:
             return jsonify({"error": "No source video files found (folder contains only previously generated reels)"}), 422
 
+        _save_recent_folder(folder, len(video_paths))
         filenames = [p.name for p in video_paths]
         needs_transcription = [p for p in video_paths
                                 if not p.with_suffix(".txt").exists()
