@@ -31,15 +31,39 @@
 
     <!-- FOLDER PICKER SCREEN -->
     <div id="screen-folder-picker" class="screen">
-      <div class="center-card">
-        <h2>Open a folder</h2>
-        <p class="subtitle">Select the folder containing your video files.</p>
-        <div class="folder-input-row">
-          <input id="folder-path-input" type="text" placeholder="Paste a folder path..." class="folder-path-input">
-          <button id="btn-browse" class="btn-primary">Browse...</button>
+      <div class="picker-split">
+        <!-- Left: branding panel -->
+        <div class="picker-brand">
+          <div class="picker-brand-icon">🎬</div>
+          <div class="picker-brand-title">SIZZLE REEL</div>
+          <div class="picker-brand-tagline">AI-powered video<br>highlight extraction</div>
+          <div class="picker-steps">
+            <div class="picker-step">
+              <span class="picker-step-num">1</span>Open a folder of videos
+            </div>
+            <div class="picker-step">
+              <span class="picker-step-num">2</span>Describe what you want
+            </div>
+            <div class="picker-step">
+              <span class="picker-step-num">3</span>Generate your reel
+            </div>
+          </div>
         </div>
-        <div id="folder-error" class="error-msg hidden"></div>
-        <button id="btn-load-folder" class="btn-primary" style="margin-top:12px">Open Folder</button>
+        <!-- Right: form + recent folders -->
+        <div class="picker-form">
+          <h2>Open a folder</h2>
+          <p class="subtitle">Select the folder containing your video files.</p>
+          <div class="folder-input-row">
+            <input id="folder-path-input" type="text" placeholder="Paste a folder path..." class="folder-path-input">
+            <button id="btn-browse" class="btn-primary">Browse…</button>
+          </div>
+          <div id="folder-error" class="error-msg hidden"></div>
+          <button id="btn-load-folder" class="btn-primary" style="margin-top:4px">Open Folder</button>
+          <div id="recent-folders-section" class="recent-folders-section hidden">
+            <div class="recent-folders-label">Recent folders</div>
+            <ul id="recent-folders-list" class="recent-folders-list"></ul>
+          </div>
+        </div>
       </div>
     </div>
 
