@@ -135,10 +135,10 @@ def test_generate_returns_job_id(client, tmp_path):
     (tmp_path / "vid.mp4").touch()
     (tmp_path / "vid.txt").write_text("[0:05] Speaker: Hello.", encoding="utf-8")
 
-    with patch("app.query_claude", return_value="0:05-0:10"), \
-         patch("app.extract_clip"), \
+    with patch("app.extract_clip"), \
          patch("app.stitch_clips"), \
-         patch("app.check_ffmpeg"):
+         patch("app.check_ffmpeg"), \
+         patch("app._library_add"):
         resp = client.post("/generate", json={
             "folder": str(tmp_path),
             "mode": "highlight",
@@ -157,7 +157,8 @@ def test_generate_accepts_empty_prompt(client, tmp_path):
     (tmp_path / "vid.txt").write_text("[0:05] Speaker: Hello.", encoding="utf-8")
     with patch("app.extract_clip"), \
          patch("app.stitch_clips"), \
-         patch("app.check_ffmpeg"):
+         patch("app.check_ffmpeg"), \
+         patch("app._library_add"):
         resp = client.post("/generate", json={
             "folder": str(tmp_path),
             "mode": "highlight",
@@ -252,7 +253,8 @@ def test_title_card_inserted_between_videos(client, tmp_path):
          patch("app.stitch_clips"), \
          patch("app.check_ffmpeg"), \
          patch("app.get_video_dimensions", return_value=(1920, 1080)), \
-         patch("app.make_title_card") as mock_card:
+         patch("app.make_title_card") as mock_card, \
+         patch("app._library_add"):
 
         resp = client.post("/generate", json={
             "folder": str(tmp_path),
@@ -429,7 +431,8 @@ def test_segment_title_cards_inserted_within_video(client, tmp_path):
          patch("app.stitch_clips"), \
          patch("app.check_ffmpeg"), \
          patch("app.get_video_dimensions", return_value=(1920, 1080)), \
-         patch("app.make_title_card") as mock_card:
+         patch("app.make_title_card") as mock_card, \
+         patch("app._library_add"):
 
         resp = client.post("/generate", json={
             "folder": str(tmp_path),

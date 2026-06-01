@@ -582,6 +582,8 @@ function pollGeneration(jobId) {
   $('btn-cancel-gen').onclick = async () => {
     await fetch(`/jobs/${jobId}`, { method: 'DELETE' });
     clearInterval(interval);
+    showScreen('screen-workspace');
+    $('topbar-controls').classList.remove('hidden');
   };
 }
 
