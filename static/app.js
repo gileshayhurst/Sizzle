@@ -506,6 +506,50 @@ function highlightAllInFile(filename) {
   updateGenerateBtn();
 }
 
+// ─── Recent folders ───────────────────────────────────────────────────────────
+function relativeTime(iso) {
+  const diffDays = Math.floor((Date.now() - new Date(iso).getTime()) / 86400000);
+  if (diffDays === 0) return 'today';
+  if (diffDays === 1) return 'yesterday';
+  if (diffDays < 7) return `${diffDays} days ago`;
+  const weeks = Math.floor(diffDays / 7);
+  return weeks === 1 ? '1 week ago' : `${weeks} weeks ago`;
+}
+
+function renderRecentFolders(entries) {
+  const section = $('recent-folders-section');
+  const list = $('recent-folders-list');
+  if (!entries || entries.length === 0) {
+    section.classList.add('hidden');
+    return;
+  }
+  list.innerHTML = '';
+  entries.forEach(entry => {
+    const li = document.createElement('li');
+    li.className = 'recent-folder-item';
+    const name = entry.path.replace(/\\/g, '/').split('/').filter(Boolean).pop() || entry.path;
+    const count = entry.video_count;
+    li.innerHTML =
+      `<span class="recent-folder-name">📁 ${name}/</span>` +
+      `<span class="recent-folder-meta">${count} video${count !== 1 ? 's' : ''} · ${relativeTime(entry.last_opened)}</span>`;
+    li.addEventListener('click', () => {
+      $('folder-path-input').value = entry.path;
+      openFolder(entry.path);
+    });
+    list.appendChild(li);
+  });
+  section.classList.remove('hidden');
+}
+
+async function loadRecentFolders() {
+  try {
+    const resp = await fetch('/recent-folders');
+    if (resp.ok) renderRecentFolders(await resp.json());
+  } catch (_) {
+    // recent folders is a convenience feature — fail silently
+  }
+}
+
 // ─── Generate ─────────────────────────────────────────────────────────────────
 $('btn-generate').addEventListener('click', () => {
   const mode = state.mode;
@@ -703,3 +747,6 @@ $('btn-close-player').addEventListener('click', () => {
   $('library-source').src = '';
   $('library-player-overlay').classList.add('hidden');
 });
+
+// Load recent folders on startup
+loadRecentFolders();
