@@ -456,9 +456,9 @@ function renderHighlightMode(fileObj) {
   scroll.addEventListener('mousedown', e => {
     const lineEl = e.target.closest('.transcript-line-hl');
     if (!lineEl) return;
-    // No e.preventDefault() here — it would cancel the browser's pointer-based
-    // scroll tracking for this pointer ID (touchpad/touch devices), breaking scroll.
-    // Text selection is already prevented by `user-select: none` CSS on .transcript-line-hl.
+    // No e.preventDefault() — user-select:none CSS handles text selection,
+    // and preventDefault() on mousedown cancels pointer-based scroll tracking
+    // on touchpad/touch devices.
     _dragActive = true;
     const raw = lineEl.dataset.raw;
     const hl = state.highlighted[fileObj.name];
@@ -469,17 +469,25 @@ function renderHighlightMode(fileObj) {
     updateGenerateBtn();
   }, { signal });
 
-  scroll.addEventListener('mousemove', e => {
+  // mousemove on document (not scroll) so auto-scroll fires even when the
+  // mouse leaves the scroll container during a drag.
+  document.addEventListener('mousemove', e => {
     if (!_dragActive) return;
-    const lineEl = e.target.closest('.transcript-line-hl');
-    if (!lineEl) {
-      // Auto-scroll when near edges
-      const rect = scroll.getBoundingClientRect();
-      const threshold = 40;
-      if (e.clientY < rect.top + threshold) scroll.scrollTop -= 8;
-      else if (e.clientY > rect.bottom - threshold) scroll.scrollTop += 8;
-      return;
+
+    // Auto-scroll: check edge proximity FIRST, before checking what element
+    // the mouse is over — during a drag the mouse is always over a line, so
+    // checking lineEl first meant auto-scroll never fired.
+    const rect = scroll.getBoundingClientRect();
+    const threshold = 60;
+    if (e.clientY < rect.top + threshold) {
+      scroll.scrollTop -= 12;
+    } else if (e.clientY > rect.bottom - threshold) {
+      scroll.scrollTop += 12;
     }
+
+    // Apply highlight to whichever line is under the cursor
+    const lineEl = e.target.closest('.transcript-line-hl');
+    if (!lineEl) return;
     _applyHighlight(fileObj.name, lineEl, _dragSetTo);
     refreshBadge(fileObj.name);
     updateGenerateBtn();
