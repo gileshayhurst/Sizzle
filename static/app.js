@@ -456,7 +456,9 @@ function renderHighlightMode(fileObj) {
   scroll.addEventListener('mousedown', e => {
     const lineEl = e.target.closest('.transcript-line-hl');
     if (!lineEl) return;
-    e.preventDefault();
+    // No e.preventDefault() here — it would cancel the browser's pointer-based
+    // scroll tracking for this pointer ID (touchpad/touch devices), breaking scroll.
+    // Text selection is already prevented by `user-select: none` CSS on .transcript-line-hl.
     _dragActive = true;
     const raw = lineEl.dataset.raw;
     const hl = state.highlighted[fileObj.name];
