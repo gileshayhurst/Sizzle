@@ -145,6 +145,10 @@
             <div id="result-info" class="result-info"></div>
           </div>
           <div class="result-actions">
+            <div class="seg-skip-controls">
+              <button id="btn-prev-seg" class="seg-skip-btn" title="Previous segment">⏮ Prev</button>
+              <button id="btn-next-seg" class="seg-skip-btn" title="Next segment">Next ⏭</button>
+            </div>
             <button id="btn-new-reel" class="btn-primary">+ New Reel</button>
             <button id="btn-open-folder" class="btn-secondary">📂 Open Folder</button>
           </div>
@@ -168,6 +172,10 @@
         <video id="library-video" controls style="width:100%;max-height:500px">
           <source id="library-source" src="" type="video/mp4">
         </video>
+        <div class="seg-skip-controls" style="margin-top:8px">
+          <button id="btn-lib-prev-seg" class="seg-skip-btn" title="Previous segment">⏮ Prev</button>
+          <button id="btn-lib-next-seg" class="seg-skip-btn" title="Next segment">Next ⏭</button>
+        </div>
         <div id="library-player-meta" style="padding:8px 0;font-size:12px;color:#5090d0"></div>
       </div>
     </div>

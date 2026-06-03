@@ -393,3 +393,78 @@ body {
 .btn-secondary:hover { background: #0c1524; color: #b0c0d8; }
 
 .hidden { display: none !important; }
+
+/* ── Segment skip controls ──────────────────────────────────────────────── */
+.seg-skip-controls {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.seg-skip-btn {
+  background: #1a2840;
+  border: 1px solid #2a4060;
+  color: #7ab0e0;
+  font-size: 11px;
+  padding: 5px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.seg-skip-btn:hover {
+  background: #223050;
+  color: #9dd0ff;
+}
+
+/* ── Folder switcher dropdown ───────────────────────────────────────────── */
+.folder-badge {
+  cursor: pointer;
+  user-select: none;
+}
+
+.folder-badge:hover {
+  color: #9dd0ff;
+}
+
+.folder-dropdown {
+  position: fixed;
+  background: #0c1524;
+  border: 1px solid #2a4060;
+  border-radius: 6px;
+  min-width: 260px;
+  z-index: 1000;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+  overflow: hidden;
+}
+
+.folder-dropdown button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 9px 14px;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid #1a2840;
+  color: #b0c0d8;
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.folder-dropdown button:last-child {
+  border-bottom: none;
+}
+
+.folder-dropdown button:hover {
+  background: #1a2840;
+  color: #9dd0ff;
+}
+
+.folder-dropdown .dropdown-new-folder {
+  color: #5090d0;
+  font-style: italic;
+}
