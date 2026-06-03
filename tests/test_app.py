@@ -334,7 +334,7 @@ def test_title_card_inserted_between_videos(client, tmp_path):
     # One video-name title card before each source video (alpha first, beta second)
     assert mock_card.call_count == 2
     calls = [c[0][0] for c in mock_card.call_args_list]
-    assert calls == ["alpha", "beta"]
+    assert calls == [["alpha"], ["beta"]]
 
 
 def test_make_title_card_includes_fontfile_when_font_found():
@@ -627,5 +627,5 @@ def test_segment_title_cards_inserted_within_video(client, tmp_path):
     # Video-name card before vid.mp4, then segment card between the two clusters
     assert mock_card.call_count == 2
     calls = [c[0][0] for c in mock_card.call_args_list]
-    assert calls[0] == "vid"
-    assert calls[1] == "Segment 1"
+    assert calls[0] == ["vid"]
+    assert calls[1] == ["Segment 1"]

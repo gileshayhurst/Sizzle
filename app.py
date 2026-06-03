@@ -404,7 +404,7 @@ def _run_generation(job_id: str, folder: str, mode: str,
             card_path = os.path.join(tmp_dir, f"clip_{clip_index:04d}.mp4")
             try:
                 width, height = get_video_dimensions(str(vp))
-                make_title_card(vp.stem, width, height, card_path)
+                make_title_card([vp.stem], width, height, card_path)
                 clip_paths.append(card_path)
                 clip_index += 1
             except Exception as exc:
@@ -416,7 +416,7 @@ def _run_generation(job_id: str, folder: str, mode: str,
                     card_path = os.path.join(tmp_dir, f"clip_{clip_index:04d}.mp4")
                     try:
                         width, height = get_video_dimensions(str(vp))
-                        make_title_card(f"Segment {seg_num}", width, height, card_path)
+                        make_title_card([f"Segment {seg_num}"], width, height, card_path)
                         clip_paths.append(card_path)
                         clip_index += 1
                         seg_num += 1
