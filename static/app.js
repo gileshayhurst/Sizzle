@@ -74,7 +74,7 @@ async function openFolder(folder) {
   state.checked = {};
   state.highlighted = {};
 
-  $('folder-badge').textContent = '📁 ' + folder.split(/[\\/]/).pop() + '/';
+  $('folder-badge').textContent = '📁 ' + folder.split(/[\\/]/).pop() + '/ ▾';
   $('output-filename').value = folder.split(/[\\/]/).pop() + '_sizzle.mp4';
 
   if (data.job_id) {
@@ -796,3 +796,77 @@ $('btn-close-player').addEventListener('click', () => {
 
 // Load recent folders on startup
 loadRecentFolders();
+
+// ─── Folder badge dropdown ────────────────────────────────────────────────────
+let _folderDropdown = null;
+
+function _closeFolderDropdown() {
+  if (_folderDropdown) {
+    _folderDropdown.remove();
+    _folderDropdown = null;
+  }
+}
+
+$('folder-badge').addEventListener('click', async (e) => {
+  e.stopPropagation();
+  if (_folderDropdown) {
+    _closeFolderDropdown();
+    return;
+  }
+
+  const rect = $('folder-badge').getBoundingClientRect();
+  const dropdown = document.createElement('div');
+  dropdown.className = 'folder-dropdown';
+  dropdown.style.top = (rect.bottom + 4) + 'px';
+  dropdown.style.left = rect.left + 'px';
+  _folderDropdown = dropdown;
+
+  // Fetch recent folders
+  let recents = [];
+  try {
+    const resp = await fetch('/recent-folders');
+    recents = await resp.json();
+  } catch (_) {}
+
+  recents.forEach(entry => {
+    const btn = document.createElement('button');
+    btn.textContent = '📁 ' + entry.path.split(/[\\/]/).pop() + '/';
+    btn.title = entry.path;
+    btn.addEventListener('click', () => {
+      _closeFolderDropdown();
+      openFolder(entry.path);
+    });
+    dropdown.appendChild(btn);
+  });
+
+  const newBtn = document.createElement('button');
+  newBtn.className = 'dropdown-new-folder';
+  newBtn.textContent = '📂 Select new folder...';
+  newBtn.addEventListener('click', async () => {
+    _closeFolderDropdown();
+    const resp = await fetch('/browse', { method: 'POST' });
+    const { path } = await resp.json();
+    if (path) openFolder(path);
+  });
+  dropdown.appendChild(newBtn);
+
+  document.body.appendChild(dropdown);
+
+  // Dismiss on outside click or Escape
+  const onOutside = (ev) => {
+    if (!dropdown.contains(ev.target)) {
+      _closeFolderDropdown();
+      document.removeEventListener('mousedown', onOutside);
+    }
+  };
+  const onEscape = (ev) => {
+    if (ev.key === 'Escape') {
+      _closeFolderDropdown();
+      document.removeEventListener('keydown', onEscape);
+    }
+  };
+  setTimeout(() => {
+    document.addEventListener('mousedown', onOutside);
+    document.addEventListener('keydown', onEscape);
+  }, 0);
+});
