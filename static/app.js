@@ -1,3 +1,5 @@
+const GENERATOR_URL = 'http://localhost:5001';
+
 // ─── State ────────────────────────────────────────────────────────────────────
 const state = {
   folder: null,
@@ -589,7 +591,7 @@ async function submitGenerate(mode, selections) {
   $('gen-bar').style.width = '0%';
   $('topbar-controls').classList.add('hidden');
 
-  const resp = await fetch('/generate', {
+  const resp = await fetch(GENERATOR_URL + '/generate', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -614,7 +616,7 @@ function pollGeneration(jobId) {
   let lastLogLen = 0;
 
   const interval = setInterval(async () => {
-    const resp = await fetch(`/status/${jobId}`);
+    const resp = await fetch(`${GENERATOR_URL}/status/${jobId}`);
     const job = await resp.json();
 
     const pct = job.total > 0 ? Math.round((job.done / job.total) * 100) : 0;
@@ -641,7 +643,7 @@ function pollGeneration(jobId) {
   }, 2000);
 
   $('btn-cancel-gen').onclick = async () => {
-    await fetch(`/jobs/${jobId}`, { method: 'DELETE' });
+    await fetch(`${GENERATOR_URL}/jobs/${jobId}`, { method: 'DELETE' });
     clearInterval(interval);
     showScreen('screen-workspace');
     $('topbar-controls').classList.remove('hidden');
@@ -654,7 +656,7 @@ function showResult(result) {
 
   state.resultSegmentStarts = result.segment_starts || [];
 
-  const src = `/video/${state.resultJobId}`;
+  const src = `${GENERATOR_URL}/video/${state.resultJobId}`;
   $('result-source').src = src;
   $('result-video').load();
 
@@ -705,7 +707,7 @@ $('btn-new-reel').addEventListener('click', () => {
 });
 
 $('btn-open-folder').addEventListener('click', async () => {
-  await fetch('/open-folder', {
+  await fetch(GENERATOR_URL + '/open-folder', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ folder: state.folder }),
@@ -714,7 +716,7 @@ $('btn-open-folder').addEventListener('click', async () => {
 
 // ─── Library ──────────────────────────────────────────────────────────────────
 async function loadLibrary() {
-  const resp = await fetch('/library');
+  const resp = await fetch(GENERATOR_URL + '/library');
   const entries = await resp.json();
   renderLibrary(entries);
 }
@@ -768,7 +770,7 @@ function renderLibrary(entries) {
     // Show in explorer
     card.querySelector('.reel-btn.show').addEventListener('click', async () => {
       const folder = entry.path.replace(/[\\/][^\\/]+$/, '');
-      await fetch('/open-folder', {
+      await fetch(GENERATOR_URL + '/open-folder', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ folder }),
@@ -777,7 +779,7 @@ function renderLibrary(entries) {
 
     // Delete
     card.querySelector('.reel-btn.delete').addEventListener('click', async () => {
-      await fetch(`/library/${entry.id}`, { method: 'DELETE' });
+      await fetch(`${GENERATOR_URL}/library/${entry.id}`, { method: 'DELETE' });
       loadLibrary();
     });
 
@@ -787,7 +789,7 @@ function renderLibrary(entries) {
 
 function openLibraryPlayer(entry) {
   state.librarySegmentStarts = entry.segment_starts || [];
-  $('library-source').src = `/library-video/${entry.id}`;
+  $('library-source').src = `${GENERATOR_URL}/library-video/${entry.id}`;
   $('library-video').load();
   $('library-player-meta').textContent =
     `"${entry.prompt}" — ${entry.source_folder}`;
