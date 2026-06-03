@@ -22,15 +22,16 @@ def parse_timestamp_to_seconds(ts: str) -> float:
 
 def extract_clip(video_path: str, start_sec: float, end_sec: float, output_path: str) -> None:
     # Re-encode (never stream-copy) so every clip starts on an I-frame.
-    # Stream-copying with output seeking produces clips that begin on P/B frames,
-    # which the player cannot decode without the preceding I-frame reference —
-    # visible as a freeze at each transition in the assembled reel.
+    # -ss before -i: fast input seek. -t duration (not -to) is relative to the
+    # seek point. -avoid_negative_ts make_zero zeroes each clip's timestamps so
+    # the concat demuxer sees clean zero-based PTS on every clip — prevents AV drift.
     subprocess.run(
         [
             "ffmpeg", "-y",
-            "-i", video_path,
             "-ss", str(start_sec),
-            "-to", str(end_sec),
+            "-i", video_path,
+            "-t", str(end_sec - start_sec),
+            "-avoid_negative_ts", "make_zero",
             "-c:v", "libx264",
             "-preset", "fast",
             "-c:a", "aac",

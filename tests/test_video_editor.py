@@ -38,9 +38,10 @@ def test_extract_clip_calls_correct_ffmpeg_args():
     args = mock_run.call_args[0][0]
     assert args == [
         "ffmpeg", "-y",
-        "-i", "input.mp4",
         "-ss", "5.0",
-        "-to", "30.0",
+        "-i", "input.mp4",
+        "-t", "25.0",
+        "-avoid_negative_ts", "make_zero",
         "-c:v", "libx264",
         "-preset", "fast",
         "-c:a", "aac",
