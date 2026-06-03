@@ -331,10 +331,13 @@ def test_title_card_inserted_between_videos(client, tmp_path):
 
         assert status == "done", f"Job ended in unexpected state: {status}"
 
-    # One video-name title card before each source video (alpha first, beta second)
+    # One unified title card before each content clip (alpha Seg1, beta Seg1)
     assert mock_card.call_count == 2
     calls = [c[0][0] for c in mock_card.call_args_list]
-    assert calls == [["alpha"], ["beta"]]
+    assert calls[0][0] == "alpha"
+    assert calls[0][2] == "Segment 1 / 2"
+    assert calls[1][0] == "beta"
+    assert calls[1][2] == "Segment 2 / 2"
 
 
 def test_make_title_card_includes_fontfile_when_font_found():
@@ -624,8 +627,49 @@ def test_segment_title_cards_inserted_within_video(client, tmp_path):
 
         assert status == "done", f"Job ended in unexpected state: {status}"
 
-    # Video-name card before vid.mp4, then segment card between the two clusters
+    # Unified title card before EACH segment clip (2 segments → 2 cards)
     assert mock_card.call_count == 2
     calls = [c[0][0] for c in mock_card.call_args_list]
-    assert calls[0] == ["vid"]
-    assert calls[1] == ["Segment 1"]
+    assert calls[0][0] == "vid"
+    assert calls[0][1].startswith("from ")
+    assert calls[0][2] == "Segment 1 / 2"
+    assert calls[1][0] == "vid"
+    assert calls[1][1].startswith("from ")
+    assert calls[1][2] == "Segment 2 / 2"
+
+
+def test_generation_result_includes_segment_starts(client, tmp_path):
+    """After a successful generation, job result must include segment_starts list."""
+    import threading, time
+    (tmp_path / "vid.mp4").touch()
+    (tmp_path / "vid.txt").write_text(
+        "[0:05] Speaker: Hello.\n[1:10] Speaker: World.", encoding="utf-8"
+    )
+
+    from app import _jobs
+    with patch("app.extract_clip"), \
+         patch("app.stitch_clips"), \
+         patch("app.check_ffmpeg"), \
+         patch("app.make_title_card"), \
+         patch("app.get_video_dimensions", return_value=(1920, 1080)), \
+         patch("app._library_add"):
+        resp = client.post("/generate", json={
+            "folder": str(tmp_path),
+            "mode": "checkbox",
+            "selections": {"vid.mp4": ["[0:05] Speaker: Hello.", "[1:10] Speaker: World."]},
+            "prompt": "greetings",
+            "output_filename": "out.mp4",
+        })
+        job_id = resp.get_json()["job_id"]
+
+        # Poll until done (generation runs in a thread) — keep patches active
+        for _ in range(50):
+            time.sleep(0.1)
+            if _jobs.get(job_id, {}).get("status") in ("done", "error"):
+                break
+
+    result = _jobs[job_id]["result"]
+    assert result is not None
+    assert "segment_starts" in result
+    assert isinstance(result["segment_starts"], list)
+    assert len(result["segment_starts"]) >= 1

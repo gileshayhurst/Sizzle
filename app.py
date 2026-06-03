@@ -390,46 +390,62 @@ def _run_generation(job_id: str, folder: str, mode: str,
             job["error"] = "No segments found in selections"
         return
 
+    TITLE_CARD_DURATION = 5.0
+    total_segs = sum(len(segs) for _, segs in video_segments)
+
     _append_log(job_id, "· Extracting clips...")
     output_path = str(Path(folder) / output_filename)
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         clip_paths: list[str] = []
         clip_durations: list[float] = []
+        segment_starts: list[float] = []
+        cumulative_time: float = 0.0
         clip_index = 0
-        seg_num = 1
+        seg_num = 0
 
         for vp, segs in video_segments:
-            # Video-name title card before every source video (including the first)
-            card_path = os.path.join(tmp_dir, f"clip_{clip_index:04d}.mp4")
+            if job["cancel"].is_set():
+                with _jobs_lock:
+                    job["status"] = "cancelled"
+                return
+
             try:
                 width, height = get_video_dimensions(str(vp))
-                make_title_card([vp.stem], width, height, card_path)
-                clip_paths.append(card_path)
-                clip_index += 1
-            except Exception as exc:
-                _append_log(job_id, f"· Could not create title card for {vp.name}: {exc}")
+            except Exception:
+                width, height = 1920, 1080
 
-            for seg_idx, (start_sec, end_sec) in enumerate(segs):
-                # Segment title card between non-contiguous segments in same video
-                if seg_idx > 0:
-                    card_path = os.path.join(tmp_dir, f"clip_{clip_index:04d}.mp4")
-                    try:
-                        width, height = get_video_dimensions(str(vp))
-                        make_title_card([f"Segment {seg_num}"], width, height, card_path)
-                        clip_paths.append(card_path)
-                        clip_index += 1
-                        seg_num += 1
-                    except Exception as exc:
-                        _append_log(job_id, f"· Could not create segment {seg_num} card: {exc}")
+            for start_sec, end_sec in segs:
+                seg_num += 1
 
+                # Title card before this clip
+                card_path = os.path.join(tmp_dir, f"clip_{clip_index:04d}.mp4")
+                card_lines = [
+                    vp.stem,
+                    f"from {_format_seconds(start_sec)}",
+                    f"Segment {seg_num} / {total_segs}",
+                ]
+                try:
+                    make_title_card(card_lines, width, height, card_path)
+                    clip_paths.append(card_path)
+                    clip_index += 1
+                    cumulative_time += TITLE_CARD_DURATION
+                except Exception as exc:
+                    _append_log(job_id, f"· Could not create title card for {vp.name}: {exc}")
+
+                # Record where this content clip starts in the output
+                segment_starts.append(cumulative_time)
+
+                # Content clip
                 clip_path = os.path.join(tmp_dir, f"clip_{clip_index:04d}{vp.suffix}")
                 try:
                     extract_clip(str(vp), start_sec, end_sec, clip_path)
                     clip_paths.append(clip_path)
                     clip_durations.append(end_sec - start_sec)
+                    cumulative_time += end_sec - start_sec
                     clip_index += 1
                 except Exception as exc:
+                    segment_starts.pop()  # clip failed, remove the start marker
                     _append_log(
                         job_id,
                         f"✗ {vp.name} [{start_sec:.1f}-{end_sec:.1f}] — extraction failed: {exc}",
@@ -457,6 +473,7 @@ def _run_generation(job_id: str, folder: str, mode: str,
         "filename": output_filename,
         "clip_count": len(clip_durations),
         "duration_seconds": duration,
+        "segment_starts": segment_starts,
     }
 
     _append_log(job_id, f"✓ Done — saved to {output_filename}")
@@ -472,6 +489,7 @@ def _run_generation(job_id: str, folder: str, mode: str,
         "prompt": prompt,
         "duration_seconds": duration,
         "clip_count": len(clip_durations),
+        "segment_starts": segment_starts,
         "created_at": datetime.now().isoformat(timespec="seconds"),
     })
 
