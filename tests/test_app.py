@@ -164,12 +164,14 @@ def test_transcripts_endpoint_returns_structured_data(client, tmp_path):
 
 
 def test_generate_returns_job_id(client, tmp_path):
+    import time
     (tmp_path / "vid.mp4").touch()
     (tmp_path / "vid.txt").write_text("[0:05] Speaker: Hello.", encoding="utf-8")
 
     with patch("app.extract_clip"), \
          patch("app.stitch_clips"), \
          patch("app.check_ffmpeg"), \
+         patch("app.make_title_card"), \
          patch("app._library_add"):
         resp = client.post("/generate", json={
             "folder": str(tmp_path),
@@ -178,18 +180,28 @@ def test_generate_returns_job_id(client, tmp_path):
             "prompt": "greetings",
             "output_filename": "out.mp4",
         })
-    assert resp.status_code == 200
-    data = resp.get_json()
-    assert "job_id" in data
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert "job_id" in data
+        job_id = data["job_id"]
+
+        # Wait for job to complete
+        for _ in range(25):
+            status = client.get(f"/status/{job_id}").get_json()["status"]
+            if status in ("done", "error", "cancelled"):
+                break
+            time.sleep(0.2)
 
 
 def test_generate_accepts_empty_prompt(client, tmp_path):
     """prompt is now optional at generate time (stored for library only)."""
+    import time
     (tmp_path / "vid.mp4").touch()
     (tmp_path / "vid.txt").write_text("[0:05] Speaker: Hello.", encoding="utf-8")
     with patch("app.extract_clip"), \
          patch("app.stitch_clips"), \
          patch("app.check_ffmpeg"), \
+         patch("app.make_title_card"), \
          patch("app._library_add"):
         resp = client.post("/generate", json={
             "folder": str(tmp_path),
@@ -197,8 +209,17 @@ def test_generate_accepts_empty_prompt(client, tmp_path):
             "selections": {"vid.mp4": ["[0:05] Speaker: Hello."]},
             "output_filename": "out.mp4",
         })
-    assert resp.status_code == 200
-    assert "job_id" in resp.get_json()
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert "job_id" in data
+        job_id = data["job_id"]
+
+        # Wait for job to complete
+        for _ in range(25):
+            status = client.get(f"/status/{job_id}").get_json()["status"]
+            if status in ("done", "error", "cancelled"):
+                break
+            time.sleep(0.2)
 
 
 def test_library_starts_empty(client, tmp_path, monkeypatch):
@@ -287,6 +308,7 @@ def test_title_card_inserted_between_videos(client, tmp_path):
          patch("app.get_video_dimensions", return_value=(1920, 1080)), \
          patch("app.make_title_card") as mock_card, \
          patch("app._library_add"):
+        mock_card.reset_mock()
 
         resp = client.post("/generate", json={
             "folder": str(tmp_path),
