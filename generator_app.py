@@ -29,7 +29,6 @@ from flask import Flask, jsonify, request, send_file
 from flask_cors import CORS
 
 from loader import scan_videos
-from timestamp_parser import parse_timestamps
 from video_editor import check_ffmpeg, extract_clip, parse_timestamp_to_seconds, stitch_clips
 
 LIBRARY_PATH = Path(__file__).parent / "sizzle_library.json"
