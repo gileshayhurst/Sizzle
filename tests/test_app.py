@@ -34,7 +34,7 @@ def test_make_title_card_generates_one_drawtext_per_line():
     # Three lines → three drawtext filters joined by comma
     assert vf_value.count("drawtext=") == 3
     assert "NOBU" in vf_value
-    assert "from 1\\:23" in vf_value
+    assert "from 1:23" in vf_value
     assert "Segment 2 / 5" in vf_value
 
 
@@ -284,14 +284,23 @@ def test_make_title_card_calls_ffmpeg_with_correct_args():
 
 def test_make_title_card_escapes_special_characters():
     from app import make_title_card
+    apos = chr(0x27)   # ASCII apostrophe — the character that breaks ffmpeg '...' strings
+    curly = chr(0x2019)  # RIGHT SINGLE QUOTATION MARK — safe in ffmpeg filter strings
     with patch("app.subprocess.run") as mock_run:
         mock_run.return_value = MagicMock(returncode=0)
-        make_title_card(["It's 50% Done: Really"], 1280, 720, "/tmp/card.mp4")
-    joined = " ".join(mock_run.call_args[0][0])
-    assert "\\'" in joined        # apostrophe escaped
-    assert "%%" in joined          # percent escaped
-    assert "\\:" in joined         # colon escaped
-
+        # Input contains ASCII apostrophe (common in filenames like "Chef's Special")
+        make_title_card(["It" + apos + "s 50% Done: Really"], 1280, 720, "/tmp/card.mp4")
+    vf = mock_run.call_args[0][0][mock_run.call_args[0][0].index("-vf") + 1]
+    # Extract the text value from text='...' in the filter string
+    text_val = vf.split("text=" + apos)[1].split(apos)[0]
+    # ASCII apostrophe must be absent — it terminates single-quoted strings in ffmpeg
+    assert apos not in text_val, "ASCII apostrophe must not appear inside text value"
+    # Typographic apostrophe U+2019 must replace it — safe and visually identical
+    assert curly in text_val, "Typographic apostrophe U+2019 must be present"
+    # Percent must be doubled for ffmpeg text format
+    assert "%%" in text_val, "Percent must be doubled"
+    # Colon must NOT be escaped — it is already literal inside '...' in ffmpeg filter strings
+    assert "Done: Really" in text_val, "Colon must appear clean in text, no backslash prefix"
 
 def test_title_card_inserted_between_videos(client, tmp_path):
     """make_title_card is called once between two source videos."""

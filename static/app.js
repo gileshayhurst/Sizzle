@@ -672,8 +672,14 @@ function skipToSegment(video, segmentStarts, direction) {
     const target = segmentStarts.find(s => s > t + 0.5);
     if (target !== undefined) video.currentTime = target;
   } else {
-    const targets = segmentStarts.filter(s => s < t - 0.5);
-    if (targets.length) video.currentTime = targets[targets.length - 1];
+    // Find the segment currently playing (latest start we've passed by ≥ 0.5s)
+    // then seek to the one before it, so Prev always navigates to the previous segment.
+    const currentIdx = segmentStarts.reduce((acc, s, i) => s <= t - 0.5 ? i : acc, -1);
+    if (currentIdx > 0) {
+      video.currentTime = segmentStarts[currentIdx - 1];
+    } else if (segmentStarts.length > 0) {
+      video.currentTime = segmentStarts[0];
+    }
   }
 }
 

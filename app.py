@@ -286,10 +286,14 @@ def make_title_card(
     fontsize = max(24, height // 15)
 
     def _escape(s: str) -> str:
+        # Inside ffmpeg single-quoted filter strings ('...'), only \\ and %% are
+        # special. The sequence \' terminates the quoted string (not an escaped
+        # quote), so apostrophes must be replaced rather than backslash-escaped.
+        # Colons are already literal inside '...' and must NOT be escaped — adding
+        # \: would render a visible backslash in the text.
         return (
             s.replace("\\", "\\\\")
-             .replace("'", "\\'")
-             .replace(":", "\\:")
+             .replace("'", "’")   # typographic apostrophe U+2019 — safe, visually identical
              .replace("%", "%%")
         )
 
