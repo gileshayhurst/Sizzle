@@ -245,6 +245,13 @@ def _find_system_font() -> str | None:
     return None
 
 
+def _format_seconds(sec: float) -> str:
+    """Format seconds as M:SS for display on title cards."""
+    m = int(sec) // 60
+    s = int(sec) % 60
+    return f"{m}:{s:02d}"
+
+
 def get_video_dimensions(video_path: str) -> tuple[int, int]:
     """Return (width, height) of the first video stream. Falls back to 1920×1080."""
     try:
@@ -270,16 +277,13 @@ def get_video_dimensions(video_path: str) -> tuple[int, int]:
 
 
 def make_title_card(
-    name: str, width: int, height: int, output_path: str, duration: float = 5.0
+    lines: list[str], width: int, height: int, output_path: str, duration: float = 5.0
 ) -> None:
-    """Generate a black title card with white centred text, encoded H.264/AAC."""
-    import textwrap
+    """Generate a black title card with white centred text, encoded H.264/AAC.
 
+    lines: list of text strings, one per visual line on the card.
+    """
     fontsize = max(24, height // 15)
-
-    # Wrap to ~85% of frame width; Arial avg char width ≈ 0.6 × fontsize.
-    chars_per_line = max(10, int(width * 0.85 / (fontsize * 0.6)))
-    lines = textwrap.wrap(name, chars_per_line) or [name]
 
     def _escape(s: str) -> str:
         return (
@@ -289,7 +293,6 @@ def make_title_card(
              .replace("%", "%%")
         )
 
-    # Prefix fontfile= to bypass fontconfig (crashes on Windows without a config file)
     font = _find_system_font()
     if font:
         escaped_font = font.replace("\\", "/").replace(":", "\\:")
@@ -297,8 +300,6 @@ def make_title_card(
     else:
         fontfile_arg = ""
 
-    # Use one drawtext filter per line so each line is individually x-centred.
-    # ffmpeg's \n escape in text= is unreliable; stacking filters is more robust.
     line_height = int(fontsize * 1.2)
     spacing = 8
     n = len(lines)

@@ -6,6 +6,38 @@ import pytest
 from app import create_app
 
 
+def test_format_seconds_zero():
+    from app import _format_seconds
+    assert _format_seconds(0.0) == "0:00"
+
+
+def test_format_seconds_minutes_and_seconds():
+    from app import _format_seconds
+    assert _format_seconds(75.0) == "1:15"
+
+
+def test_format_seconds_exact_minute():
+    from app import _format_seconds
+    assert _format_seconds(120.0) == "2:00"
+
+
+def test_make_title_card_generates_one_drawtext_per_line():
+    """make_title_card(lines, ...) must produce one drawtext filter per line."""
+    from unittest.mock import patch, MagicMock
+    from app import make_title_card
+    with patch("app.subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0)
+        make_title_card(["NOBU", "from 1:23", "Segment 2 / 5"], 1920, 1080, "/tmp/card.mp4")
+    args = mock_run.call_args[0][0]
+    vf_idx = args.index("-vf")
+    vf_value = args[vf_idx + 1]
+    # Three lines → three drawtext filters joined by comma
+    assert vf_value.count("drawtext=") == 3
+    assert "NOBU" in vf_value
+    assert "from 1\\:23" in vf_value
+    assert "Segment 2 / 5" in vf_value
+
+
 @pytest.fixture
 def client():
     app = create_app(testing=True)
@@ -218,7 +250,7 @@ def test_make_title_card_calls_ffmpeg_with_correct_args():
     from app import make_title_card
     with patch("app.subprocess.run") as mock_run:
         mock_run.return_value = MagicMock(returncode=0)
-        make_title_card("My Video", 1920, 1080, "/tmp/card.mp4", duration=5.0)
+        make_title_card(["My Video"], 1920, 1080, "/tmp/card.mp4", duration=5.0)
     mock_run.assert_called_once()
     cmd = mock_run.call_args[0][0]
     joined = " ".join(cmd)
@@ -233,7 +265,7 @@ def test_make_title_card_escapes_special_characters():
     from app import make_title_card
     with patch("app.subprocess.run") as mock_run:
         mock_run.return_value = MagicMock(returncode=0)
-        make_title_card("It's 50% Done: Really", 1280, 720, "/tmp/card.mp4")
+        make_title_card(["It's 50% Done: Really"], 1280, 720, "/tmp/card.mp4")
     joined = " ".join(mock_run.call_args[0][0])
     assert "\\'" in joined        # apostrophe escaped
     assert "%%" in joined          # percent escaped
@@ -289,7 +321,7 @@ def test_make_title_card_includes_fontfile_when_font_found():
     with patch("app.subprocess.run") as mock_run, \
          patch("app._find_system_font", return_value="C:/Windows/Fonts/arial.ttf"):
         mock_run.return_value = MagicMock(returncode=0)
-        make_title_card("Test", 1920, 1080, "/tmp/card.mp4")
+        make_title_card(["Test"], 1920, 1080, "/tmp/card.mp4")
     joined = " ".join(mock_run.call_args[0][0])
     assert "fontfile=" in joined
     assert "arial.ttf" in joined
@@ -301,32 +333,30 @@ def test_make_title_card_omits_fontfile_when_none_found():
     with patch("app.subprocess.run") as mock_run, \
          patch("app._find_system_font", return_value=None):
         mock_run.return_value = MagicMock(returncode=0)
-        make_title_card("Test", 1920, 1080, "/tmp/card.mp4")
+        make_title_card(["Test"], 1920, 1080, "/tmp/card.mp4")
     joined = " ".join(mock_run.call_args[0][0])
     assert "fontfile=" not in joined
 
 
 def test_make_title_card_wraps_long_title():
-    """Long title is split into multiple drawtext filters (one per line)."""
+    """Multiple lines are split into multiple drawtext filters (one per line)."""
     from app import make_title_card
-    # 640×352, fontsize=24, chars_per_line≈37 — this 55-char title must wrap
-    long_name = "New York Japanese restaurant Nobu Downtown food reviews"
     with patch("app.subprocess.run") as mock_run, \
          patch("app._find_system_font", return_value=None):
         mock_run.return_value = MagicMock(returncode=0)
-        make_title_card(long_name, 640, 352, "/tmp/card.mp4")
+        make_title_card(["New York", "Japanese restaurant", "Nobu"], 640, 352, "/tmp/card.mp4")
     cmd = mock_run.call_args[0][0]
     vf_arg = cmd[cmd.index("-vf") + 1]
-    assert vf_arg.count("drawtext=") > 1
+    assert vf_arg.count("drawtext=") == 3
 
 
 def test_make_title_card_does_not_wrap_short_title():
-    """Short titles that fit on one line use a single drawtext filter."""
+    """Single line uses a single drawtext filter."""
     from app import make_title_card
     with patch("app.subprocess.run") as mock_run, \
          patch("app._find_system_font", return_value=None):
         mock_run.return_value = MagicMock(returncode=0)
-        make_title_card("Nobu", 1920, 1080, "/tmp/card.mp4")
+        make_title_card(["Nobu"], 1920, 1080, "/tmp/card.mp4")
     cmd = mock_run.call_args[0][0]
     vf_arg = cmd[cmd.index("-vf") + 1]
     assert vf_arg.count("drawtext=") == 1
