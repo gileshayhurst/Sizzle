@@ -513,8 +513,7 @@ def create_app(testing: bool = False) -> Flask:
     def open_folder_in_explorer():
         folder = (request.get_json() or {}).get("folder", "").strip()
         if folder and Path(folder).exists():
-            import subprocess as _sp
-            _sp.Popen(['explorer', folder])
+            subprocess.Popen(['explorer', folder])
         return jsonify({"ok": True})
 
     return app
