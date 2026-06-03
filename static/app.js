@@ -9,6 +9,8 @@ const state = {
   currentJobId: null,
   resultJobId: null,
   lastPrompt: '',     // prompt used for the most recent Analyze call
+  resultSegmentStarts: [],
+  librarySegmentStarts: [],
 };
 
 // ─── DOM refs ─────────────────────────────────────────────────────────────────
@@ -650,6 +652,8 @@ function showResult(result) {
   showScreen('screen-result');
   $('topbar-controls').classList.remove('hidden');
 
+  state.resultSegmentStarts = result.segment_starts || [];
+
   const src = `/video/${state.resultJobId}`;
   $('result-source').src = src;
   $('result-video').load();
@@ -660,6 +664,32 @@ function showResult(result) {
   $('result-info').textContent =
     `${mins}:${String(secs).padStart(2,'0')} · ${result.clip_count} clips · saved to folder`;
 }
+
+// ─── Segment skip ─────────────────────────────────────────────────────────────
+function skipToSegment(video, segmentStarts, direction) {
+  const t = video.currentTime;
+  if (direction === 'next') {
+    const target = segmentStarts.find(s => s > t + 0.5);
+    if (target !== undefined) video.currentTime = target;
+  } else {
+    const targets = segmentStarts.filter(s => s < t - 0.5);
+    if (targets.length) video.currentTime = targets[targets.length - 1];
+  }
+}
+
+$('btn-prev-seg').addEventListener('click', () => {
+  skipToSegment($('result-video'), state.resultSegmentStarts, 'prev');
+});
+$('btn-next-seg').addEventListener('click', () => {
+  skipToSegment($('result-video'), state.resultSegmentStarts, 'next');
+});
+
+$('btn-lib-prev-seg').addEventListener('click', () => {
+  skipToSegment($('library-video'), state.librarySegmentStarts, 'prev');
+});
+$('btn-lib-next-seg').addEventListener('click', () => {
+  skipToSegment($('library-video'), state.librarySegmentStarts, 'next');
+});
 
 $('btn-new-reel').addEventListener('click', () => {
   $('result-video').pause();
@@ -750,6 +780,7 @@ function renderLibrary(entries) {
 }
 
 function openLibraryPlayer(entry) {
+  state.librarySegmentStarts = entry.segment_starts || [];
   $('library-source').src = `/library-video/${entry.id}`;
   $('library-video').load();
   $('library-player-meta').textContent =
