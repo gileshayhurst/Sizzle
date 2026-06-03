@@ -5,57 +5,82 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```powershell
-# Run all tests (use the venv python directly — plain pytest may not find modules)
+# Run all tests
 .\venv\Scripts\python.exe -m pytest tests/ -v
 
 # Run a single test file
-.\venv\Scripts\python.exe -m pytest tests/test_loader.py -v
+.\venv\Scripts\python.exe -m pytest tests/test_app.py -v
 
 # Run a single test
-.\venv\Scripts\python.exe -m pytest tests/test_video_editor.py::test_extract_clip_calls_correct_ffmpeg_args -v
+.\venv\Scripts\python.exe -m pytest tests/test_app.py::test_load_folder_saves_to_recent -v
 
-# Run the tool
-.\venv\Scripts\python.exe sizzle.py <videos_folder> --prompt your prompt words here
-.\venv\Scripts\python.exe sizzle.py <videos_folder> --prompt your prompt words here --output custom_name.mp4
+# Start the web app (primary interface)
+.\venv\Scripts\python.exe -c "from app import create_app; create_app().run(debug=True)"
 
-# Generate synthetic test data (creates MP4+TXT pairs in a folder)
+# Run the legacy CLI tool
+.\venv\Scripts\python.exe sizzle.py <videos_folder> --prompt words here
+.\venv\Scripts\python.exe sizzle.py <videos_folder> --prompt words here --output custom_name.mp4
+
+# Generate synthetic test data (MP4+TXT pairs, 5 business categories)
 .\venv\Scripts\python.exe create_test_data.py <output_folder>
 ```
 
 ## Environment
 
-- Requires `ANTHROPIC_API_KEY` environment variable
-- Requires `ffmpeg` installed as a system binary (`winget install ffmpeg` on Windows)
-- **Windows note:** ffmpeg is on the PowerShell PATH but NOT the bash/tool-shell PATH. Run ffmpeg-dependent commands (sizzle.py, Whisper transcription) from PowerShell, not bash.
-- Python dependencies: `pip install -r requirements.txt` (installs `anthropic`, `openai-whisper`, `pytest`)
-- A `venv` is present in the repo root — activate before running, or prefix commands with `.\venv\Scripts\python.exe`
+- `ANTHROPIC_API_KEY` — required; also auto-loaded from a `.env` file in the project root
+- `ffmpeg` — required system binary (`winget install ffmpeg` on Windows). `app.py` patches the WinGet install path into `PATH` at startup, so subprocess calls find it even if the shell PATH doesn't include it.
+- **Windows note:** ffmpeg is on the PowerShell PATH but NOT the bash/tool-shell PATH. Run ffmpeg-dependent commands from PowerShell.
+- Python deps: `pip install -r requirements.txt` (`anthropic`, `openai-whisper`, `flask`, `pytest`)
+- A `venv` is present in the repo root — prefix commands with `.\venv\Scripts\python.exe`
 
 ## Architecture
 
-Three-stage pipeline orchestrated by `sizzle.py`:
+There are two independent entry points that share the lower-level modules:
 
-**Stage 1 — Transcription** (`transcriber.py`, `loader.py`)
-`scan_videos()` finds video files (`.mp4`, `.mov`, `.avi`, `.mkv`, `.webm`) in the input folder, sorted alphabetically. Each video is transcribed with local Whisper (`base` model, `word_timestamps=True`) and saved as `{video_name}.txt` alongside the source file. On subsequent runs, existing `.txt` files are reused — transcription is skipped if the file is non-empty.
+### Web app (primary) — `app.py` + `templates/index.html` + `static/`
 
-Transcripts are emitted at **sentence level**: `_split_into_sentences()` in `transcriber.py` splits each Whisper segment on terminal punctuation and assigns each sentence the start time of its first word. This gives Claude sub-segment timestamp precision (typically ±1 second) rather than the coarser segment-level granularity. Transcript format: `[M:SS] Speaker: text`.
+Flask app factory pattern: `create_app(testing=False)` returns the Flask instance; all routes are defined inside it. The app is single-file (`app.py`) with no blueprints.
 
-**Stage 2 — Timestamp extraction** (`claude_client.py`, `timestamp_parser.py`)
-Each transcript is sent to Claude (`claude-opus-4-7`) with the user's prompt. The system prompt instructs Claude to:
-- Return the 2–4 most substantive, clearly relevant segments (not every passing mention)
-- Require the **primary subject** of each segment to match the prompt — not contextually adjacent items
-- Start each range as late as possible (at the first word directly on topic) and end it as early as possible
-- Apply sentiment filtering when the prompt requests positive/negative opinions
+**Two-stage pipeline exposed via HTTP:**
 
-Claude returns `M:SS-M:SS` ranges (comma-separated, or `none`). `parse_timestamps()` extracts these with a regex.
+1. **`POST /analyze`** — synchronous. Calls Claude (`query_claude`) on every transcript in the folder, returns per-video matched raw transcript lines as `{"highlights": {filename: [raw_line, ...]}}`. This is the only point where Claude is called.
 
-**Stage 3 — Video assembly** (`video_editor.py`)
-ffmpeg extracts each segment as a clip re-encoded to H.264/AAC (`-c:v libx264 -preset fast -c:a aac`) into a temp directory. Re-encoding is required — stream copy (`-c copy`) with output seeking produces clips that start on P/B frames, which the player cannot decode without a reference I-frame, causing a visible freeze at every transition. All clips are concatenated with the concat demuxer (`-c copy` is safe here because all clips are now properly formed with I-frame starts).
+2. **`POST /generate`** — async job. Spawns `_run_generation` in a daemon thread. Extracts clips via ffmpeg, inserts title cards, stitches with the concat demuxer. Progress polled via `GET /status/<job_id>`.
+
+**Job system:** `_new_job()` creates a UUID-keyed dict in `_jobs` with `status`, `done/total`, `log[]`, `result`, and a `threading.Event` for cancellation. `DELETE /jobs/<job_id>` sets the cancel event; the generation thread checks it between videos.
+
+**Segment logic** (`_group_lines_into_segments`): converts a set of selected raw transcript lines into `(start_sec, end_sec)` clip ranges. An unselected line between two selected lines splits them into separate segments. End time is the timestamp of the first unselected line after the segment, or `last_line.seconds + 10` if the segment runs to the end.
+
+**Title cards:** `make_title_card()` generates a black H.264/AAC card with centred text via ffmpeg `drawtext`. A video-name title card is inserted **before every source video** (including the first). A "Segment N" card is inserted between non-contiguous selected clusters within the same video.
+
+**Generated-reel filtering:** `_filter_generated_reels()` cross-references `sizzle_library.json` to exclude previously generated reels from `scan_videos()` results — prevents a generated sizzle reel saved into the source folder from being re-transcribed on the next open.
+
+**Persistence files** (project root, gitignored):
+- `sizzle_library.json` — list of generated reel entries (id, path, filename, prompt, duration, clip_count, created_at)
+- `recent_folders.json` — last 5 opened folders (path, video_count, last_opened ISO timestamp), deduped by path, most-recent-first
+
+**Frontend** (`templates/index.html`, `static/app.js`, `static/style.css`):
+- Single-page app, no framework. All state in a `state` object in `app.js`.
+- **Screens:** folder-picker → transcribing → workspace → generating → result (plus Library tab overlay)
+- **Workspace layout:** two vertical zones — `.analyze-zone` (top, fixed height, prompt input) and `.transcript-zone` (bottom, flex:1, scrollable). The outer `.workspace-layout` flex container uses `flex-direction: row` — if this is missing, the sidebar stacks on top of the main panel instead of sitting to its left.
+- **Two selection modes:** Checkbox (click individual lines; grouped by minute-bucket) and Highlight (drag-to-brush; `mousedown`+`mousemove` on document, AbortController cleans up listeners on re-render).
+- **Highlight mode scroll:** `mousemove` listener is on `document` (not the scroll container) so auto-scroll fires even when the mouse drifts outside the transcript. Auto-scroll edge check runs **before** the lineEl check — during drag the mouse is always over a line, so checking lineEl first would mean auto-scroll never fires.
+
+### CLI tool (legacy) — `sizzle.py`
+
+Orchestrates the same lower-level modules directly without Flask. Loads Whisper once, iterates videos, calls Claude, extracts clips. Still functional but not the active development target.
+
+### Shared lower-level modules
+
+- **`loader.py`** — `scan_videos()`: finds `.mp4 .mov .avi .mkv .webm` files in a folder, sorted alphabetically.
+- **`transcriber.py`** — `transcribe_video()`: runs Whisper `base` model with `word_timestamps=True`, splits segments on terminal punctuation via `_split_into_sentences()` for sub-segment timestamp precision. Output format: `[M:SS] Speaker: text`. Transcripts cached as `{video}.txt`; delete the `.txt` to force re-transcription.
+- **`claude_client.py`** — `query_claude(transcript, prompt)`: sends transcript + prompt to `claude-opus-4-7`. System prompt instructs Claude to return 2–4 `M:SS-M:SS` ranges (or `none`), starting as late and ending as early as possible.
+- **`timestamp_parser.py`** — `parse_timestamps()`: extracts `M:SS-M:SS` ranges from Claude's response with a regex.
+- **`video_editor.py`** — `extract_clip()`: re-encodes to H.264/AAC (required — stream copy produces P/B-frame starts that freeze on playback). `stitch_clips()`: concat demuxer with `-c copy` (safe because all clips are now I-frame-aligned). `get_video_dimensions()`, `parse_timestamp_to_seconds()`.
 
 ## Key Behaviours
 
-- **Output filename** defaults to `{folder_name}{source_extension}` (e.g. `NOBU.mp4`). Because clips are re-encoded to H.264/AAC, the container must support those codecs; `.mp4` and `.mkv` always work.
-- **Transcript caching:** delete `{video_name}.txt` alongside an MP4 to force re-transcription. This is needed to pick up sentence-level timestamp improvements if the file was transcribed with an older version.
-- **Prompt** uses `nargs='+'` so no quotes are needed: words after `--prompt` are joined with spaces.
-- **Whisper model** is loaded once in `sizzle.py` and passed into `transcribe_video()` to avoid reloading between videos.
-- **ffmpeg errors** in `stitch_clips()` print stderr before raising — check terminal output for the raw ffmpeg message when debugging stitch failures.
-- **Test data:** `create_test_data.py` generates synthetic MP4+TXT pairs (solid-colour videos with pre-written transcripts) across 5 business categories. Useful for prompt-engineering tests that don't require real footage.
+- **`_filter_generated_reels` is called in every code path** that calls `scan_videos` (`load_folder`, `/transcripts`, `_run_analyze`, `_run_generation`, `/generate`). If you add a new code path that scans videos, add the filter call.
+- **Tests mock `_library_add`** in generate-endpoint tests to prevent writing to the real `sizzle_library.json` on disk during pytest runs. Always add `patch("app._library_add")` when writing new tests that exercise the generate flow end-to-end.
+- **Whisper is lazy-loaded** in the web app (`_get_whisper_model()` with a double-checked lock) so the first `/load-folder` that needs transcription triggers the load. In `sizzle.py` the model is loaded once up front.
+- **ffmpeg re-encoding** in `extract_clip` uses `-c:v libx264 -preset fast -c:a aac`. Do not switch to `-c copy` for clip extraction — it produces clips that start mid-GOP, causing visible freezes at every transition.
