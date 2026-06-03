@@ -277,9 +277,10 @@ def test_title_card_inserted_between_videos(client, tmp_path):
 
         assert status == "done", f"Job ended in unexpected state: {status}"
 
-    # One video-name title card between alpha and beta
-    assert mock_card.call_count == 1
-    assert mock_card.call_args[0][0] == "beta"
+    # One video-name title card before each source video (alpha first, beta second)
+    assert mock_card.call_count == 2
+    calls = [c[0][0] for c in mock_card.call_args_list]
+    assert calls == ["alpha", "beta"]
 
 
 def test_make_title_card_includes_fontfile_when_font_found():
@@ -571,6 +572,8 @@ def test_segment_title_cards_inserted_within_video(client, tmp_path):
 
         assert status == "done", f"Job ended in unexpected state: {status}"
 
-    # One segment card between the two clusters (no cross-video card, only one video)
-    assert mock_card.call_count == 1
-    assert mock_card.call_args[0][0] == "Segment 1"
+    # Video-name card before vid.mp4, then segment card between the two clusters
+    assert mock_card.call_count == 2
+    calls = [c[0][0] for c in mock_card.call_args_list]
+    assert calls[0] == "vid"
+    assert calls[1] == "Segment 1"

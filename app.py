@@ -397,20 +397,17 @@ def _run_generation(job_id: str, folder: str, mode: str,
         clip_durations: list[float] = []
         clip_index = 0
         seg_num = 1
-        prev_vp = None
 
         for vp, segs in video_segments:
-            # Video-name title card between different source videos
-            if prev_vp is not None:
-                card_path = os.path.join(tmp_dir, f"clip_{clip_index:04d}.mp4")
-                try:
-                    width, height = get_video_dimensions(str(vp))
-                    make_title_card(vp.stem, width, height, card_path)
-                    clip_paths.append(card_path)
-                    clip_index += 1
-                except Exception as exc:
-                    _append_log(job_id, f"· Could not create title card for {vp.name}: {exc}")
-            prev_vp = vp
+            # Video-name title card before every source video (including the first)
+            card_path = os.path.join(tmp_dir, f"clip_{clip_index:04d}.mp4")
+            try:
+                width, height = get_video_dimensions(str(vp))
+                make_title_card(vp.stem, width, height, card_path)
+                clip_paths.append(card_path)
+                clip_index += 1
+            except Exception as exc:
+                _append_log(job_id, f"· Could not create title card for {vp.name}: {exc}")
 
             for seg_idx, (start_sec, end_sec) in enumerate(segs):
                 # Segment title card between non-contiguous segments in same video
