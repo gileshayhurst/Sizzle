@@ -799,11 +799,21 @@ loadRecentFolders();
 
 // ─── Folder badge dropdown ────────────────────────────────────────────────────
 let _folderDropdown = null;
+let _folderDropdownOnOutside = null;
+let _folderDropdownOnEscape = null;
 
 function _closeFolderDropdown() {
   if (_folderDropdown) {
     _folderDropdown.remove();
     _folderDropdown = null;
+  }
+  if (_folderDropdownOnOutside) {
+    document.removeEventListener('mousedown', _folderDropdownOnOutside);
+    _folderDropdownOnOutside = null;
+  }
+  if (_folderDropdownOnEscape) {
+    document.removeEventListener('keydown', _folderDropdownOnEscape);
+    _folderDropdownOnEscape = null;
   }
 }
 
@@ -852,21 +862,16 @@ $('folder-badge').addEventListener('click', async (e) => {
 
   document.body.appendChild(dropdown);
 
-  // Dismiss on outside click or Escape
-  const onOutside = (ev) => {
-    if (!dropdown.contains(ev.target)) {
-      _closeFolderDropdown();
-      document.removeEventListener('mousedown', onOutside);
-    }
+  // Dismiss on outside click or Escape — stored on module vars so _closeFolderDropdown
+  // can remove them even when closed via an internal button click.
+  _folderDropdownOnOutside = (ev) => {
+    if (!dropdown.contains(ev.target)) _closeFolderDropdown();
   };
-  const onEscape = (ev) => {
-    if (ev.key === 'Escape') {
-      _closeFolderDropdown();
-      document.removeEventListener('keydown', onEscape);
-    }
+  _folderDropdownOnEscape = (ev) => {
+    if (ev.key === 'Escape') _closeFolderDropdown();
   };
   setTimeout(() => {
-    document.addEventListener('mousedown', onOutside);
-    document.addEventListener('keydown', onEscape);
+    document.addEventListener('mousedown', _folderDropdownOnOutside);
+    document.addEventListener('keydown', _folderDropdownOnEscape);
   }, 0);
 });
