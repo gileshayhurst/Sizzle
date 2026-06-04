@@ -407,6 +407,14 @@ def test_generation_result_includes_segment_starts(client, tmp_path):
     assert "segment_starts" in result
     assert isinstance(result["segment_starts"], list)
     assert len(result["segment_starts"]) >= 1
+    # segment_starts must point to the TITLE CARD start (the transition),
+    # not to the content clip start. With a 5-second card first, the first
+    # segment_start must be 0.0 (card begins at time zero), not 5.0 (which
+    # would skip the card and land at content).
+    assert result["segment_starts"][0] == 0.0, (
+        f"segment_starts[0] should be 0.0 (title card start) "
+        f"but got {result['segment_starts'][0]} — navigation is skipping the transition"
+    )
 
 
 # ─── /library routes ──────────────────────────────────────────────────────────

@@ -330,6 +330,10 @@ def _run_generation(job_id: str, folder: str, mode: str,
                     f"from {_format_seconds(start_sec)}",
                     f"Segment {seg_num} / {total_segs}",
                 ]
+                # Record the transition card start BEFORE adding the card's duration
+                # so navigation seeks to the visible title card, not past it.
+                segment_starts.append(cumulative_time)
+
                 try:
                     make_title_card(card_lines, width, height, card_path)
                     clip_paths.append(card_path)
@@ -337,8 +341,6 @@ def _run_generation(job_id: str, folder: str, mode: str,
                     cumulative_time += TITLE_CARD_DURATION
                 except Exception as exc:
                     _append_log(job_id, f"· Could not create title card for {vp.name}: {exc}")
-
-                segment_starts.append(cumulative_time)
 
                 clip_path = os.path.join(tmp_dir, f"clip_{clip_index:04d}{vp.suffix}")
                 try:
