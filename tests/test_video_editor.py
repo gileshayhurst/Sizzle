@@ -45,8 +45,21 @@ def test_extract_clip_calls_correct_ffmpeg_args():
         "-c:v", "libx264",
         "-preset", "fast",
         "-c:a", "aac",
+        "-ar", "48000",
+        "-ac", "2",
         "clip.mp4",
     ]
+
+
+def test_extract_clip_normalises_audio_to_48k_stereo():
+    """All content clips must have identical audio parameters to title cards (48 kHz stereo)
+    so the concat demuxer sees a single consistent audio timebase and doesn't drift."""
+    with patch("video_editor.subprocess.run") as mock_run:
+        extract_clip("input.mp4", 0.0, 10.0, "clip.mp4")
+    args = mock_run.call_args[0][0]
+    joined = " ".join(args)
+    assert "-ar 48000" in joined, "extract_clip must force 48 kHz to match title cards"
+    assert "-ac 2" in joined, "extract_clip must force stereo to match title cards"
 
 
 def test_extract_clip_does_not_use_stream_copy():
@@ -99,15 +112,22 @@ def test_extract_clip_propagates_ffmpeg_error():
 
 
 def test_stitch_clips_propagates_ffmpeg_error(tmp_path):
+    """stitch_clips must raise when ffmpeg exits non-zero.
+
+    The mock must return a non-zero returncode (not raise directly) because
+    stitch_clips uses check=False and relies on result.check_returncode().
+    Raising from subprocess.run would bypass that path entirely.
+    """
     output = str(tmp_path / "out.mp4")
-    call_count = 0
 
     def mock_run(cmd, **kwargs):
-        nonlocal call_count
-        call_count += 1
-        if call_count == 1 and "-f" in cmd and "concat" in cmd:
-            raise CalledProcessError(1, "ffmpeg")
-        return MagicMock()
+        if "-f" in cmd and "concat" in cmd:
+            m = MagicMock()
+            m.returncode = 1
+            m.stderr = b"concat failed"
+            m.check_returncode.side_effect = CalledProcessError(1, "ffmpeg")
+            return m
+        return MagicMock(returncode=0)
 
     with patch("video_editor.subprocess.run", side_effect=mock_run):
         with pytest.raises(CalledProcessError):
