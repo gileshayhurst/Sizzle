@@ -1,6 +1,5 @@
 import json
 import os
-import re as _re
 import shutil
 import subprocess
 import tempfile
@@ -30,15 +29,13 @@ from flask_cors import CORS
 
 from loader import scan_videos
 from video_editor import check_ffmpeg, extract_clip, parse_timestamp_to_seconds, stitch_clips
+from shared import parse_transcript_lines as _parse_transcript_lines
 
 LIBRARY_PATH = Path(__file__).parent / "sizzle_library.json"
 
 _jobs: dict = {}
 _jobs_lock = threading.Lock()
 _library_lock = threading.Lock()
-
-_LINE_RE = _re.compile(r'^\[(\d+:\d{2})\]\s+\w+:\s*(.*)')
-
 
 # ─── Job helpers ──────────────────────────────────────────────────────────────
 
@@ -97,28 +94,6 @@ def _filter_generated_reels(video_paths: list) -> list:
         return video_paths
     return [vp for vp in video_paths if vp.resolve() not in library_paths]
 
-
-# ─── Transcript parsing (needed by _run_generation) ───────────────────────────
-
-def _parse_transcript_lines(raw_text: str) -> list:
-    lines = []
-    for raw in raw_text.splitlines():
-        raw = raw.strip()
-        if not raw:
-            continue
-        m = _LINE_RE.match(raw)
-        if not m:
-            continue
-        ts, text = m.group(1), m.group(2)
-        seconds = parse_timestamp_to_seconds(ts)
-        lines.append({
-            "raw": raw,
-            "timestamp": ts,
-            "text": text,
-            "seconds": seconds,
-            "minute_bucket": int(seconds) // 60,
-        })
-    return lines
 
 
 def _group_lines_into_segments(
@@ -193,46 +168,56 @@ def get_video_dimensions(video_path: str) -> tuple:
 def make_title_card(
     lines: list, width: int, height: int, output_path: str, duration: float = 5.0
 ) -> None:
-    """Generate a black title card with white centred text, encoded H.264/AAC."""
+    """Generate a black title card with white centred text, encoded H.264/AAC.
+
+    Uses textfile= and a relative fontfile= so the ffmpeg filter string contains
+    no Windows drive-letter colon.  This ffmpeg build (8.x on Windows) does not
+    honour single-quote quoting or \\: escaping inside filter option values, so
+    any ‘:’ in the filter string terminates the option value early.  Writing text
+    to side-car files and running ffmpeg with cwd=tmp_dir avoids the issue
+    entirely.
+    """
     fontsize = max(24, height // 15)
+    tmp_dir = Path(output_path).parent
+    prefix = Path(output_path).stem  # unique per clip, e.g. "clip_0000"
 
-    def _escape(s: str) -> str:
-        # Escape for use as an UNQUOTED drawtext text= option value.
-        # Outside single quotes, \X is a proper first-level escape:
-        # \: renders as :, \’ renders as ‘, \, renders as ,.
-        # This avoids the single-quote problem where ffmpeg versions vary
-        # in whether a bare : inside ‘...’ is treated as a separator.
-        return (
-            s.replace("\\", "\\\\")   # backslash must come first
-             .replace("'", "\\'")     # apostrophe
-             .replace(":", "\\:")     # colon  (ffmpeg option separator)
-             .replace(",", "\\,")     # comma  (ffmpeg filter separator)
-             .replace("%", "%%")      # percent (drawtext format specifier)
-        )
-
-    font = _find_system_font()
-    if font:
-        escaped_font = font.replace("\\", "/").replace(":", "\\:")
-        fontfile_arg = f"fontfile=’{escaped_font}’:"
+    # ── Font: copy into tmp_dir so we can reference it by filename only ──────
+    font_src = _find_system_font()
+    if font_src:
+        font_name = Path(font_src).name          # e.g. "arial.ttf"
+        font_dest = tmp_dir / font_name
+        if not font_dest.exists():
+            shutil.copy(font_src, font_dest)
+        fontfile_arg = f"fontfile={font_name}:"  # relative — no colon in path
     else:
         fontfile_arg = ""
 
+    # ── Text files: write each line to its own file so the filter string ─────
+    # ── contains no user content at all (avoids all escaping issues).     ─────
+    # drawtext still expands % format specifiers even from textfile, so double
+    # any literal percent signs in the text.
+    text_filenames = []
+    for i, line in enumerate(lines):
+        tf = tmp_dir / f"{prefix}_t{i}.txt"
+        tf.write_text(line.replace("%", "%%"), encoding="utf-8")
+        text_filenames.append(tf.name)  # relative filename only
+
+    # ── Build filter ──────────────────────────────────────────────────────────
     line_height = int(fontsize * 1.2)
     spacing = 8
     n = len(lines)
     total_h = n * line_height + (n - 1) * spacing
 
     filters = []
-    for i, line in enumerate(lines):
+    for i, tf_name in enumerate(text_filenames):
         if n == 1:
             y_expr = "(h-text_h)/2"
         else:
             y_off = i * (line_height + spacing)
             y_expr = f"(h-{total_h})/2+{y_off}"
-        # text= value is UNQUOTED so \: and \’ are proper escapes (render as : and ‘)
         filters.append(
-            f"drawtext={fontfile_arg}text={_escape(line)}:fontcolor=white"
-            f":fontsize={fontsize}:x=(w-text_w)/2:y={y_expr}"
+            f"drawtext={fontfile_arg}textfile={tf_name}"
+            f":fontcolor=white:fontsize={fontsize}:x=(w-text_w)/2:y={y_expr}"
         )
 
     result = subprocess.run(
@@ -244,10 +229,11 @@ def make_title_card(
             "-c:v", "libx264", "-preset", "fast",
             "-c:a", "aac",
             "-t", str(duration),
-            output_path,
+            Path(output_path).name,  # relative output too (cwd=tmp_dir)
         ],
         check=False,
         capture_output=True,
+        cwd=str(tmp_dir),  # all relative paths resolve here
     )
     if result.returncode != 0:
         print(result.stderr.decode(errors="replace"), file=__import__("sys").stderr)
