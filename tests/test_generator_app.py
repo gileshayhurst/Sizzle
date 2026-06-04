@@ -37,91 +37,108 @@ def test_format_seconds_exact_minute():
 
 # ─── make_title_card ──────────────────────────────────────────────────────────
 
-def test_make_title_card_generates_one_drawtext_per_line():
+def test_make_title_card_generates_one_drawtext_per_line(tmp_path):
     from generator_app import make_title_card
-    with patch("generator_app.subprocess.run") as mock_run:
+    out = str(tmp_path / "card.mp4")
+    with patch("generator_app.subprocess.run") as mock_run, \
+         patch("generator_app._find_system_font", return_value=None):
         mock_run.return_value = MagicMock(returncode=0)
-        make_title_card(["NOBU", "from 1:23", "Segment 2 / 5"], 1920, 1080, "/tmp/card.mp4")
+        make_title_card(["NOBU", "from 1:23", "Segment 2 / 5"], 1920, 1080, out)
     args = mock_run.call_args[0][0]
     vf_idx = args.index("-vf")
     vf_value = args[vf_idx + 1]
+    # One drawtext per line
     assert vf_value.count("drawtext=") == 3
-    assert "NOBU" in vf_value
-    # Colon is escaped as \: in the unquoted text= value — renders as : in ffmpeg
-    assert r"from 1\:23" in vf_value
-    assert "Segment 2 / 5" in vf_value
+    # Text is now in side-car files — the filter string has textfile= refs, not raw text
+    assert vf_value.count("textfile=") == 3
+    assert "NOBU" not in vf_value       # text is in file, not embedded in filter
+    assert r"from 1\:23" not in vf_value  # no escaping needed any more
+    # Side-car files written to tmp_path
+    assert (tmp_path / "card_t0.txt").read_text(encoding="utf-8") == "NOBU"
+    assert (tmp_path / "card_t1.txt").read_text(encoding="utf-8") == "from 1:23"
+    assert (tmp_path / "card_t2.txt").read_text(encoding="utf-8") == "Segment 2 / 5"
 
 
-def test_make_title_card_calls_ffmpeg_with_correct_args():
+def test_make_title_card_calls_ffmpeg_with_correct_args(tmp_path):
     from generator_app import make_title_card
-    with patch("generator_app.subprocess.run") as mock_run:
+    out = str(tmp_path / "card.mp4")
+    with patch("generator_app.subprocess.run") as mock_run, \
+         patch("generator_app._find_system_font", return_value=None):
         mock_run.return_value = MagicMock(returncode=0)
-        make_title_card(["My Video"], 1920, 1080, "/tmp/card.mp4", duration=5.0)
+        make_title_card(["My Video"], 1920, 1080, out, duration=5.0)
     mock_run.assert_called_once()
     cmd = mock_run.call_args[0][0]
     joined = " ".join(cmd)
     assert cmd[0] == "ffmpeg"
     assert "1920x1080" in joined
-    assert "My Video" in joined
-    assert "/tmp/card.mp4" in joined
     assert "5.0" in joined
+    # cwd is set to tmp_dir so ffmpeg resolves relative paths correctly
+    kwargs = mock_run.call_args[1]
+    assert "cwd" in kwargs
+    assert kwargs["cwd"] == str(tmp_path)
 
 
-def test_make_title_card_escapes_special_characters():
+def test_make_title_card_text_percent_doubled_in_file(tmp_path):
+    """drawtext still expands % format specifiers in textfile content, so % → %%."""
     from generator_app import make_title_card
-    apos = chr(0x27)
-    with patch("generator_app.subprocess.run") as mock_run:
-        mock_run.return_value = MagicMock(returncode=0)
-        make_title_card(["It" + apos + "s 50% Done: Really"], 1280, 720, "/tmp/card.mp4")
-    vf = mock_run.call_args[0][0][mock_run.call_args[0][0].index("-vf") + 1]
-    # text= is UNQUOTED, so special chars use backslash escaping:
-    # ' -> \' (renders as apostrophe without backslash in ffmpeg output)
-    assert r"\'" in vf                 # apostrophe escaped as \'
-    assert "%%" in vf                  # percent doubled for drawtext format
-    # : -> \: in unquoted context — renders as clean colon, no visible backslash
-    assert r"\:" in vf                 # colon escaped as \:
-    # Verify the full escaped text appears correctly
-    assert r"It\'s 50%% Done\: Really" in vf
-
-
-def test_make_title_card_includes_fontfile_when_font_found():
-    from generator_app import make_title_card
-    with patch("generator_app.subprocess.run") as mock_run, \
-         patch("generator_app._find_system_font", return_value="C:/Windows/Fonts/arial.ttf"):
-        mock_run.return_value = MagicMock(returncode=0)
-        make_title_card(["Test"], 1920, 1080, "/tmp/card.mp4")
-    joined = " ".join(mock_run.call_args[0][0])
-    assert "fontfile=" in joined
-    assert "arial.ttf" in joined
-
-
-def test_make_title_card_omits_fontfile_when_none_found():
-    from generator_app import make_title_card
+    out = str(tmp_path / "card.mp4")
     with patch("generator_app.subprocess.run") as mock_run, \
          patch("generator_app._find_system_font", return_value=None):
         mock_run.return_value = MagicMock(returncode=0)
-        make_title_card(["Test"], 1920, 1080, "/tmp/card.mp4")
+        make_title_card(["50% Done"], 1280, 720, out)
+    assert (tmp_path / "card_t0.txt").read_text(encoding="utf-8") == "50%% Done"
+
+
+def test_make_title_card_includes_fontfile_when_font_found(tmp_path):
+    from generator_app import make_title_card
+    out = str(tmp_path / "card.mp4")
+    fake_font = str(tmp_path / "arial.ttf")
+    # Create a dummy font file so shutil.copy succeeds
+    (tmp_path / "arial.ttf").write_bytes(b"")
+    with patch("generator_app.subprocess.run") as mock_run, \
+         patch("generator_app._find_system_font", return_value=fake_font):
+        mock_run.return_value = MagicMock(returncode=0)
+        make_title_card(["Test"], 1920, 1080, out)
+    joined = " ".join(mock_run.call_args[0][0])
+    # fontfile= must be relative (filename only, no drive-letter colon)
+    assert "fontfile=" in joined
+    assert "arial.ttf" in joined
+    assert "fontfile=arial.ttf:" in joined, (
+        "fontfile must be a plain relative filename — absolute paths with C: break "
+        "this ffmpeg build because ':' is never properly escaped in filter values"
+    )
+
+
+def test_make_title_card_omits_fontfile_when_none_found(tmp_path):
+    from generator_app import make_title_card
+    out = str(tmp_path / "card.mp4")
+    with patch("generator_app.subprocess.run") as mock_run, \
+         patch("generator_app._find_system_font", return_value=None):
+        mock_run.return_value = MagicMock(returncode=0)
+        make_title_card(["Test"], 1920, 1080, out)
     joined = " ".join(mock_run.call_args[0][0])
     assert "fontfile=" not in joined
 
 
-def test_make_title_card_wraps_long_title():
+def test_make_title_card_wraps_long_title(tmp_path):
     from generator_app import make_title_card
+    out = str(tmp_path / "card.mp4")
     with patch("generator_app.subprocess.run") as mock_run, \
          patch("generator_app._find_system_font", return_value=None):
         mock_run.return_value = MagicMock(returncode=0)
-        make_title_card(["New York", "Japanese restaurant", "Nobu"], 640, 352, "/tmp/card.mp4")
+        make_title_card(["New York", "Japanese restaurant", "Nobu"], 640, 352, out)
     cmd = mock_run.call_args[0][0]
     vf_arg = cmd[cmd.index("-vf") + 1]
     assert vf_arg.count("drawtext=") == 3
 
 
-def test_make_title_card_does_not_wrap_short_title():
+def test_make_title_card_does_not_wrap_short_title(tmp_path):
     from generator_app import make_title_card
+    out = str(tmp_path / "card.mp4")
     with patch("generator_app.subprocess.run") as mock_run, \
          patch("generator_app._find_system_font", return_value=None):
         mock_run.return_value = MagicMock(returncode=0)
-        make_title_card(["Nobu"], 1920, 1080, "/tmp/card.mp4")
+        make_title_card(["Nobu"], 1920, 1080, out)
     cmd = mock_run.call_args[0][0]
     vf_arg = cmd[cmd.index("-vf") + 1]
     assert vf_arg.count("drawtext=") == 1
@@ -440,3 +457,161 @@ def test_library_delete_removes_entry(client, tmp_path, monkeypatch):
     assert resp.get_json()["ok"] is True
     remaining = json.loads(lib_path.read_text(encoding="utf-8"))
     assert remaining == []
+
+
+# ─── Error-recovery in _run_generation ───────────────────────────────────────
+
+def test_webm_source_uses_mp4_temp_clip(client, tmp_path):
+    """extract_clip must receive a .mp4 output path even when the source is .webm.
+
+    Previously vp.suffix was used, which caused ffmpeg to fail when writing
+    H.264/AAC into a WebM container — silently dropping the clip from the reel.
+    """
+    (tmp_path / "vid.webm").touch()
+    (tmp_path / "vid.txt").write_text("[0:05] Speaker: Hello.", encoding="utf-8")
+
+    with patch("generator_app.extract_clip") as mock_extract, \
+         patch("generator_app.stitch_clips"), \
+         patch("generator_app.check_ffmpeg"), \
+         patch("generator_app.make_title_card"), \
+         patch("generator_app.get_video_dimensions", return_value=(1920, 1080)), \
+         patch("generator_app._library_add"):
+        resp = client.post("/generate", json={
+            "folder": str(tmp_path),
+            "mode": "highlight",
+            "selections": {"vid.webm": ["[0:05] Speaker: Hello."]},
+            "output_filename": "out.mp4",
+        })
+        assert resp.status_code == 200
+        job_id = resp.get_json()["job_id"]
+
+        for _ in range(25):
+            import time; time.sleep(0.1)
+            status = client.get(f"/status/{job_id}").get_json()["status"]
+            if status in ("done", "error", "cancelled"):
+                break
+
+    assert mock_extract.called, "extract_clip should have been called"
+    output_path_arg = mock_extract.call_args[0][3]   # 4th positional arg
+    assert output_path_arg.endswith(".mp4"), (
+        f"extract_clip output must be .mp4, got: {output_path_arg}"
+    )
+
+
+def test_card_failure_skips_clip_extraction_and_segment(client, tmp_path):
+    """When make_title_card fails, the segment must be skipped entirely.
+
+    Previously the code fell through to extract_clip, adding clips without
+    title cards and offsetting all subsequent segment_starts by 5 seconds.
+    """
+    (tmp_path / "vid.mp4").touch()
+    (tmp_path / "vid.txt").write_text(
+        "[0:05] Speaker: First.\n"
+        "[0:15] Speaker: Gap.\n"
+        "[0:25] Speaker: Second.",
+        encoding="utf-8",
+    )
+
+    card_call_count = [0]
+
+    def fail_first_card(*args, **kwargs):
+        card_call_count[0] += 1
+        if card_call_count[0] == 1:
+            raise RuntimeError("simulated font error")
+        # Second call succeeds (returns None implicitly)
+
+    from generator_app import _jobs
+    with patch("generator_app.make_title_card", side_effect=fail_first_card), \
+         patch("generator_app.extract_clip") as mock_extract, \
+         patch("generator_app.stitch_clips"), \
+         patch("generator_app.check_ffmpeg"), \
+         patch("generator_app.get_video_dimensions", return_value=(1920, 1080)), \
+         patch("generator_app._library_add"):
+        resp = client.post("/generate", json={
+            "folder": str(tmp_path),
+            "mode": "checkbox",
+            "selections": {
+                "vid.mp4": ["[0:05] Speaker: First.", "[0:25] Speaker: Second."]
+            },
+            "output_filename": "out.mp4",
+        })
+        job_id = resp.get_json()["job_id"]
+
+        for _ in range(25):
+            import time; time.sleep(0.1)
+            if _jobs.get(job_id, {}).get("status") in ("done", "error"):
+                break
+
+    result = _jobs[job_id]["result"]
+    assert result is not None, f"Job should complete; ended: {_jobs[job_id]}"
+
+    # extract_clip must have been called exactly once (for segment 2 only)
+    assert mock_extract.call_count == 1, (
+        f"extract_clip called {mock_extract.call_count} times; "
+        "segment 1 should have been skipped when its card failed"
+    )
+
+    # segment_starts must have exactly 1 entry at t=0 (segment 2 starts the reel)
+    assert result["segment_starts"] == [0.0], (
+        f"segment_starts={result['segment_starts']}; "
+        "failed card should not leave a stale marker"
+    )
+
+
+def test_failed_clip_rolls_back_title_card(client, tmp_path):
+    """When extract_clip fails, its preceding title card must be removed from
+    clip_paths so the reel does not contain an orphaned title card.
+
+    Previously only segment_starts.pop() ran, leaving the card in clip_paths
+    and producing a dangling title card (plays, then jumps to next segment).
+    """
+    (tmp_path / "vid.mp4").touch()
+    (tmp_path / "vid.txt").write_text(
+        "[0:05] Speaker: First.\n"
+        "[0:15] Speaker: Gap.\n"
+        "[0:25] Speaker: Second.",
+        encoding="utf-8",
+    )
+
+    extract_call_count = [0]
+
+    def fail_second_clip(video_path, start, end, out):
+        extract_call_count[0] += 1
+        if extract_call_count[0] == 2:
+            raise RuntimeError("simulated encode error")
+        # First clip succeeds
+
+    stitched_with = []
+
+    def capture_stitch(paths, out):
+        stitched_with.extend(paths)
+
+    with patch("generator_app.extract_clip", side_effect=fail_second_clip), \
+         patch("generator_app.stitch_clips", side_effect=capture_stitch), \
+         patch("generator_app.check_ffmpeg"), \
+         patch("generator_app.make_title_card"), \
+         patch("generator_app.get_video_dimensions", return_value=(1920, 1080)), \
+         patch("generator_app._library_add"):
+        resp = client.post("/generate", json={
+            "folder": str(tmp_path),
+            "mode": "checkbox",
+            "selections": {
+                "vid.mp4": ["[0:05] Speaker: First.", "[0:25] Speaker: Second."]
+            },
+            "output_filename": "out.mp4",
+        })
+        job_id = resp.get_json()["job_id"]
+
+        for _ in range(25):
+            import time; time.sleep(0.1)
+            status = client.get(f"/status/{job_id}").get_json()["status"]
+            if status in ("done", "error", "cancelled"):
+                break
+
+    # Segment 1: card + clip succeed → 2 entries in clip_paths
+    # Segment 2: card succeeds, clip fails → card must be rolled back → 0 net entries
+    # stitch_clips should have been called with exactly 2 paths (card1 + clip1)
+    assert len(stitched_with) == 2, (
+        f"stitch_clips received {len(stitched_with)} paths; "
+        "expected 2 (card1 + clip1 only — card2 should have been rolled back)"
+    )

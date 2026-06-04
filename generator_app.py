@@ -327,16 +327,27 @@ def _run_generation(job_id: str, folder: str, mode: str,
                 # Record the transition card start BEFORE adding the card's duration
                 # so navigation seeks to the visible title card, not past it.
                 segment_starts.append(cumulative_time)
+                card_added = False
 
                 try:
                     make_title_card(card_lines, width, height, card_path)
                     clip_paths.append(card_path)
                     clip_index += 1
                     cumulative_time += TITLE_CARD_DURATION
+                    card_added = True
                 except Exception as exc:
+                    # Card failed — remove the stale segment marker and skip this
+                    # segment entirely.  Do not attempt clip extraction: without a
+                    # title card the segment is incomplete, and cumulative_time was
+                    # not advanced so subsequent segment_starts would be offset.
+                    segment_starts.pop()
                     _append_log(job_id, f"· Could not create title card for {vp.name}: {exc}")
+                    continue
 
-                clip_path = os.path.join(tmp_dir, f"clip_{clip_index:04d}{vp.suffix}")
+                # Always write extracted clips to .mp4 regardless of source
+                # extension.  Non-MP4 containers (e.g. .webm) do not support the
+                # H.264/AAC encoding used here and would cause ffmpeg to error.
+                clip_path = os.path.join(tmp_dir, f"clip_{clip_index:04d}.mp4")
                 try:
                     extract_clip(str(vp), start_sec, end_sec, clip_path)
                     clip_paths.append(clip_path)
@@ -344,7 +355,12 @@ def _run_generation(job_id: str, folder: str, mode: str,
                     cumulative_time += end_sec - start_sec
                     clip_index += 1
                 except Exception as exc:
+                    # Clip extraction failed — roll back the title card that was
+                    # already appended so the reel does not contain an orphaned card.
                     segment_starts.pop()
+                    if card_added:
+                        clip_paths.pop()
+                        cumulative_time -= TITLE_CARD_DURATION
                     _append_log(
                         job_id,
                         f"✗ {vp.name} [{start_sec:.1f}-{end_sec:.1f}] — extraction failed: {exc}",
