@@ -47,7 +47,8 @@ def test_make_title_card_generates_one_drawtext_per_line():
     vf_value = args[vf_idx + 1]
     assert vf_value.count("drawtext=") == 3
     assert "NOBU" in vf_value
-    assert "from 1:23" in vf_value
+    # Colon is escaped as \: in the unquoted text= value — renders as : in ffmpeg
+    assert r"from 1\:23" in vf_value
     assert "Segment 2 / 5" in vf_value
 
 
@@ -69,16 +70,18 @@ def test_make_title_card_calls_ffmpeg_with_correct_args():
 def test_make_title_card_escapes_special_characters():
     from generator_app import make_title_card
     apos = chr(0x27)
-    curly = chr(0x2019)
     with patch("generator_app.subprocess.run") as mock_run:
         mock_run.return_value = MagicMock(returncode=0)
         make_title_card(["It" + apos + "s 50% Done: Really"], 1280, 720, "/tmp/card.mp4")
     vf = mock_run.call_args[0][0][mock_run.call_args[0][0].index("-vf") + 1]
-    text_val = vf.split("text=" + apos)[1].split(apos)[0]
-    assert apos not in text_val
-    assert curly in text_val
-    assert "%%" in text_val
-    assert "Done: Really" in text_val
+    # text= is UNQUOTED, so special chars use backslash escaping:
+    # ' -> \' (renders as apostrophe without backslash in ffmpeg output)
+    assert r"\'" in vf                 # apostrophe escaped as \'
+    assert "%%" in vf                  # percent doubled for drawtext format
+    # : -> \: in unquoted context — renders as clean colon, no visible backslash
+    assert r"\:" in vf                 # colon escaped as \:
+    # Verify the full escaped text appears correctly
+    assert r"It\'s 50%% Done\: Really" in vf
 
 
 def test_make_title_card_includes_fontfile_when_font_found():

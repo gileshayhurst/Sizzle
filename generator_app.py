@@ -197,16 +197,23 @@ def make_title_card(
     fontsize = max(24, height // 15)
 
     def _escape(s: str) -> str:
+        # Escape for use as an UNQUOTED drawtext text= option value.
+        # Outside single quotes, \X is a proper first-level escape:
+        # \: renders as :, \’ renders as ‘, \, renders as ,.
+        # This avoids the single-quote problem where ffmpeg versions vary
+        # in whether a bare : inside ‘...’ is treated as a separator.
         return (
-            s.replace("\\", "\\\\")
-             .replace("'", "’")
-             .replace("%", "%%")
+            s.replace("\\", "\\\\")   # backslash must come first
+             .replace("'", "\\'")     # apostrophe
+             .replace(":", "\\:")     # colon  (ffmpeg option separator)
+             .replace(",", "\\,")     # comma  (ffmpeg filter separator)
+             .replace("%", "%%")      # percent (drawtext format specifier)
         )
 
     font = _find_system_font()
     if font:
         escaped_font = font.replace("\\", "/").replace(":", "\\:")
-        fontfile_arg = f"fontfile='{escaped_font}':"
+        fontfile_arg = f"fontfile=’{escaped_font}’:"
     else:
         fontfile_arg = ""
 
@@ -222,8 +229,9 @@ def make_title_card(
         else:
             y_off = i * (line_height + spacing)
             y_expr = f"(h-{total_h})/2+{y_off}"
+        # text= value is UNQUOTED so \: and \’ are proper escapes (render as : and ‘)
         filters.append(
-            f"drawtext={fontfile_arg}text='{_escape(line)}':fontcolor=white"
+            f"drawtext={fontfile_arg}text={_escape(line)}:fontcolor=white"
             f":fontsize={fontsize}:x=(w-text_w)/2:y={y_expr}"
         )
 
