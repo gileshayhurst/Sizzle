@@ -363,6 +363,7 @@ def _run_generation(job_id: str, folder: str, mode: str,
                     if card_added:
                         clip_paths.pop()
                         cumulative_time -= TITLE_CARD_DURATION
+                        title_card_count -= 1
                     _append_log(
                         job_id,
                         f"✗ {vp.name} [{start_sec:.1f}-{end_sec:.1f}] — extraction failed: {exc}",

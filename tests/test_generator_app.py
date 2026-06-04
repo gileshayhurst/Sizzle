@@ -654,3 +654,56 @@ def test_duration_seconds_includes_title_card_time(client, tmp_path):
         f"duration_seconds={result['duration_seconds']}; "
         "expected 15 (10s content + 5s title card)"
     )
+
+
+def test_duration_seconds_excludes_rolled_back_title_card(client, tmp_path):
+    """When a clip extraction fails and its title card is rolled back, that card's
+    5 seconds must NOT be counted in duration_seconds."""
+    (tmp_path / "vid.mp4").touch()
+    (tmp_path / "vid.txt").write_text(
+        "[0:05] Speaker: First.\n"
+        "[0:15] Speaker: Gap.\n"
+        "[0:25] Speaker: Second.",
+        encoding="utf-8",
+    )
+
+    extract_call_count = [0]
+
+    def fail_second_clip(video_path, start, end, out):
+        extract_call_count[0] += 1
+        if extract_call_count[0] == 2:
+            raise RuntimeError("simulated encode error")
+        # First clip succeeds
+
+    from generator_app import _jobs
+    with patch("generator_app.extract_clip", side_effect=fail_second_clip), \
+         patch("generator_app.stitch_clips"), \
+         patch("generator_app.check_ffmpeg"), \
+         patch("generator_app.make_title_card"), \
+         patch("generator_app.get_video_dimensions", return_value=(1920, 1080)), \
+         patch("generator_app._library_add"):
+        resp = client.post("/generate", json={
+            "folder": str(tmp_path),
+            "mode": "checkbox",
+            "selections": {
+                "vid.mp4": ["[0:05] Speaker: First.", "[0:25] Speaker: Second."]
+            },
+            "output_filename": "out.mp4",
+        })
+        job_id = resp.get_json()["job_id"]
+
+        for _ in range(50):
+            import time; time.sleep(0.1)
+            if _jobs.get(job_id, {}).get("status") in ("done", "error"):
+                break
+
+    result = _jobs[job_id]["result"]
+    assert result is not None, f"Job should complete, got: {_jobs[job_id]}"
+
+    # Segment 1: 10s content (5→15s) + 5s title card = 15s
+    # Segment 2: card created then rolled back (clip failed) → 0s net
+    # Total expected: 15s (NOT 20s — the rolled-back card must not be counted)
+    assert result["duration_seconds"] == 15, (
+        f"duration_seconds={result['duration_seconds']}; "
+        "rolled-back title card must not add to duration"
+    )
