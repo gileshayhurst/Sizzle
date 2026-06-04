@@ -615,3 +615,42 @@ def test_failed_clip_rolls_back_title_card(client, tmp_path):
         f"stitch_clips received {len(stitched_with)} paths; "
         "expected 2 (card1 + clip1 only — card2 should have been rolled back)"
     )
+
+
+def test_duration_seconds_includes_title_card_time(client, tmp_path):
+    """duration_seconds in the job result must include title card durations.
+
+    Each segment prepends a 5-second title card.  Previously only content-clip
+    durations were summed, understating reel length by N_segments * 5 seconds.
+    """
+    (tmp_path / "vid.mp4").touch()
+    # Single selected line: seconds=5, end_sec=5+10=15, clip_duration=10s
+    (tmp_path / "vid.txt").write_text("[0:05] Speaker: Hello.", encoding="utf-8")
+
+    from generator_app import _jobs
+    with patch("generator_app.extract_clip"), \
+         patch("generator_app.stitch_clips"), \
+         patch("generator_app.check_ffmpeg"), \
+         patch("generator_app.make_title_card"), \
+         patch("generator_app.get_video_dimensions", return_value=(1920, 1080)), \
+         patch("generator_app._library_add"):
+        resp = client.post("/generate", json={
+            "folder": str(tmp_path),
+            "mode": "highlight",
+            "selections": {"vid.mp4": ["[0:05] Speaker: Hello."]},
+            "output_filename": "out.mp4",
+        })
+        job_id = resp.get_json()["job_id"]
+
+        for _ in range(50):
+            import time; time.sleep(0.1)
+            if _jobs.get(job_id, {}).get("status") in ("done", "error"):
+                break
+
+    result = _jobs[job_id]["result"]
+    assert result is not None
+    # 1 segment: 10 s content + 5 s title card = 15 s total
+    assert result["duration_seconds"] == 15, (
+        f"duration_seconds={result['duration_seconds']}; "
+        "expected 15 (10s content + 5s title card)"
+    )

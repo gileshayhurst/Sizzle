@@ -303,6 +303,7 @@ def _run_generation(job_id: str, folder: str, mode: str,
         cumulative_time = 0.0
         clip_index = 0
         seg_num = 0
+        title_card_count = 0
 
         for vp, segs in video_segments:
             if job["cancel"].is_set():
@@ -335,6 +336,7 @@ def _run_generation(job_id: str, folder: str, mode: str,
                     clip_index += 1
                     cumulative_time += TITLE_CARD_DURATION
                     card_added = True
+                    title_card_count += 1
                 except Exception as exc:
                     # Card failed — remove the stale segment marker and skip this
                     # segment entirely.  Do not attempt clip extraction: without a
@@ -381,7 +383,7 @@ def _run_generation(job_id: str, folder: str, mode: str,
                 job["error"] = f"Stitch failed: {exc}"
             return
 
-    duration = int(sum(clip_durations))
+    duration = int(sum(clip_durations) + title_card_count * TITLE_CARD_DURATION)
     result = {
         "path": output_path,
         "filename": output_filename,
