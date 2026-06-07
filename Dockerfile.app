@@ -1,0 +1,17 @@
+FROM python:3.11-slim
+
+# ffmpeg for Whisper audio extraction; fonts for title card generation fallback
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg fonts-dejavu-core \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY . .
+
+EXPOSE 5000
+
+CMD ["python", "-c", "from app import create_app; create_app().run(host='0.0.0.0', port=5000)"]

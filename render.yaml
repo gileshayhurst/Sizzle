@@ -1,0 +1,39 @@
+services:
+  - type: web
+    name: sizzle-app
+    runtime: docker
+    dockerfilePath: ./Dockerfile.app
+    envVars:
+      - key: APP_MODE
+        value: cloud
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: GENERATOR_URL
+        fromService:
+          name: sizzle-generator
+          type: web
+          property: hostport
+      - key: S3_BUCKET
+        sync: false
+      - key: S3_ACCESS_KEY
+        sync: false
+      - key: S3_SECRET_KEY
+        sync: false
+      - key: S3_ENDPOINT_URL
+        sync: false
+
+  - type: web
+    name: sizzle-generator
+    runtime: docker
+    dockerfilePath: ./Dockerfile.generator
+    envVars:
+      - key: APP_MODE
+        value: cloud
+      - key: S3_BUCKET
+        sync: false
+      - key: S3_ACCESS_KEY
+        sync: false
+      - key: S3_SECRET_KEY
+        sync: false
+      - key: S3_ENDPOINT_URL
+        sync: false

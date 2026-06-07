@@ -1,0 +1,30 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile.app
+    ports:
+      - "5000:5000"
+    environment:
+      - APP_MODE=cloud
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - GENERATOR_URL=http://generator:5001
+      - S3_BUCKET=${S3_BUCKET}
+      - S3_ACCESS_KEY=${S3_ACCESS_KEY}
+      - S3_SECRET_KEY=${S3_SECRET_KEY}
+      - S3_ENDPOINT_URL=${S3_ENDPOINT_URL}
+    depends_on:
+      - generator
+
+  generator:
+    build:
+      context: .
+      dockerfile: Dockerfile.generator
+    ports:
+      - "5001:5001"
+    environment:
+      - APP_MODE=cloud
+      - S3_BUCKET=${S3_BUCKET}
+      - S3_ACCESS_KEY=${S3_ACCESS_KEY}
+      - S3_SECRET_KEY=${S3_SECRET_KEY}
+      - S3_ENDPOINT_URL=${S3_ENDPOINT_URL}
