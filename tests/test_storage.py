@@ -115,3 +115,21 @@ def test_list_keys_returns_files_in_prefix(monkeypatch, tmp_path):
 def test_list_keys_empty_prefix_returns_empty(monkeypatch, tmp_path):
     s = reload_storage(monkeypatch, tmp_path)
     assert s.list_keys("sessions/nonexistent") == []
+
+
+def test_list_keys_finds_nested_files(monkeypatch, tmp_path):
+    s = reload_storage(monkeypatch, tmp_path)
+    nested = tmp_path / "sessions" / "abc" / "clips"
+    nested.mkdir(parents=True)
+    (nested / "clip_0001.mp4").write_bytes(b"clip")
+
+    keys = s.list_keys("sessions/abc")
+    assert "sessions/abc/clips/clip_0001.mp4" in keys
+
+
+# ── presigned_url (local backend) ──────────────────────────────────────────────
+
+def test_presigned_url_raises_in_local_mode(monkeypatch, tmp_path):
+    s = reload_storage(monkeypatch, tmp_path)
+    with pytest.raises(RuntimeError, match="cloud mode"):
+        s.presigned_url("sessions/abc/video.mp4")

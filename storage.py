@@ -117,7 +117,11 @@ def write_json(key: str, data: list | dict) -> None:
 
 
 def list_keys(prefix: str) -> list[str]:
-    """Return all storage keys whose path starts with prefix."""
+    """Return all storage keys whose path starts with prefix.
+
+    Both backends return all descendant keys, not just immediate children,
+    mirroring S3 list_objects_v2 behaviour.
+    """
     if is_cloud():
         resp = _s3().list_objects_v2(Bucket=_bucket(), Prefix=prefix)
         return [obj["Key"] for obj in resp.get("Contents", [])]
@@ -125,15 +129,21 @@ def list_keys(prefix: str) -> list[str]:
         root = _data_root() / prefix
         if not root.exists():
             return []
+        data_root = _data_root()
         return [
-            str(Path(prefix) / p.name).replace("\\", "/")
-            for p in root.iterdir()
+            str(p.relative_to(data_root)).replace("\\", "/")
+            for p in root.rglob("*")
             if p.is_file()
         ]
 
 
 def presigned_url(key: str, expires: int = 3600) -> str:
-    """Generate a presigned download URL for a cloud-stored file (cloud mode only)."""
+    """Generate a presigned download URL for a cloud-stored file.
+
+    Raises RuntimeError when called in local mode — presigned URLs require S3.
+    """
+    if not is_cloud():
+        raise RuntimeError("presigned_url is only available in cloud mode (APP_MODE=cloud)")
     return _s3().generate_presigned_url(
         "get_object",
         Params={"Bucket": _bucket(), "Key": key},
