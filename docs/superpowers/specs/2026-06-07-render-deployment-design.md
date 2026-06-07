@@ -36,30 +36,58 @@ def is_cloud() -> bool:
 ### Local mode
 No change. Files live wherever they do today — wherever the user's OS puts the project folder and wherever videos are stored.
 
-### Cloud mode
-A `DATA_ROOT` environment variable points to the persistent storage mount. On Render this will be `/data` (a Render Persistent Disk). On a developer's machine it defaults to the project root.
+### Cloud mode — Why S3, not Render Persistent Disk
+Render Persistent Disk can only be attached to **one** service. Since the app service (port 5000) and generator service (port 5001) are separate Render deployments, they cannot share a disk. S3-compatible object storage (AWS S3, Cloudflare R2, MinIO) is the correct solution: both services read and write to the same bucket independently, with no shared filesystem required.
 
+Cloudflare R2 is recommended — it is S3-compatible and free up to 10 GB/month with no egress fees.
+
+### S3 Storage layout (cloud mode)
 ```
-DATA_ROOT/
+bucket/
   sessions/
-    {session_id}/       ← one dir per upload batch
-      video1.mp4
-      video1.txt        ← transcript cache (same as local)
+    {session_id}/
+      video1.mp4          ← uploaded by app service
+      video1.txt          ← transcript (written by app, read by generator)
       video2.mp4
       video2.txt
-      sizzle_reel.mp4   ← generated output saved here
-  sizzle_library.json   ← shared across all sessions
+  library/
+    sizzle_library.json   ← shared library, written by generator
 ```
 
-The session directory is passed through the existing pipeline as the `folder` parameter. **`scan_videos()`, `transcribe_video()`, `extract_clip()`, and the library code all work against it unchanged** — they already operate on any folder path.
+### How the generator uses S3
+The generator service cannot run ffmpeg directly on S3 objects. When a generation job starts, it:
+1. Downloads each source video from S3 into a `tempfile.TemporaryDirectory` (same temp dir already used for clips)
+2. Runs ffmpeg extraction and stitching against the local temp paths (unchanged)
+3. Uploads the finished reel back to S3 under `sessions/{session_id}/`
+4. Returns a presigned download URL to the frontend
 
-A new `storage.py` module exposes:
-- `data_root() -> Path` — resolves `DATA_ROOT` env var, defaults to project root
-- `new_session() -> tuple[str, Path]` — creates `sessions/{uuid}/` under data root, returns `(session_id, path)`
-- `session_path(session_id) -> Path` — returns the session dir path
-- `library_path() -> Path` — returns `{DATA_ROOT}/sizzle_library.json`
+The transcript `.txt` files are already downloaded with the videos in step 1 (they live in the same S3 prefix). The existing `_parse_transcript_lines` logic is unchanged.
 
-Both `app.py` and `generator_app.py` import `library_path()` from `storage.py` and use it instead of the hardcoded `LIBRARY_PATH`.
+### `storage.py` module
+Exposes a unified interface that both services import:
+
+```python
+# Local backend uses pathlib; cloud backend uses boto3
+def is_cloud() -> bool: ...
+def upload_file(local_path: str, key: str) -> None: ...
+def download_file(key: str, local_path: str) -> None: ...
+def read_json(key: str) -> list | dict: ...
+def write_json(key: str, data: list | dict) -> None: ...
+def list_keys(prefix: str) -> list[str]: ...
+def presigned_url(key: str, expires: int = 3600) -> str: ...
+def new_session_key() -> str: ...          # returns "sessions/{uuid}"
+def library_key() -> str: ...              # returns "library/sizzle_library.json"
+```
+
+Local backend: `upload_file` / `download_file` / `list_keys` operate on the local filesystem under `DATA_ROOT` (env var, defaults to project root). This allows local testing of cloud code paths without S3.
+
+Cloud backend: All operations go through `boto3.client("s3")` configured via:
+- `S3_BUCKET` — bucket name
+- `S3_ACCESS_KEY` / `S3_SECRET_KEY` — credentials
+- `S3_ENDPOINT_URL` — optional (set to R2 endpoint for Cloudflare R2)
+
+### Library path
+Both `app.py` and `generator_app.py` currently hardcode `sizzle_library.json` relative to `__file__`. Replace with `storage.read_json(storage.library_key())` / `storage.write_json(storage.library_key(), data)` in cloud mode, or the existing file path in local mode.
 
 ---
 
@@ -95,9 +123,12 @@ In cloud mode the folder-picker screen is replaced by a drag-and-drop file uploa
 
 ### New endpoint: `POST /upload`
 - Accepts `multipart/form-data` with one or more video files
-- Creates a new session directory via `storage.new_session()`
-- Writes uploaded files to disk
-- Returns `{"session_id": "…", "folder": "/data/sessions/…"}`
+- Generates a session key via `storage.new_session_key()` (e.g. `"sessions/abc123"`)
+- Writes each file to a local temp directory, then uploads to S3 (cloud) or keeps in local `DATA_ROOT/sessions/{id}/` (local)
+- Returns `{"session_id": "…", "session_key": "sessions/abc123"}`
+
+### How the session_key flows through the pipeline
+In cloud mode, `session_key` replaces the `folder` path throughout. The app service downloads transcript files from S3 as needed (lazy, cached in a per-request temp dir). The generator service receives the `session_key` in the `/generate` POST body and downloads all required videos from S3 into its own temp dir before extraction.
 
 ### Frontend change
 On startup, the frontend reads `APP_MODE` from `window.__CONFIG__`. When `APP_MODE === 'cloud'`:
@@ -223,15 +254,9 @@ services:
     name: sizzle-app
     runtime: docker
     dockerfilePath: ./Dockerfile.app
-    disk:
-      name: sizzle-data
-      mountPath: /data
-      sizeGB: 10
     envVars:
       - key: APP_MODE
         value: cloud
-      - key: DATA_ROOT
-        value: /data
       - key: ANTHROPIC_API_KEY
         sync: false
       - key: GENERATOR_URL
@@ -239,21 +264,29 @@ services:
           name: sizzle-generator
           type: web
           property: hostport
+      - key: S3_BUCKET
+        sync: false
+      - key: S3_ACCESS_KEY
+        sync: false
+      - key: S3_SECRET_KEY
+        sync: false
+      - key: S3_ENDPOINT_URL
+        sync: false          # set to R2 endpoint for Cloudflare R2
 
   - type: web
     name: sizzle-generator
     runtime: docker
     dockerfilePath: ./Dockerfile.generator
-    disk:
-      name: sizzle-data
-      mountPath: /data
-      sizeGB: 10
     envVars:
       - key: APP_MODE
         value: cloud
-      - key: DATA_ROOT
-        value: /data
-      - key: ANTHROPIC_API_KEY
+      - key: S3_BUCKET
+        sync: false
+      - key: S3_ACCESS_KEY
+        sync: false
+      - key: S3_SECRET_KEY
+        sync: false
+      - key: S3_ENDPOINT_URL
         sync: false
 ```
 
@@ -264,8 +297,14 @@ ANTHROPIC_API_KEY=your_key_here
 
 # Cloud mode only
 APP_MODE=cloud
-DATA_ROOT=/data
 GENERATOR_URL=https://sizzle-generator.onrender.com
+
+# S3-compatible storage (cloud mode)
+# Use Cloudflare R2 endpoint for R2, omit for AWS S3
+S3_BUCKET=your-bucket-name
+S3_ACCESS_KEY=your-access-key
+S3_SECRET_KEY=your-secret-key
+S3_ENDPOINT_URL=https://<account_id>.r2.cloudflarestorage.com
 ```
 
 ---
@@ -274,10 +313,9 @@ GENERATOR_URL=https://sizzle-generator.onrender.com
 
 | File | Change |
 |------|--------|
-| `config.py` | **New** — `APP_MODE`, `is_cloud()` |
-| `storage.py` | **New** — `data_root()`, `new_session()`, `session_path()`, `library_path()` |
-| `app.py` | Platform fix, import `library_path`, inject `window.__CONFIG__`, add `POST /upload` |
-| `generator_app.py` | Platform fix, Linux fonts, import `library_path` |
+| `storage.py` | **New** — `is_cloud()`, `upload_file()`, `download_file()`, `read_json()`, `write_json()`, `list_keys()`, `presigned_url()`, `new_session_key()`, `library_key()` |
+| `app.py` | Platform fix, inject `window.__CONFIG__`, add `POST /upload`, cloud library read/write |
+| `generator_app.py` | Platform fix, Linux fonts, cloud library read/write, S3 video download before extraction, S3 reel upload after stitching |
 | `templates/index.html` | Inject `window.__CONFIG__` block |
 | `static/app.js` | Read `GENERATOR_URL`/`APP_MODE` from `window.__CONFIG__`; upload zone for cloud mode |
 | `Dockerfile.app` | **New** |
