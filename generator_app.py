@@ -438,8 +438,8 @@ def _run_generation(job_id: str, folder: str, mode: str,
         "segment_starts": segment_starts,
         "created_at": datetime.now().isoformat(timespec="seconds"),
     }
-    if reel_download_url:
-        library_entry["download_url"] = reel_download_url
+    if storage.is_cloud() and session_key:
+        library_entry["reel_s3_key"] = f"{session_key}/{output_filename}"
     _library_add(library_entry)
 
     with _jobs_lock:
@@ -562,8 +562,9 @@ def create_app(testing: bool = False) -> Flask:
         entry = next((e for e in entries if e["id"] == entry_id), None)
         if not entry:
             return jsonify({"error": "not found"}), 404
-        if storage.is_cloud() and entry.get("download_url"):
-            return redirect(entry["download_url"])
+        if storage.is_cloud() and entry.get("reel_s3_key"):
+            # Re-sign on demand so the URL never expires
+            return redirect(storage.presigned_url(entry["reel_s3_key"]))
         path = Path(entry["path"])
         if not path.is_file():
             return jsonify({"error": "file not found on disk"}), 404

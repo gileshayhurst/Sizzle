@@ -37,6 +37,10 @@ import storage
 
 RECENT_FOLDERS_PATH = Path(__file__).parent / "recent_folders.json"
 
+# Maps session_key → local temp dir for the duration of the process
+_cloud_session_dirs: dict[str, str] = {}
+_cloud_session_lock = threading.Lock()
+
 _jobs: dict = {}
 _jobs_lock = threading.Lock()
 _recent_folders_lock = threading.Lock()
@@ -213,6 +217,25 @@ def _run_analyze(folder: str, prompt: str) -> dict:
     return {"highlights": highlights}
 
 
+def _ensure_cloud_session(session_key: str) -> str:
+    """Download session files from S3 into a local temp dir if not already cached.
+
+    Returns the local temp dir path. Thread-safe.
+    """
+    with _cloud_session_lock:
+        if session_key in _cloud_session_dirs:
+            return _cloud_session_dirs[session_key]
+        tmp = tempfile.mkdtemp(prefix="sizzle_session_")
+        _cloud_session_dirs[session_key] = tmp
+
+    # Download outside the lock — this can take time
+    for key in storage.list_keys(session_key + "/"):
+        filename = Path(key).name
+        storage.download_file(key, os.path.join(tmp, filename))
+
+    return tmp
+
+
 def create_app(testing: bool = False) -> Flask:
     app = Flask(__name__)
     app.config["TESTING"] = testing
@@ -285,6 +308,8 @@ def create_app(testing: bool = False) -> Flask:
     @app.post("/load-folder")
     def load_folder():
         folder = (request.get_json() or {}).get("folder", "").strip()
+        if storage.is_cloud() and folder and not Path(folder).exists():
+            folder = _ensure_cloud_session(folder)
         if not folder or not Path(folder).exists():
             return jsonify({"error": "Folder not found"}), 404
         try:
@@ -320,6 +345,15 @@ def create_app(testing: bool = False) -> Flask:
                 try:
                     transcript = transcribe_video(str(vp), model=model)
                     vp.with_suffix(".txt").write_text(transcript, encoding="utf-8")
+                    if storage.is_cloud():
+                        # Upload transcript to S3 so the generator service can access it
+                        for sk, td in _cloud_session_dirs.items():
+                            if td == str(vp.parent):
+                                storage.upload_file(
+                                    str(vp.with_suffix(".txt")),
+                                    f"{sk}/{vp.stem}.txt"
+                                )
+                                break
                     _append_log(job_id, f"✓ {vp.name} — done")
                 except Exception as exc:
                     _append_log(job_id, f"✗ {vp.name} — failed: {exc}")
@@ -362,6 +396,8 @@ def create_app(testing: bool = False) -> Flask:
     @app.get("/transcripts")
     def get_transcripts():
         folder = request.args.get("folder", "").strip()
+        if storage.is_cloud() and folder and not Path(folder).exists():
+            folder = _ensure_cloud_session(folder)
         if not folder or not Path(folder).exists():
             return jsonify({"error": "Folder not found"}), 404
         try:
@@ -386,6 +422,8 @@ def create_app(testing: bool = False) -> Flask:
         prompt = body.get("prompt", "").strip()
         if not prompt:
             return jsonify({"error": "prompt is required"}), 400
+        if storage.is_cloud() and folder and not Path(folder).exists():
+            folder = _ensure_cloud_session(folder)
         if not folder or not Path(folder).exists():
             return jsonify({"error": "Folder not found"}), 404
         result = _run_analyze(folder, prompt)
