@@ -249,18 +249,31 @@ def create_app(testing: bool = False) -> Flask:
         )
 
     _VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
+    _ALLOWED_UPLOAD_EXTENSIONS = _VIDEO_EXTENSIONS | {".txt"}
 
     @app.post("/upload")
     def upload():
-        """Cloud-mode endpoint: receive uploaded video files and store as a session."""
+        """Cloud-mode endpoint: receive uploaded video and transcript files as a session.
+
+        Accepts video files (.mp4, .mov, .avi, .mkv, .webm) and pre-made transcript
+        files (.txt). When a .txt file is uploaded alongside a video, transcription is
+        skipped for that video — the app uses the supplied transcript directly.
+        At least one video file must be included.
+        """
         files = request.files.getlist("files")
         if not files or all(f.filename == "" for f in files):
             return jsonify({"error": "No files provided"}), 400
 
-        # Validate all files are videos before writing any
+        # Validate all files before writing any
+        has_video = False
         for f in files:
-            if Path(f.filename).suffix.lower() not in _VIDEO_EXTENSIONS:
-                return jsonify({"error": f"Not a video file: {f.filename}"}), 400
+            ext = Path(f.filename).suffix.lower()
+            if ext not in _ALLOWED_UPLOAD_EXTENSIONS:
+                return jsonify({"error": f"Unsupported file type: {f.filename}. Upload videos (.mp4 .mov .avi .mkv .webm) and/or transcripts (.txt)."}), 400
+            if ext in _VIDEO_EXTENSIONS:
+                has_video = True
+        if not has_video:
+            return jsonify({"error": "At least one video file is required."}), 400
 
         session_key = storage.new_session_key()
 
