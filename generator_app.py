@@ -25,7 +25,7 @@ if not shutil.which("ffmpeg") and _sys.platform == "win32":
         os.environ["PATH"] = str(_bin) + os.pathsep + os.environ.get("PATH", "")
         break
 
-from flask import Flask, jsonify, request, send_file
+from flask import Flask, jsonify, redirect, request, send_file
 from flask_cors import CORS
 
 from loader import scan_videos
@@ -455,7 +455,6 @@ def create_app(testing: bool = False) -> Flask:
 
     @app.post("/generate")
     def generate():
-        import tempfile as _tmpfile
         body = request.get_json() or {}
         prompt = body.get("prompt", "").strip()
         mode = body.get("mode", "highlight")
@@ -468,7 +467,8 @@ def create_app(testing: bool = False) -> Flask:
             if not session_key:
                 return jsonify({"error": "session_key required in cloud mode"}), 400
             # Download all session files from S3 into a local temp dir for ffmpeg
-            tmp_session_dir = _tmpfile.mkdtemp(prefix="sizzle_gen_")
+            tmp_session_dir = tempfile.mkdtemp(prefix="sizzle_gen_")
+            _tmp_dir_to_cleanup = tmp_session_dir
             for key in storage.list_keys(session_key + "/"):
                 filename = Path(key).name
                 storage.download_file(key, os.path.join(tmp_session_dir, filename))
@@ -477,6 +477,7 @@ def create_app(testing: bool = False) -> Flask:
             folder = body.get("folder", "").strip()
             if not folder or not Path(folder).exists():
                 return jsonify({"error": "Folder not found"}), 404
+            _tmp_dir_to_cleanup = None
 
         try:
             check_ffmpeg()
@@ -496,13 +497,20 @@ def create_app(testing: bool = False) -> Flask:
             # mock interactions complete) before the POST response is returned.
             # This prevents a live daemon thread from calling patched symbols
             # during a subsequent test's patch window.
-            _run_generation(job_id, folder, mode, selections, prompt, output_filename, session_key=session_key)
+            try:
+                _run_generation(job_id, folder, mode, selections, prompt, output_filename, session_key=session_key)
+            finally:
+                if _tmp_dir_to_cleanup:
+                    shutil.rmtree(_tmp_dir_to_cleanup, ignore_errors=True)
         else:
-            t = threading.Thread(
-                target=_run_generation,
-                args=(job_id, folder, mode, selections, prompt, output_filename, session_key),
-                daemon=True,
-            )
+            def _run_with_cleanup():
+                try:
+                    _run_generation(job_id, folder, mode, selections, prompt, output_filename, session_key)
+                finally:
+                    if _tmp_dir_to_cleanup:
+                        shutil.rmtree(_tmp_dir_to_cleanup, ignore_errors=True)
+
+            t = threading.Thread(target=_run_with_cleanup, daemon=True)
             with _jobs_lock:
                 _jobs[job_id]["_thread"] = t
             t.start()
@@ -536,14 +544,13 @@ def create_app(testing: bool = False) -> Flask:
 
     @app.get("/video/<job_id>")
     def serve_video(job_id):
-        from flask import redirect as _redirect
         with _jobs_lock:
             job = _jobs.get(job_id)
         if not job or not job.get("result"):
             return jsonify({"error": "not found"}), 404
         result = job["result"]
         if storage.is_cloud() and result.get("download_url"):
-            return _redirect(result["download_url"])
+            return redirect(result["download_url"])
         path = Path(result["path"])
         if not path.is_file():
             return jsonify({"error": "file not found on disk"}), 404
@@ -551,13 +558,12 @@ def create_app(testing: bool = False) -> Flask:
 
     @app.get("/library-video/<entry_id>")
     def serve_library_video(entry_id):
-        from flask import redirect as _redirect
         entries = _load_library()
         entry = next((e for e in entries if e["id"] == entry_id), None)
         if not entry:
             return jsonify({"error": "not found"}), 404
         if storage.is_cloud() and entry.get("download_url"):
-            return _redirect(entry["download_url"])
+            return redirect(entry["download_url"])
         path = Path(entry["path"])
         if not path.is_file():
             return jsonify({"error": "file not found on disk"}), 404
