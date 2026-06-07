@@ -1,6 +1,7 @@
 import json
 import os
 import shutil
+import tempfile
 import threading
 import uuid
 from datetime import datetime
@@ -32,6 +33,7 @@ from timestamp_parser import parse_timestamps
 from transcriber import transcribe_video
 from video_editor import parse_timestamp_to_seconds
 from shared import parse_transcript_lines as _parse_transcript_lines
+import storage
 
 RECENT_FOLDERS_PATH = Path(__file__).parent / "recent_folders.json"
 
@@ -125,9 +127,8 @@ def _filter_generated_reels(video_paths: list[Path]) -> list[Path]:
 
 
 def _load_library() -> list:
-    from storage import is_cloud, read_json, library_key
-    if is_cloud():
-        return read_json(library_key())
+    if storage.is_cloud():
+        return storage.read_json(storage.library_key())
     library_path = Path(__file__).parent / "sizzle_library.json"
     if not library_path.exists():
         return []
@@ -229,8 +230,6 @@ def create_app(testing: bool = False) -> Flask:
     @app.post("/upload")
     def upload():
         """Cloud-mode endpoint: receive uploaded video files and store as a session."""
-        from storage import new_session_key, upload_file, is_cloud
-
         files = request.files.getlist("files")
         if not files or all(f.filename == "" for f in files):
             return jsonify({"error": "No files provided"}), 400
@@ -240,15 +239,13 @@ def create_app(testing: bool = False) -> Flask:
             if Path(f.filename).suffix.lower() not in _VIDEO_EXTENSIONS:
                 return jsonify({"error": f"Not a video file: {f.filename}"}), 400
 
-        session_key = new_session_key()
+        session_key = storage.new_session_key()
 
         # Determine local session directory
-        if is_cloud():
-            import tempfile as _tf
-            session_dir = Path(_tf.mkdtemp(prefix="sizzle_"))
+        if storage.is_cloud():
+            session_dir = Path(tempfile.mkdtemp(prefix="sizzle_"))
         else:
-            from storage import _data_root
-            session_dir = _data_root() / session_key
+            session_dir = storage._data_root() / session_key
             session_dir.mkdir(parents=True, exist_ok=True)
 
         saved_names = []
@@ -256,13 +253,21 @@ def create_app(testing: bool = False) -> Flask:
             filename = Path(f.filename).name  # strip any path components
             dest = session_dir / filename
             f.save(str(dest))
-            if is_cloud():
-                upload_file(str(dest), f"{session_key}/{filename}")
+            if storage.is_cloud():
+                storage.upload_file(str(dest), f"{session_key}/{filename}")
             saved_names.append(filename)
+
+        # In cloud mode, files are now in S3; clean up the local temp dir
+        if storage.is_cloud():
+            shutil.rmtree(str(session_dir), ignore_errors=True)
+            # session_dir is gone; return S3 key as folder indicator
+            folder_indicator = session_key
+        else:
+            folder_indicator = str(session_dir)
 
         return jsonify({
             "session_key": session_key,
-            "folder": str(session_dir),
+            "folder": folder_indicator,
             "files": saved_names,
         })
 

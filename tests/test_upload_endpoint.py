@@ -98,3 +98,31 @@ def test_upload_requires_at_least_one_file(tmp_path, monkeypatch):
         resp = c.post("/upload", data={}, content_type="multipart/form-data")
 
     assert resp.status_code == 400
+
+
+def test_upload_cloud_mode_calls_storage_upload(tmp_path, monkeypatch):
+    """In cloud mode, POST /upload saves to S3 via storage.upload_file."""
+    monkeypatch.setenv("APP_MODE", "cloud")
+    monkeypatch.setenv("S3_BUCKET", "test-bucket")
+    monkeypatch.setenv("S3_ACCESS_KEY", "key")
+    monkeypatch.setenv("S3_SECRET_KEY", "secret")
+    import importlib, storage, app as app_mod
+    importlib.reload(storage)
+    importlib.reload(app_mod)
+
+    flask_app = app_mod.create_app(testing=True)
+    uploaded_keys = []
+
+    def fake_upload(local_path, key):
+        uploaded_keys.append(key)
+
+    with flask_app.test_client() as c, \
+         patch("app.storage.upload_file", side_effect=fake_upload):
+        data = {"files": (io.BytesIO(b"fake mp4"), "video1.mp4")}
+        resp = c.post("/upload", data=data, content_type="multipart/form-data")
+
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["session_key"].startswith("sessions/")
+    # upload_file must have been called with the correct S3 key
+    assert any("video1.mp4" in k for k in uploaded_keys)
