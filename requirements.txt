@@ -3,3 +3,4 @@ openai-whisper
 pytest
 flask>=2.0
 flask-cors
+boto3
