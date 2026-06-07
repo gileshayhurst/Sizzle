@@ -17,8 +17,9 @@ if not os.environ.get("ANTHROPIC_API_KEY") and _env_file.exists():
             os.environ["ANTHROPIC_API_KEY"] = _line.split("=", 1)[1].strip().strip('"').strip("'")
             break
 
-# WinGet ffmpeg PATH patch.
-if not shutil.which("ffmpeg"):
+# WinGet ffmpeg PATH patch — Windows only.
+import sys as _sys
+if not shutil.which("ffmpeg") and _sys.platform == "win32":
     _winget_base = Path.home() / "AppData/Local/Microsoft/WinGet/Packages"
     for _bin in sorted(_winget_base.glob("Gyan.FFmpeg*/*/bin")):
         os.environ["PATH"] = str(_bin) + os.pathsep + os.environ.get("PATH", "")
@@ -120,12 +121,21 @@ def _group_lines_into_segments(
 # ─── ffmpeg helpers ───────────────────────────────────────────────────────────
 
 def _find_system_font() -> str | None:
-    """Return a path to a TTF font on this system, or None."""
+    """Return a path to a TTF font on this system, or None.
+
+    Checks Windows font directories first, then Linux paths installed via
+    apt fonts-dejavu-core (present in the project's Dockerfiles).
+    """
     candidates = [
+        # Windows
         Path("C:/Windows/Fonts/arial.ttf"),
         Path("C:/Windows/Fonts/calibri.ttf"),
         Path("C:/Windows/Fonts/verdana.ttf"),
         Path("C:/Windows/Fonts/times.ttf"),
+        # Linux — Debian/Ubuntu (fonts-dejavu-core apt package)
+        Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
+        Path("/usr/share/fonts/dejavu/DejaVuSans.ttf"),
+        Path("/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"),
     ]
     for p in candidates:
         if p.exists():

@@ -16,8 +16,9 @@ if not os.environ.get("ANTHROPIC_API_KEY") and _env_file.exists():
             break
 
 # WinGet installs ffmpeg to a user-local path that isn't on the subprocess PATH.
-# Patch it in at startup so all child processes (ffmpeg, whisper) can find it.
-if not shutil.which("ffmpeg"):
+# Guard to Windows only — Linux containers find ffmpeg via the system PATH (apt install).
+import sys as _sys
+if not shutil.which("ffmpeg") and _sys.platform == "win32":
     _winget_base = Path.home() / "AppData/Local/Microsoft/WinGet/Packages"
     for _bin in sorted(_winget_base.glob("Gyan.FFmpeg*/*/bin")):
         os.environ["PATH"] = str(_bin) + os.pathsep + os.environ.get("PATH", "")
