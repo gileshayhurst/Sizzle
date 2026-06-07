@@ -9,10 +9,7 @@ services:
       - key: ANTHROPIC_API_KEY
         sync: false
       - key: GENERATOR_URL
-        fromService:
-          name: sizzle-generator
-          type: web
-          property: url
+        sync: false
       - key: S3_BUCKET
         sync: false
       - key: S3_ACCESS_KEY
