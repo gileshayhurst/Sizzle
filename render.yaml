@@ -3,6 +3,7 @@ services:
     name: sizzle-app
     runtime: docker
     dockerfilePath: ./Dockerfile.app
+    plan: free
     envVars:
       - key: APP_MODE
         value: cloud
@@ -23,6 +24,7 @@ services:
     name: sizzle-generator
     runtime: docker
     dockerfilePath: ./Dockerfile.generator
+    plan: free
     envVars:
       - key: APP_MODE
         value: cloud
