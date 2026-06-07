@@ -31,6 +31,7 @@ from flask_cors import CORS
 from loader import scan_videos
 from video_editor import check_ffmpeg, extract_clip, parse_timestamp_to_seconds, stitch_clips
 from shared import parse_transcript_lines as _parse_transcript_lines
+import storage
 
 LIBRARY_PATH = Path(__file__).parent / "sizzle_library.json"
 
@@ -66,6 +67,8 @@ def _append_log(job_id: str, message: str) -> None:
 # ─── Library helpers ──────────────────────────────────────────────────────────
 
 def _load_library() -> list:
+    if storage.is_cloud():
+        return storage.read_json(storage.library_key())
     if not LIBRARY_PATH.exists():
         return []
     try:
@@ -76,6 +79,9 @@ def _load_library() -> list:
 
 
 def _save_library(entries: list) -> None:
+    if storage.is_cloud():
+        storage.write_json(storage.library_key(), entries)
+        return
     with LIBRARY_PATH.open("w", encoding="utf-8") as f:
         json.dump(entries, f, indent=2, ensure_ascii=False)
 
@@ -253,7 +259,8 @@ def make_title_card(
 # ─── Generation worker ────────────────────────────────────────────────────────
 
 def _run_generation(job_id: str, folder: str, mode: str,
-                    selections: dict, prompt: str, output_filename: str) -> None:
+                    selections: dict, prompt: str, output_filename: str,
+                    session_key: str = None) -> None:
     """Extract and stitch clips from selected transcript lines."""
     job = _jobs[job_id]
     try:
@@ -395,6 +402,17 @@ def _run_generation(job_id: str, folder: str, mode: str,
             return
 
     duration = int(sum(clip_durations) + title_card_count * TITLE_CARD_DURATION)
+
+    # In cloud mode: upload the finished reel to S3 and add a presigned download URL.
+    reel_download_url = None
+    if storage.is_cloud() and session_key:
+        reel_s3_key = f"{session_key}/{output_filename}"
+        try:
+            storage.upload_file(output_path, reel_s3_key)
+            reel_download_url = storage.presigned_url(reel_s3_key)
+        except Exception as exc:
+            _append_log(job_id, f"⚠ Could not upload reel to S3: {exc}")
+
     result = {
         "path": output_path,
         "filename": output_filename,
@@ -402,22 +420,27 @@ def _run_generation(job_id: str, folder: str, mode: str,
         "duration_seconds": duration,
         "segment_starts": segment_starts,
     }
+    if reel_download_url:
+        result["download_url"] = reel_download_url
 
     _append_log(job_id, f"✓ Done — saved to {output_filename}")
     with _jobs_lock:
         job["result"] = result
 
-    _library_add({
+    library_entry = {
         "id": str(uuid.uuid4()),
         "filename": output_filename,
         "path": output_path,
-        "source_folder": Path(folder).name + "/",
+        "source_folder": (Path(session_key).name if session_key else Path(folder).name) + "/",
         "prompt": prompt,
         "duration_seconds": duration,
         "clip_count": len(clip_durations),
         "segment_starts": segment_starts,
         "created_at": datetime.now().isoformat(timespec="seconds"),
-    })
+    }
+    if reel_download_url:
+        library_entry["download_url"] = reel_download_url
+    _library_add(library_entry)
 
     with _jobs_lock:
         job["status"] = "done"
@@ -432,16 +455,28 @@ def create_app(testing: bool = False) -> Flask:
 
     @app.post("/generate")
     def generate():
+        import tempfile as _tmpfile
         body = request.get_json() or {}
-        folder = body.get("folder", "").strip()
         prompt = body.get("prompt", "").strip()
         mode = body.get("mode", "highlight")
         selections = body.get("selections", {})
         output_filename = body.get("output_filename", "sizzle_reel.mp4").strip()
         output_filename = Path(output_filename).name
+        session_key = body.get("session_key", "").strip() or None
 
-        if not folder or not Path(folder).exists():
-            return jsonify({"error": "Folder not found"}), 404
+        if storage.is_cloud():
+            if not session_key:
+                return jsonify({"error": "session_key required in cloud mode"}), 400
+            # Download all session files from S3 into a local temp dir for ffmpeg
+            tmp_session_dir = _tmpfile.mkdtemp(prefix="sizzle_gen_")
+            for key in storage.list_keys(session_key + "/"):
+                filename = Path(key).name
+                storage.download_file(key, os.path.join(tmp_session_dir, filename))
+            folder = tmp_session_dir
+        else:
+            folder = body.get("folder", "").strip()
+            if not folder or not Path(folder).exists():
+                return jsonify({"error": "Folder not found"}), 404
 
         try:
             check_ffmpeg()
@@ -461,11 +496,11 @@ def create_app(testing: bool = False) -> Flask:
             # mock interactions complete) before the POST response is returned.
             # This prevents a live daemon thread from calling patched symbols
             # during a subsequent test's patch window.
-            _run_generation(job_id, folder, mode, selections, prompt, output_filename)
+            _run_generation(job_id, folder, mode, selections, prompt, output_filename, session_key=session_key)
         else:
             t = threading.Thread(
                 target=_run_generation,
-                args=(job_id, folder, mode, selections, prompt, output_filename),
+                args=(job_id, folder, mode, selections, prompt, output_filename, session_key),
                 daemon=True,
             )
             with _jobs_lock:
@@ -501,21 +536,28 @@ def create_app(testing: bool = False) -> Flask:
 
     @app.get("/video/<job_id>")
     def serve_video(job_id):
+        from flask import redirect as _redirect
         with _jobs_lock:
             job = _jobs.get(job_id)
         if not job or not job.get("result"):
             return jsonify({"error": "not found"}), 404
-        path = Path(job["result"]["path"])
+        result = job["result"]
+        if storage.is_cloud() and result.get("download_url"):
+            return _redirect(result["download_url"])
+        path = Path(result["path"])
         if not path.is_file():
             return jsonify({"error": "file not found on disk"}), 404
         return send_file(str(path), conditional=True)
 
     @app.get("/library-video/<entry_id>")
     def serve_library_video(entry_id):
+        from flask import redirect as _redirect
         entries = _load_library()
         entry = next((e for e in entries if e["id"] == entry_id), None)
         if not entry:
             return jsonify({"error": "not found"}), 404
+        if storage.is_cloud() and entry.get("download_url"):
+            return _redirect(entry["download_url"])
         path = Path(entry["path"])
         if not path.is_file():
             return jsonify({"error": "file not found on disk"}), 404
