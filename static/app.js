@@ -884,3 +884,86 @@ $('folder-badge').addEventListener('click', async (e) => {
     document.addEventListener('keydown', _folderDropdownOnEscape);
   }, 0);
 });
+
+// ─── Cloud upload zone ────────────────────────────────────────────────────────
+(function initUploadZone() {
+  if (APP_MODE !== 'cloud') {
+    // Local mode: show folder picker, hide upload zone
+    if ($('cloud-upload-form')) $('cloud-upload-form').classList.add('hidden');
+    return;
+  }
+
+  // Cloud mode: hide folder picker controls, show upload zone
+  const folderInputRow = document.querySelector('.folder-input-row');
+  if (folderInputRow) folderInputRow.classList.add('hidden');
+  const pickerForm = document.querySelector('.picker-form');
+  if (pickerForm) {
+    Array.from(pickerForm.children).forEach(el => {
+      if (el.id !== 'cloud-upload-form') el.classList.add('hidden');
+    });
+  }
+  const uploadForm = $('cloud-upload-form');
+  if (uploadForm) uploadForm.classList.remove('hidden');
+
+  const dropzone = $('upload-dropzone');
+  const fileInput = $('file-input');
+  const fileList  = $('upload-file-list');
+  const btnUpload = $('btn-upload');
+  const uploadErr = $('upload-error');
+  let selectedFiles = [];
+
+  function renderFileList() {
+    fileList.innerHTML = '';
+    selectedFiles.forEach(f => {
+      const li = document.createElement('li');
+      li.textContent = '📹 ' + f.name;
+      fileList.appendChild(li);
+    });
+    btnUpload.classList.toggle('hidden', selectedFiles.length === 0);
+  }
+
+  fileInput.addEventListener('change', () => {
+    selectedFiles = Array.from(fileInput.files);
+    renderFileList();
+  });
+
+  dropzone.addEventListener('dragover', e => {
+    e.preventDefault();
+    dropzone.classList.add('drag-over');
+  });
+  dropzone.addEventListener('dragleave', () => dropzone.classList.remove('drag-over'));
+  dropzone.addEventListener('drop', e => {
+    e.preventDefault();
+    dropzone.classList.remove('drag-over');
+    selectedFiles = Array.from(e.dataTransfer.files);
+    renderFileList();
+  });
+
+  btnUpload.addEventListener('click', async () => {
+    if (selectedFiles.length === 0) return;
+    uploadErr.classList.add('hidden');
+    btnUpload.disabled = true;
+    btnUpload.textContent = 'Uploading…';
+
+    const formData = new FormData();
+    selectedFiles.forEach(f => formData.append('files', f));
+
+    try {
+      const resp = await fetch('/upload', { method: 'POST', body: formData });
+      const data = await resp.json();
+      if (!resp.ok) {
+        uploadErr.textContent = data.error || 'Upload failed';
+        uploadErr.classList.remove('hidden');
+        return;
+      }
+      // After upload, proceed exactly as if a folder was opened
+      openFolder(data.folder);
+    } catch (err) {
+      uploadErr.textContent = 'Network error: ' + err.message;
+      uploadErr.classList.remove('hidden');
+    } finally {
+      btnUpload.disabled = false;
+      btnUpload.textContent = 'Upload & Transcribe';
+    }
+  });
+})();

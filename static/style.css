@@ -468,3 +468,24 @@ body {
   color: #5090d0;
   font-style: italic;
 }
+
+/* ── Cloud upload zone ────────────────────────────────────────────────────── */
+.upload-dropzone {
+  border: 2px dashed #555;
+  border-radius: 8px;
+  padding: 40px 20px;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 0.2s, background 0.2s;
+  margin-bottom: 16px;
+}
+.upload-dropzone.drag-over {
+  border-color: #e63946;
+  background: rgba(230, 57, 70, 0.05);
+}
+.upload-icon { font-size: 48px; margin-bottom: 8px; }
+.upload-text { font-size: 1.1rem; font-weight: 600; margin-bottom: 4px; }
+.upload-subtext { color: #888; font-size: 0.9rem; margin-bottom: 12px; }
+.upload-label { cursor: pointer; display: inline-block; }
+.upload-file-list { list-style: none; padding: 0; margin: 0 0 16px; }
+.upload-file-list li { padding: 4px 0; font-size: 0.9rem; color: #ccc; }

@@ -36,3 +36,65 @@ def test_index_injects_app_mode(client, monkeypatch):
     resp = client.get("/")
     assert resp.status_code == 200
     assert "cloud" in resp.data.decode()
+
+
+import io
+import os
+from unittest.mock import patch, MagicMock
+
+
+def test_upload_returns_session_info_local_mode(tmp_path, monkeypatch):
+    """POST /upload in local mode stores files and returns session metadata."""
+    monkeypatch.setenv("APP_MODE", "local")
+    monkeypatch.setenv("DATA_ROOT", str(tmp_path))
+    import importlib, storage, app as app_mod
+    importlib.reload(storage)
+    importlib.reload(app_mod)
+
+    flask_app = app_mod.create_app(testing=True)
+    with flask_app.test_client() as c:
+        data = {
+            "files": (io.BytesIO(b"fake mp4"), "video1.mp4"),
+        }
+        resp = c.post("/upload", data=data, content_type="multipart/form-data")
+
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert "session_key" in body
+    assert body["session_key"].startswith("sessions/")
+    # File should exist under DATA_ROOT
+    session_dir = tmp_path / body["session_key"]
+    assert (session_dir / "video1.mp4").exists()
+
+
+def test_upload_rejects_non_video_files(tmp_path, monkeypatch):
+    """POST /upload returns 400 if a non-video file is included."""
+    monkeypatch.setenv("APP_MODE", "local")
+    monkeypatch.setenv("DATA_ROOT", str(tmp_path))
+    import importlib, storage, app as app_mod
+    importlib.reload(storage)
+    importlib.reload(app_mod)
+
+    flask_app = app_mod.create_app(testing=True)
+    with flask_app.test_client() as c:
+        data = {
+            "files": (io.BytesIO(b"not a video"), "document.pdf"),
+        }
+        resp = c.post("/upload", data=data, content_type="multipart/form-data")
+
+    assert resp.status_code == 400
+
+
+def test_upload_requires_at_least_one_file(tmp_path, monkeypatch):
+    """POST /upload with no files returns 400."""
+    monkeypatch.setenv("APP_MODE", "local")
+    monkeypatch.setenv("DATA_ROOT", str(tmp_path))
+    import importlib, storage, app as app_mod
+    importlib.reload(storage)
+    importlib.reload(app_mod)
+
+    flask_app = app_mod.create_app(testing=True)
+    with flask_app.test_client() as c:
+        resp = c.post("/upload", data={}, content_type="multipart/form-data")
+
+    assert resp.status_code == 400

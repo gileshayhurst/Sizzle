@@ -125,6 +125,9 @@ def _filter_generated_reels(video_paths: list[Path]) -> list[Path]:
 
 
 def _load_library() -> list:
+    from storage import is_cloud, read_json, library_key
+    if is_cloud():
+        return read_json(library_key())
     library_path = Path(__file__).parent / "sizzle_library.json"
     if not library_path.exists():
         return []
@@ -220,6 +223,48 @@ def create_app(testing: bool = False) -> Flask:
             app_mode=os.environ.get("APP_MODE", "local"),
             generator_url=os.environ.get("GENERATOR_URL", "http://localhost:5001"),
         )
+
+    _VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
+
+    @app.post("/upload")
+    def upload():
+        """Cloud-mode endpoint: receive uploaded video files and store as a session."""
+        from storage import new_session_key, upload_file, is_cloud
+
+        files = request.files.getlist("files")
+        if not files or all(f.filename == "" for f in files):
+            return jsonify({"error": "No files provided"}), 400
+
+        # Validate all files are videos before writing any
+        for f in files:
+            if Path(f.filename).suffix.lower() not in _VIDEO_EXTENSIONS:
+                return jsonify({"error": f"Not a video file: {f.filename}"}), 400
+
+        session_key = new_session_key()
+
+        # Determine local session directory
+        if is_cloud():
+            import tempfile as _tf
+            session_dir = Path(_tf.mkdtemp(prefix="sizzle_"))
+        else:
+            from storage import _data_root
+            session_dir = _data_root() / session_key
+            session_dir.mkdir(parents=True, exist_ok=True)
+
+        saved_names = []
+        for f in files:
+            filename = Path(f.filename).name  # strip any path components
+            dest = session_dir / filename
+            f.save(str(dest))
+            if is_cloud():
+                upload_file(str(dest), f"{session_key}/{filename}")
+            saved_names.append(filename)
+
+        return jsonify({
+            "session_key": session_key,
+            "folder": str(session_dir),
+            "files": saved_names,
+        })
 
     @app.post("/browse")
     def browse():
