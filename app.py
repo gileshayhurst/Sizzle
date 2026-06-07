@@ -215,7 +215,11 @@ def create_app(testing: bool = False) -> Flask:
 
     @app.get("/")
     def index():
-        return render_template("index.html")
+        return render_template(
+            "index.html",
+            app_mode=os.environ.get("APP_MODE", "local"),
+            generator_url=os.environ.get("GENERATOR_URL", "http://localhost:5001"),
+        )
 
     @app.post("/browse")
     def browse():

@@ -1,4 +1,5 @@
-const GENERATOR_URL = 'http://localhost:5001';
+const GENERATOR_URL = (window.__CONFIG__ || {}).generatorUrl || 'http://localhost:5001';
+const APP_MODE      = (window.__CONFIG__ || {}).mode || 'local';
 
 // ─── State ────────────────────────────────────────────────────────────────────
 const state = {
