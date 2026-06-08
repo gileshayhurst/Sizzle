@@ -48,12 +48,14 @@ $('btn-browse').addEventListener('click', async () => {
 });
 
 $('btn-load-folder').addEventListener('click', () => {
+  if (APP_MODE === 'cloud') return; // cloud mode wires its own handler in initCloudMode
   const folder = $('folder-path-input').value.trim();
   if (!folder) return;
   openFolder(folder);
 });
 
 $('folder-path-input').addEventListener('keydown', e => {
+  if (APP_MODE === 'cloud') return; // cloud mode wires its own handler in initCloudMode
   if (e.key === 'Enter') {
     const folder = e.target.value.trim();
     if (folder) openFolder(folder);
