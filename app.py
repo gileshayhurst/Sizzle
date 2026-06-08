@@ -319,17 +319,14 @@ def create_app(testing: bool = False) -> Flask:
 
     @app.post("/upload/prepare")
     def upload_prepare():
-        """Cloud-mode: validate filenames and return presigned S3 PUT URLs.
+        """Cloud-mode: validate filenames and create an upload session.
 
-        The browser calls this first, uploads files directly to R2, then calls
-        /upload/commit. No video bytes pass through this server.
+        The browser calls this first to get a session_key, then uploads each
+        file via POST /upload/file (server proxies bytes to R2 — no CORS needed),
+        then calls /upload/commit.
 
         Request JSON: {"files": ["video1.mp4", "transcript1.txt", ...]}
-        Response JSON: {
-            "session_key": "sessions/<uuid>",
-            "folder": "sessions/<uuid>",
-            "uploads": [{"filename": "video1.mp4", "key": "sessions/<uuid>/video1.mp4", "url": "<presigned PUT URL>"}, ...]
-        }
+        Response JSON: {"session_key": "sessions/<uuid>", "folder": "sessions/<uuid>"}
         """
         if not storage.is_cloud():
             return jsonify({"error": "This endpoint is only available in cloud mode"}), 400
@@ -350,18 +347,42 @@ def create_app(testing: bool = False) -> Flask:
             return jsonify({"error": "At least one video file is required."}), 400
 
         session_key = storage.new_session_key()
-        uploads = []
-        for name in filenames:
-            safe_name = Path(name).name  # strip any path components
-            key = f"{session_key}/{safe_name}"
-            url = storage.presigned_put_url(key, expires=7200)  # 2hr window for large files
-            uploads.append({"filename": safe_name, "key": key, "url": url})
-
         return jsonify({
             "session_key": session_key,
             "folder": session_key,
-            "uploads": uploads,
         })
+
+    @app.post("/upload/file")
+    def upload_file_proxy():
+        """Cloud-mode: accept one file from the browser and stream it to R2.
+
+        The browser posts files here (same origin — no CORS required) and this
+        server streams the bytes directly to R2 via boto3.
+
+        Request: multipart/form-data
+          - file:        the file bytes
+          - session_key: the session key from /upload/prepare
+        Response JSON: {"key": "sessions/<uuid>/filename", "filename": "filename"}
+        """
+        if not storage.is_cloud():
+            return jsonify({"error": "This endpoint is only available in cloud mode"}), 400
+
+        f = request.files.get("file")
+        session_key = request.form.get("session_key", "").strip()
+        if not f:
+            return jsonify({"error": "No file provided"}), 400
+        if not session_key:
+            return jsonify({"error": "session_key is required"}), 400
+
+        safe_name = Path(f.filename).name  # strip any path components
+        ext = Path(safe_name).suffix.lower()
+        if ext not in _ALLOWED_UPLOAD_EXTENSIONS:
+            return jsonify({"error": f"Unsupported file type: {safe_name}"}), 400
+
+        key = f"{session_key}/{safe_name}"
+        # upload_fileobj streams in multipart chunks — memory-efficient for large videos
+        storage._s3().upload_fileobj(f.stream, storage._bucket(), key)
+        return jsonify({"key": key, "filename": safe_name})
 
     @app.post("/upload/commit")
     def upload_commit():

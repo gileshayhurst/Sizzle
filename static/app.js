@@ -979,7 +979,7 @@ $('folder-badge').addEventListener('click', async (e) => {
     btnLoad.disabled = true;
 
     try {
-      // Step 1: ask server for presigned PUT URLs (sends only filenames, no bytes)
+      // Step 1: validate filenames and create a session key on the server
       btnLoad.textContent = 'Preparing upload…';
       const prepResp = await fetch('/upload/prepare', {
         method: 'POST',
@@ -993,47 +993,37 @@ $('folder-badge').addEventListener('click', async (e) => {
         return;
       }
 
-      // Step 2: upload each file directly to R2 — show progress screen
-      const uploads = prepData.uploads; // [{filename, key, url}]
-      let done = 0;
+      const session_key = prepData.session_key;
 
-      // Switch to the transcribing screen so progress is clearly visible
-      $('transcribe-subtitle').textContent = `Uploading ${uploads.length} files to cloud…`;
+      // Step 2: upload each file to the server — server proxies bytes to R2.
+      // No CORS needed: the browser posts to the same origin (this Flask server).
+      $('transcribe-subtitle').textContent = `Uploading ${selectedFiles.length} files…`;
       $('transcribe-bar').style.width = '0%';
       $('transcribe-log').textContent = '';
       showScreen('screen-transcribing');
 
-      // Diagnostic: log presigned URL host so we can verify it's pointing at R2
-      if (uploads.length > 0) {
-        try { console.log('[Upload] PUT target host:', new URL(uploads[0].url).host); }
-        catch(e) { console.log('[Upload] First URL:', uploads[0].url?.substring(0, 80)); }
-      }
-
-      await Promise.all(uploads.map(async ({ filename, url }) => {
-        const file = selectedFiles.find(f => f.name === filename);
-        const putResp = await fetch(url, {
-          method: 'PUT',
-          body: file,
-          headers: { 'Content-Type': file.type || 'application/octet-stream' },
-        });
-        if (!putResp.ok) {
-          throw new Error(`Failed to upload ${filename} (${putResp.status})`);
+      for (let i = 0; i < selectedFiles.length; i++) {
+        const file = selectedFiles[i];
+        $('transcribe-log').textContent = `⟳ ${file.name} (${i + 1} / ${selectedFiles.length})`;
+        const fd = new FormData();
+        fd.append('file', file);
+        fd.append('session_key', session_key);
+        const resp = await fetch('/upload/file', { method: 'POST', body: fd });
+        if (!resp.ok) {
+          const errData = await resp.json().catch(() => ({}));
+          throw new Error(`Failed to upload ${file.name}: ${errData.error || resp.status}`);
         }
-        done++;
-        const pct = Math.round((done / uploads.length) * 100);
+        const pct = Math.round(((i + 1) / selectedFiles.length) * 100);
         $('transcribe-bar').style.width = pct + '%';
-        $('transcribe-log').textContent = `✓ ${filename} (${done} / ${uploads.length})`;
-      }));
+        $('transcribe-log').textContent = `✓ ${file.name} (${i + 1} / ${selectedFiles.length})`;
+      }
 
       // Step 3: tell the server all uploads are done
       $('transcribe-subtitle').textContent = 'Finalising…';
       const commitResp = await fetch('/upload/commit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          session_key: prepData.session_key,
-          files: selectedFiles.map(f => f.name),
-        }),
+        body: JSON.stringify({ session_key, files: selectedFiles.map(f => f.name) }),
       });
       const commitData = await commitResp.json();
       if (!commitResp.ok) {
