@@ -487,5 +487,8 @@ body {
 .upload-text { font-size: 1.1rem; font-weight: 600; margin-bottom: 4px; }
 .upload-subtext { color: #888; font-size: 0.9rem; margin-bottom: 12px; }
 .upload-label { cursor: pointer; display: inline-block; }
+.upload-btn-row { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; margin-top: 12px; }
+.btn-secondary { background: transparent; border: 1px solid #666; color: #ccc; padding: 8px 18px; border-radius: 6px; cursor: pointer; font-size: 0.9rem; }
+.btn-secondary:hover { border-color: #aaa; color: #fff; }
 .upload-file-list { list-style: none; padding: 0; margin: 0 0 16px; }
 .upload-file-list li { padding: 4px 0; font-size: 0.9rem; color: #ccc; }

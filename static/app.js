@@ -905,27 +905,36 @@ $('folder-badge').addEventListener('click', async (e) => {
   const uploadForm = $('cloud-upload-form');
   if (uploadForm) uploadForm.classList.remove('hidden');
 
-  const dropzone = $('upload-dropzone');
-  const fileInput = $('file-input');
-  const fileList  = $('upload-file-list');
-  const btnUpload = $('btn-upload');
-  const uploadErr = $('upload-error');
+  const dropzone    = $('upload-dropzone');
+  const fileInput   = $('file-input');
+  const folderInput = $('folder-input');
+  const fileList    = $('upload-file-list');
+  const btnUpload   = $('btn-upload');
+  const uploadErr   = $('upload-error');
+  const _VIDEO_EXTS = new Set(['.mp4', '.mov', '.avi', '.mkv', '.webm', '.txt']);
   let selectedFiles = [];
+
+  function ext(name) { return name.slice(name.lastIndexOf('.')).toLowerCase(); }
 
   function renderFileList() {
     fileList.innerHTML = '';
     selectedFiles.forEach(f => {
       const li = document.createElement('li');
-      li.textContent = '📹 ' + f.name;
+      const icon = ext(f.name) === '.txt' ? '📄' : '📹';
+      li.textContent = icon + ' ' + f.name;
       fileList.appendChild(li);
     });
     btnUpload.classList.toggle('hidden', selectedFiles.length === 0);
   }
 
-  fileInput.addEventListener('change', () => {
-    selectedFiles = Array.from(fileInput.files);
+  function setFiles(files) {
+    // Filter to only supported types (silently drop unsupported files from folder picks)
+    selectedFiles = Array.from(files).filter(f => _VIDEO_EXTS.has(ext(f.name)));
     renderFileList();
-  });
+  }
+
+  fileInput.addEventListener('change', () => setFiles(fileInput.files));
+  folderInput.addEventListener('change', () => setFiles(folderInput.files));
 
   dropzone.addEventListener('dragover', e => {
     e.preventDefault();
