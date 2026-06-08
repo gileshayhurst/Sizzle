@@ -1003,6 +1003,12 @@ $('folder-badge').addEventListener('click', async (e) => {
       $('transcribe-log').textContent = '';
       showScreen('screen-transcribing');
 
+      // Diagnostic: log presigned URL host so we can verify it's pointing at R2
+      if (uploads.length > 0) {
+        try { console.log('[Upload] PUT target host:', new URL(uploads[0].url).host); }
+        catch(e) { console.log('[Upload] First URL:', uploads[0].url?.substring(0, 80)); }
+      }
+
       await Promise.all(uploads.map(async ({ filename, url }) => {
         const file = selectedFiles.find(f => f.name === filename);
         const putResp = await fetch(url, {
