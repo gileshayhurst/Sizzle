@@ -403,6 +403,19 @@ def _run_generation(job_id: str, folder: str, mode: str,
 
     duration = int(sum(clip_durations) + title_card_count * TITLE_CARD_DURATION)
 
+    # In local mode: record the output filename in a sidecar file inside the
+    # output folder.  When this folder is later uploaded in cloud mode, the
+    # sidecar travels with it and tells the server which files are generated
+    # reels so they can be filtered from the source-video list.
+    if not storage.is_cloud():
+        try:
+            marker = Path(folder) / "sizzle_generated_reels.txt"
+            existing = set(marker.read_text(encoding="utf-8").splitlines()) if marker.exists() else set()
+            existing.add(output_filename)
+            marker.write_text("\n".join(sorted(existing)), encoding="utf-8")
+        except Exception:
+            pass  # sidecar is best-effort; never fail generation over it
+
     # In cloud mode: upload the finished reel to S3 and add a presigned download URL.
     reel_download_url = None
     if storage.is_cloud() and session_key:

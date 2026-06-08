@@ -417,12 +417,22 @@ def create_app(testing: bool = False) -> Flask:
             return jsonify({"error": "No source video files found (folder contains only previously generated reels)"}), 422
 
         # In cloud mode Whisper is not available — only videos with pre-supplied
-        # .txt transcripts can be used.  Silently drop videos without a transcript
-        # (this also excludes generated sizzle reels that were uploaded alongside
-        # source footage, since they never have accompanying transcripts).
+        # .txt transcripts can be used.
         if storage.is_cloud():
+            # If the session was uploaded from a local folder that had previously
+            # generated reels, a sidecar file lists their filenames so we can
+            # filter them out even though they also have .txt transcripts.
+            locally_generated: set[str] = set()
+            sidecar = Path(folder) / "sizzle_generated_reels.txt"
+            if sidecar.exists():
+                try:
+                    locally_generated = set(sidecar.read_text(encoding="utf-8").splitlines())
+                except Exception:
+                    pass
+
             video_paths = [p for p in video_paths
-                           if p.with_suffix(".txt").exists()
+                           if p.name not in locally_generated
+                           and p.with_suffix(".txt").exists()
                            and p.with_suffix(".txt").stat().st_size > 0]
             if not video_paths:
                 return jsonify({"error": "No transcripts found. In cloud mode, upload a .txt transcript alongside each video."}), 422

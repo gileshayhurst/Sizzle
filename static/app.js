@@ -993,10 +993,15 @@ $('folder-badge').addEventListener('click', async (e) => {
         return;
       }
 
-      // Step 2: upload each file directly to R2 using its presigned PUT URL
+      // Step 2: upload each file directly to R2 — show progress screen
       const uploads = prepData.uploads; // [{filename, key, url}]
       let done = 0;
-      btnLoad.textContent = `Uploading 0 / ${uploads.length}…`;
+
+      // Switch to the transcribing screen so progress is clearly visible
+      $('transcribe-subtitle').textContent = `Uploading ${uploads.length} files to cloud…`;
+      $('transcribe-bar').style.width = '0%';
+      $('transcribe-log').textContent = '';
+      showScreen('screen-transcribing');
 
       await Promise.all(uploads.map(async ({ filename, url }) => {
         const file = selectedFiles.find(f => f.name === filename);
@@ -1009,11 +1014,13 @@ $('folder-badge').addEventListener('click', async (e) => {
           throw new Error(`Failed to upload ${filename} (${putResp.status})`);
         }
         done++;
-        btnLoad.textContent = `Uploading ${done} / ${uploads.length}…`;
+        const pct = Math.round((done / uploads.length) * 100);
+        $('transcribe-bar').style.width = pct + '%';
+        $('transcribe-log').textContent = `✓ ${filename} (${done} / ${uploads.length})`;
       }));
 
       // Step 3: tell the server all uploads are done
-      btnLoad.textContent = 'Finalising…';
+      $('transcribe-subtitle').textContent = 'Finalising…';
       const commitResp = await fetch('/upload/commit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1024,6 +1031,7 @@ $('folder-badge').addEventListener('click', async (e) => {
       });
       const commitData = await commitResp.json();
       if (!commitResp.ok) {
+        showScreen('screen-folder-picker');
         folderErr.textContent = commitData.error || 'Upload commit failed';
         folderErr.classList.remove('hidden');
         return;
@@ -1038,6 +1046,7 @@ $('folder-badge').addEventListener('click', async (e) => {
       openFolder(commitData.folder);
 
     } catch (err) {
+      showScreen('screen-folder-picker');
       folderErr.textContent = 'Upload error: ' + err.message;
       folderErr.classList.remove('hidden');
     } finally {
