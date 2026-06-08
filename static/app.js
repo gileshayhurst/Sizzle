@@ -601,6 +601,7 @@ async function submitGenerate(mode, selections) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       folder: state.folder,
+      session_key: state.folder,   // cloud mode: folder === session key
       mode,
       selections,
       prompt,
