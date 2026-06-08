@@ -974,24 +974,68 @@ $('folder-badge').addEventListener('click', async (e) => {
     folderErr.classList.add('hidden');
     uploadErr.classList.add('hidden');
     btnLoad.disabled = true;
-    btnLoad.textContent = 'Uploading…';
-
-    const formData = new FormData();
-    selectedFiles.forEach(f => formData.append('files', f));
 
     try {
-      const resp = await fetch('/upload', { method: 'POST', body: formData });
-      const data = await resp.json();
-      if (!resp.ok) {
-        folderErr.textContent = data.error || 'Upload failed';
+      // Step 1: ask server for presigned PUT URLs (sends only filenames, no bytes)
+      btnLoad.textContent = 'Preparing upload…';
+      const prepResp = await fetch('/upload/prepare', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ files: selectedFiles.map(f => f.name) }),
+      });
+      const prepData = await prepResp.json();
+      if (!prepResp.ok) {
+        folderErr.textContent = prepData.error || 'Upload preparation failed';
         folderErr.classList.remove('hidden');
         return;
       }
-      // Save to recent sessions in localStorage
-      _saveRecentSession(selectedFolderName, selectedFiles.filter(f => ext(f.name) !== '.txt').length, data.folder);
-      openFolder(data.folder);
+
+      // Step 2: upload each file directly to R2 using its presigned PUT URL
+      const uploads = prepData.uploads; // [{filename, key, url}]
+      let done = 0;
+      btnLoad.textContent = `Uploading 0 / ${uploads.length}…`;
+
+      await Promise.all(uploads.map(async ({ filename, url }) => {
+        const file = selectedFiles.find(f => f.name === filename);
+        const putResp = await fetch(url, {
+          method: 'PUT',
+          body: file,
+          headers: { 'Content-Type': file.type || 'application/octet-stream' },
+        });
+        if (!putResp.ok) {
+          throw new Error(`Failed to upload ${filename} (${putResp.status})`);
+        }
+        done++;
+        btnLoad.textContent = `Uploading ${done} / ${uploads.length}…`;
+      }));
+
+      // Step 3: tell the server all uploads are done
+      btnLoad.textContent = 'Finalising…';
+      const commitResp = await fetch('/upload/commit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          session_key: prepData.session_key,
+          files: selectedFiles.map(f => f.name),
+        }),
+      });
+      const commitData = await commitResp.json();
+      if (!commitResp.ok) {
+        folderErr.textContent = commitData.error || 'Upload commit failed';
+        folderErr.classList.remove('hidden');
+        return;
+      }
+
+      // Step 4: record in recent sessions and open the folder as before
+      _saveRecentSession(
+        selectedFolderName,
+        selectedFiles.filter(f => ext(f.name) !== '.txt').length,
+        commitData.folder
+      );
+      openFolder(commitData.folder);
+
     } catch (err) {
-      folderErr.textContent = 'Network error: ' + err.message;
+      folderErr.textContent = 'Upload error: ' + err.message;
       folderErr.classList.remove('hidden');
     } finally {
       btnLoad.disabled = false;
