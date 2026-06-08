@@ -9,6 +9,7 @@ __pycache__/
 *.mkv
 *.webm
 *.txt
+!requirements.txt
 sizzle_library.json
 recent_folders.json
 docs/
