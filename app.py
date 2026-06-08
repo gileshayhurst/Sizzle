@@ -122,9 +122,19 @@ def _filter_generated_reels(video_paths: list[Path]) -> list[Path]:
     Prevents previously generated sizzle reels saved in the source folder
     from being re-discovered as source videos on subsequent folder opens.
     Fails open: if the library cannot be read, all paths are returned unchanged.
+
+    In cloud mode, matches by filename only — full paths differ between sessions
+    so path-based matching would never filter anything.
     """
     try:
-        library_paths = {Path(entry["path"]).resolve() for entry in _load_library()}
+        library = _load_library()
+        if storage.is_cloud():
+            library_filenames = {
+                entry.get("filename") or Path(entry["path"]).name
+                for entry in library
+            }
+            return [vp for vp in video_paths if vp.name not in library_filenames]
+        library_paths = {Path(entry["path"]).resolve() for entry in library}
     except Exception:
         return video_paths
     return [vp for vp in video_paths if vp.resolve() not in library_paths]
