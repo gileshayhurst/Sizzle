@@ -41,6 +41,7 @@ function showScreen(id) {
 
 // ─── Folder picker ────────────────────────────────────────────────────────────
 $('btn-browse').addEventListener('click', async () => {
+  if (APP_MODE === 'cloud') return; // cloud mode wires its own handler in initCloudMode
   const resp = await fetch('/browse', { method: 'POST' });
   const { path } = await resp.json();
   if (path) $('folder-path-input').value = path;
