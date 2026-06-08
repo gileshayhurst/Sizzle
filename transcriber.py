@@ -1,6 +1,3 @@
-import whisper
-
-
 def _seconds_to_timestamp(seconds: float) -> str:
     total = int(seconds)
     m = total // 60
@@ -44,6 +41,7 @@ def _split_into_sentences(segment: dict) -> list[tuple[float, str]]:
 
 def transcribe_video(video_path: str, model=None) -> str:
     if model is None:
+        import whisper
         model = whisper.load_model("base")
     result = model.transcribe(video_path, word_timestamps=True)
     lines = []

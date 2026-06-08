@@ -29,7 +29,7 @@ def _make_mock_model(segments):
 
 
 def test_formats_single_segment():
-    with patch("transcriber.whisper.load_model") as mock_load:
+    with patch("whisper.load_model") as mock_load:
         mock_load.return_value = _make_mock_model([{"start": 5.0, "text": "Hello there"}])
         result = transcribe_video("video.mp4")
     assert result == "[0:05] Speaker: Hello there"
@@ -40,21 +40,21 @@ def test_formats_multiple_segments():
         {"start": 5.0, "text": "Hello there"},
         {"start": 65.0, "text": "And then she said"},
     ]
-    with patch("transcriber.whisper.load_model") as mock_load:
+    with patch("whisper.load_model") as mock_load:
         mock_load.return_value = _make_mock_model(segments)
         result = transcribe_video("video.mp4")
     assert result == "[0:05] Speaker: Hello there\n[1:05] Speaker: And then she said"
 
 
 def test_strips_whitespace_from_segment_text():
-    with patch("transcriber.whisper.load_model") as mock_load:
+    with patch("whisper.load_model") as mock_load:
         mock_load.return_value = _make_mock_model([{"start": 0.0, "text": "  padded  "}])
         result = transcribe_video("video.mp4")
     assert result == "[0:00] Speaker: padded"
 
 
 def test_loads_base_model():
-    with patch("transcriber.whisper.load_model") as mock_load:
+    with patch("whisper.load_model") as mock_load:
         mock_load.return_value = _make_mock_model([{"start": 0.0, "text": "Test"}])
         transcribe_video("video.mp4")
     mock_load.assert_called_once_with("base")
@@ -144,7 +144,7 @@ def test_transcribe_video_uses_word_timestamps_for_sentence_splitting():
             _make_word(" yellowtail.", 12.5, 13.0),
         ],
     }
-    with patch("transcriber.whisper.load_model") as mock_load:
+    with patch("whisper.load_model") as mock_load:
         mock_load.return_value = _make_mock_model([segment])
         result = transcribe_video("video.mp4")
     assert result == "[0:10] Speaker: The miso soup was great.\n[0:12] Speaker: Now for the yellowtail."
