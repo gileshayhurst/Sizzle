@@ -562,6 +562,7 @@ function renderRecentFolders(entries) {
 }
 
 async function loadRecentFolders() {
+  if (APP_MODE === 'cloud') return; // cloud mode uses localStorage-based recent sessions
   try {
     const resp = await fetch('/recent-folders');
     if (resp.ok) renderRecentFolders(await resp.json());
@@ -885,74 +886,95 @@ $('folder-badge').addEventListener('click', async (e) => {
   }, 0);
 });
 
-// ─── Cloud upload zone ────────────────────────────────────────────────────────
-(function initUploadZone() {
-  if (APP_MODE !== 'cloud') {
-    // Local mode: show folder picker, hide upload zone
-    if ($('cloud-upload-form')) $('cloud-upload-form').classList.add('hidden');
-    return;
-  }
+// ─── Cloud mode: repurpose local folder picker UI for upload ─────────────────
+// In cloud mode the existing Browse/Open Folder/Recent Folders UI is reused:
+//   • Browse…       → opens a webkitdirectory folder picker
+//   • path input    → read-only, shows the selected folder name
+//   • Open Folder   → uploads selected files then calls openFolder()
+//   • Recent        → stored in localStorage (same look as local recent folders)
+(function initCloudMode() {
+  if (APP_MODE !== 'cloud') return;
 
-  // Cloud mode: hide folder picker controls, show upload zone
-  const folderInputRow = document.querySelector('.folder-input-row');
-  if (folderInputRow) folderInputRow.classList.add('hidden');
-  const pickerForm = document.querySelector('.picker-form');
-  if (pickerForm) {
-    Array.from(pickerForm.children).forEach(el => {
-      if (el.id !== 'cloud-upload-form') el.classList.add('hidden');
-    });
-  }
-  const uploadForm = $('cloud-upload-form');
-  if (uploadForm) uploadForm.classList.remove('hidden');
+  const pathInput  = $('folder-path-input');
+  const btnBrowse  = $('btn-browse');
+  const btnLoad    = $('btn-load-folder');
+  const folderErr  = $('folder-error');
+  const uploadErr  = $('upload-error');
+  const folderPicker = $('cloud-folder-picker');
+  const filePicker   = $('cloud-file-picker');
 
-  const dropzone    = $('upload-dropzone');
-  const fileInput   = $('file-input');
-  const folderInput = $('folder-input');
-  const fileList    = $('upload-file-list');
-  const btnUpload   = $('btn-upload');
-  const uploadErr   = $('upload-error');
-  const _VIDEO_EXTS = new Set(['.mp4', '.mov', '.avi', '.mkv', '.webm', '.txt']);
-  let selectedFiles = [];
-
+  const VALID_EXTS = new Set(['.mp4', '.mov', '.avi', '.mkv', '.webm', '.txt']);
   function ext(name) { return name.slice(name.lastIndexOf('.')).toLowerCase(); }
 
-  function renderFileList() {
-    fileList.innerHTML = '';
-    selectedFiles.forEach(f => {
-      const li = document.createElement('li');
-      const icon = ext(f.name) === '.txt' ? '📄' : '📹';
-      li.textContent = icon + ' ' + f.name;
-      fileList.appendChild(li);
+  let selectedFiles = [];
+  let selectedFolderName = '';
+
+  // Make path input read-only — it just displays the chosen folder name
+  pathInput.readOnly = true;
+  pathInput.placeholder = 'Select a folder to upload…';
+  pathInput.style.cursor = 'default';
+
+  // Browse button opens the folder picker
+  btnBrowse.onclick = e => { e.preventDefault(); folderPicker.click(); };
+
+  // Remove the existing keydown listener for local mode by replacing the element
+  // (clone trick — strips all listeners set before this script ran)
+  pathInput.addEventListener('keydown', e => e.preventDefault());
+
+  // Folder selected via picker
+  folderPicker.addEventListener('change', () => {
+    const all = Array.from(folderPicker.files);
+    selectedFiles = all.filter(f => VALID_EXTS.has(ext(f.name)));
+    if (all.length > 0) {
+      selectedFolderName = all[0].webkitRelativePath.split('/')[0] || 'folder';
+      pathInput.value = selectedFolderName;
+    }
+    folderPicker.value = '';   // reset so same folder can be re-picked
+  });
+
+  // Individual files via hidden file picker (drag-and-drop also sets selectedFiles)
+  filePicker.addEventListener('change', () => {
+    selectedFiles = Array.from(filePicker.files).filter(f => VALID_EXTS.has(ext(f.name)));
+    const names = selectedFiles.map(f => f.name);
+    selectedFolderName = names.length === 1 ? names[0] : `${names.length} files`;
+    pathInput.value = selectedFolderName;
+    filePicker.value = '';
+  });
+
+  // Drag-and-drop onto the path input row
+  const inputRow = document.querySelector('.folder-input-row');
+  if (inputRow) {
+    inputRow.addEventListener('dragover', e => { e.preventDefault(); inputRow.classList.add('drag-over'); });
+    inputRow.addEventListener('dragleave', () => inputRow.classList.remove('drag-over'));
+    inputRow.addEventListener('drop', e => {
+      e.preventDefault();
+      inputRow.classList.remove('drag-over');
+      const items = Array.from(e.dataTransfer.items || []);
+      const files = Array.from(e.dataTransfer.files || []);
+      selectedFiles = files.filter(f => VALID_EXTS.has(ext(f.name)));
+      if (selectedFiles.length) {
+        selectedFolderName = selectedFiles.length === 1
+          ? selectedFiles[0].name
+          : `${selectedFiles.length} files`;
+        pathInput.value = selectedFolderName;
+      }
     });
-    btnUpload.classList.toggle('hidden', selectedFiles.length === 0);
   }
 
-  function setFiles(files) {
-    // Filter to only supported types (silently drop unsupported files from folder picks)
-    selectedFiles = Array.from(files).filter(f => _VIDEO_EXTS.has(ext(f.name)));
-    renderFileList();
-  }
+  // Open Folder → upload
+  btnLoad.textContent = 'Upload & Transcribe';
+  btnLoad.onclick = () => doUpload();
 
-  fileInput.addEventListener('change', () => setFiles(fileInput.files));
-  folderInput.addEventListener('change', () => setFiles(folderInput.files));
-
-  dropzone.addEventListener('dragover', e => {
-    e.preventDefault();
-    dropzone.classList.add('drag-over');
-  });
-  dropzone.addEventListener('dragleave', () => dropzone.classList.remove('drag-over'));
-  dropzone.addEventListener('drop', e => {
-    e.preventDefault();
-    dropzone.classList.remove('drag-over');
-    selectedFiles = Array.from(e.dataTransfer.files);
-    renderFileList();
-  });
-
-  btnUpload.addEventListener('click', async () => {
-    if (selectedFiles.length === 0) return;
+  async function doUpload() {
+    if (!selectedFiles.length) {
+      folderErr.textContent = 'Select a folder or files first.';
+      folderErr.classList.remove('hidden');
+      return;
+    }
+    folderErr.classList.add('hidden');
     uploadErr.classList.add('hidden');
-    btnUpload.disabled = true;
-    btnUpload.textContent = 'Uploading…';
+    btnLoad.disabled = true;
+    btnLoad.textContent = 'Uploading…';
 
     const formData = new FormData();
     selectedFiles.forEach(f => formData.append('files', f));
@@ -961,18 +983,62 @@ $('folder-badge').addEventListener('click', async (e) => {
       const resp = await fetch('/upload', { method: 'POST', body: formData });
       const data = await resp.json();
       if (!resp.ok) {
-        uploadErr.textContent = data.error || 'Upload failed';
-        uploadErr.classList.remove('hidden');
+        folderErr.textContent = data.error || 'Upload failed';
+        folderErr.classList.remove('hidden');
         return;
       }
-      // After upload, proceed exactly as if a folder was opened
+      // Save to recent sessions in localStorage
+      _saveRecentSession(selectedFolderName, selectedFiles.filter(f => ext(f.name) !== '.txt').length, data.folder);
       openFolder(data.folder);
     } catch (err) {
-      uploadErr.textContent = 'Network error: ' + err.message;
-      uploadErr.classList.remove('hidden');
+      folderErr.textContent = 'Network error: ' + err.message;
+      folderErr.classList.remove('hidden');
     } finally {
-      btnUpload.disabled = false;
-      btnUpload.textContent = 'Upload & Transcribe';
+      btnLoad.disabled = false;
+      btnLoad.textContent = 'Upload & Transcribe';
     }
-  });
+  }
+
+  // ── Recent sessions (localStorage) ──────────────────────────────────────────
+
+  function _saveRecentSession(name, videoCount, folder) {
+    const key = 'sizzleRecentSessions';
+    const sessions = JSON.parse(localStorage.getItem(key) || '[]')
+      .filter(s => s.folder !== folder);
+    sessions.unshift({ name, video_count: videoCount, folder, last_opened: new Date().toISOString() });
+    localStorage.setItem(key, JSON.stringify(sessions.slice(0, 5)));
+    _renderRecentSessions();
+  }
+
+  function _renderRecentSessions() {
+    const key = 'sizzleRecentSessions';
+    const sessions = JSON.parse(localStorage.getItem(key) || '[]');
+    const section = $('recent-folders-section');
+    const list    = $('recent-folders-list');
+    if (!sessions.length) { section.classList.add('hidden'); return; }
+    const label = section.querySelector('.recent-folders-label');
+    if (label) label.textContent = 'Recent uploads';
+    list.innerHTML = '';
+    sessions.forEach(s => {
+      const li = document.createElement('li');
+      li.className = 'recent-folder-item';
+      const nameSpan = document.createElement('span');
+      nameSpan.className = 'recent-folder-name';
+      nameSpan.textContent = `📁 ${s.name}/`;
+      const metaSpan = document.createElement('span');
+      metaSpan.className = 'recent-folder-meta';
+      metaSpan.textContent = `${s.video_count} video${s.video_count !== 1 ? 's' : ''} · ${relativeTime(s.last_opened)}`;
+      li.appendChild(nameSpan);
+      li.appendChild(metaSpan);
+      li.addEventListener('click', () => {
+        pathInput.value = s.name;
+        openFolder(s.folder);
+      });
+      list.appendChild(li);
+    });
+    section.classList.remove('hidden');
+  }
+
+  // Render on load and skip the server recent-folders fetch
+  _renderRecentSessions();
 })();

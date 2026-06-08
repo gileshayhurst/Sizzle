@@ -69,29 +69,10 @@
             <div class="recent-folders-label">Recent folders</div>
             <ul id="recent-folders-list" class="recent-folders-list"></ul>
           </div>
-          <!-- CLOUD MODE: upload zone (shown/hidden by app.js based on APP_MODE) -->
-          <div id="cloud-upload-form" class="hidden">
-            <h2>Upload videos</h2>
-            <p class="subtitle">Upload a folder or individual files to create a sizzle reel.</p>
-            <div id="upload-dropzone" class="upload-dropzone">
-              <div class="upload-icon">📹</div>
-              <div class="upload-text">Drop a folder or files here</div>
-              <div class="upload-subtext">Videos (.mp4 .mov .avi .mkv .webm) + optional .txt transcripts</div>
-              <div class="upload-btn-row">
-                <label class="btn-primary upload-label">
-                  📁 Upload folder
-                  <input id="folder-input" type="file" webkitdirectory multiple style="display:none">
-                </label>
-                <label class="btn-secondary upload-label">
-                  🎬 Upload files
-                  <input id="file-input" type="file" multiple accept=".mp4,.mov,.avi,.mkv,.webm,.txt" style="display:none">
-                </label>
-              </div>
-            </div>
-            <ul id="upload-file-list" class="upload-file-list"></ul>
-            <button id="btn-upload" class="btn-primary hidden">Upload &amp; Transcribe</button>
-            <div id="upload-error" class="error-msg hidden"></div>
-          </div>
+          <!-- Hidden inputs used by cloud mode (app.js wires these up) -->
+          <input id="cloud-folder-picker" type="file" webkitdirectory multiple style="display:none">
+          <input id="cloud-file-picker" type="file" multiple accept=".mp4,.mov,.avi,.mkv,.webm,.txt" style="display:none">
+          <div id="upload-error" class="error-msg hidden"></div>
         </div>
       </div>
     </div>

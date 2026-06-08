@@ -479,9 +479,11 @@ body {
   transition: border-color 0.2s, background 0.2s;
   margin-bottom: 16px;
 }
-.upload-dropzone.drag-over {
+.upload-dropzone.drag-over,
+.folder-input-row.drag-over {
   border-color: #e63946;
   background: rgba(230, 57, 70, 0.05);
+  border-radius: 6px;
 }
 .upload-icon { font-size: 48px; margin-bottom: 8px; }
 .upload-text { font-size: 1.1rem; font-weight: 600; margin-bottom: 4px; }
