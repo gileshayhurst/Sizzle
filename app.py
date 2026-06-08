@@ -307,6 +307,78 @@ def create_app(testing: bool = False) -> Flask:
             "files": saved_names,
         })
 
+    @app.post("/upload/prepare")
+    def upload_prepare():
+        """Cloud-mode: validate filenames and return presigned S3 PUT URLs.
+
+        The browser calls this first, uploads files directly to R2, then calls
+        /upload/commit. No video bytes pass through this server.
+
+        Request JSON: {"files": ["video1.mp4", "transcript1.txt", ...]}
+        Response JSON: {
+            "session_key": "sessions/<uuid>",
+            "folder": "sessions/<uuid>",
+            "uploads": [{"filename": "video1.mp4", "key": "sessions/<uuid>/video1.mp4", "url": "<presigned PUT URL>"}, ...]
+        }
+        """
+        if not storage.is_cloud():
+            return jsonify({"error": "This endpoint is only available in cloud mode"}), 400
+
+        body = request.get_json(silent=True) or {}
+        filenames = body.get("files", [])
+        if not filenames:
+            return jsonify({"error": "No files provided"}), 400
+
+        has_video = False
+        for name in filenames:
+            ext = Path(name).suffix.lower()
+            if ext not in _ALLOWED_UPLOAD_EXTENSIONS:
+                return jsonify({"error": f"Unsupported file type: {name}. Upload videos (.mp4 .mov .avi .mkv .webm) and/or transcripts (.txt)."}), 400
+            if ext in _VIDEO_EXTENSIONS:
+                has_video = True
+        if not has_video:
+            return jsonify({"error": "At least one video file is required."}), 400
+
+        session_key = storage.new_session_key()
+        uploads = []
+        for name in filenames:
+            safe_name = Path(name).name  # strip any path components
+            key = f"{session_key}/{safe_name}"
+            url = storage.presigned_put_url(key, expires=7200)  # 2hr window for large files
+            uploads.append({"filename": safe_name, "key": key, "url": url})
+
+        return jsonify({
+            "session_key": session_key,
+            "folder": session_key,
+            "uploads": uploads,
+        })
+
+    @app.post("/upload/commit")
+    def upload_commit():
+        """Cloud-mode: acknowledge that the browser finished uploading to R2.
+
+        Called after all presigned PUT uploads complete. Server just validates
+        the request and echoes back the session info — no file I/O needed here
+        since files are already in R2.
+
+        Request JSON: {"session_key": "sessions/<uuid>", "files": ["video1.mp4", ...]}
+        Response JSON: {"session_key": "sessions/<uuid>", "folder": "sessions/<uuid>", "files": [...]}
+        """
+        if not storage.is_cloud():
+            return jsonify({"error": "This endpoint is only available in cloud mode"}), 400
+
+        body = request.get_json(silent=True) or {}
+        session_key = body.get("session_key")
+        if not session_key:
+            return jsonify({"error": "session_key is required"}), 400
+
+        files = body.get("files", [])
+        return jsonify({
+            "session_key": session_key,
+            "folder": session_key,
+            "files": files,
+        })
+
     @app.post("/browse")
     def browse():
         path = _pick_directory()

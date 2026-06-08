@@ -126,3 +126,62 @@ def test_upload_cloud_mode_calls_storage_upload(tmp_path, monkeypatch):
     assert body["session_key"].startswith("sessions/")
     # upload_file must have been called with the correct S3 key
     assert any("video1.mp4" in k for k in uploaded_keys)
+
+
+# ── /upload/prepare ──────────────────────────────────────────────────────────
+
+def test_upload_prepare_returns_presigned_urls(client, monkeypatch):
+    monkeypatch.setenv("APP_MODE", "cloud")
+    with patch("storage.new_session_key", return_value="sessions/testsession"), \
+         patch("storage.presigned_put_url", side_effect=lambda key, expires=3600: f"https://r2.example.com/{key}"):
+        resp = client.post("/upload/prepare", json={
+            "files": ["clip1.mp4", "clip1.txt", "clip2.mov"]
+        })
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["session_key"] == "sessions/testsession"
+    assert data["folder"] == "sessions/testsession"
+    assert len(data["uploads"]) == 3
+    assert data["uploads"][0]["filename"] == "clip1.mp4"
+    assert "url" in data["uploads"][0]
+    assert "key" in data["uploads"][0]
+
+
+def test_upload_prepare_rejects_unsupported_extension(client, monkeypatch):
+    monkeypatch.setenv("APP_MODE", "cloud")
+    resp = client.post("/upload/prepare", json={"files": ["video.mp4", "readme.pdf"]})
+    assert resp.status_code == 400
+    assert "Unsupported" in resp.get_json()["error"]
+
+
+def test_upload_prepare_requires_at_least_one_video(client, monkeypatch):
+    monkeypatch.setenv("APP_MODE", "cloud")
+    resp = client.post("/upload/prepare", json={"files": ["transcript.txt"]})
+    assert resp.status_code == 400
+    assert "video" in resp.get_json()["error"].lower()
+
+
+def test_upload_prepare_requires_files_list(client, monkeypatch):
+    monkeypatch.setenv("APP_MODE", "cloud")
+    resp = client.post("/upload/prepare", json={})
+    assert resp.status_code == 400
+
+
+# ── /upload/commit ───────────────────────────────────────────────────────────
+
+def test_upload_commit_returns_folder(client, monkeypatch):
+    monkeypatch.setenv("APP_MODE", "cloud")
+    resp = client.post("/upload/commit", json={
+        "session_key": "sessions/testsession",
+        "files": ["clip1.mp4", "clip1.txt"]
+    })
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["folder"] == "sessions/testsession"
+    assert data["session_key"] == "sessions/testsession"
+
+
+def test_upload_commit_rejects_missing_session_key(client, monkeypatch):
+    monkeypatch.setenv("APP_MODE", "cloud")
+    resp = client.post("/upload/commit", json={"files": ["clip1.mp4"]})
+    assert resp.status_code == 400
