@@ -149,3 +149,17 @@ def presigned_url(key: str, expires: int = 3600) -> str:
         Params={"Bucket": _bucket(), "Key": key},
         ExpiresIn=expires,
     )
+
+
+def presigned_put_url(key: str, expires: int = 3600) -> str:
+    """Generate a presigned PUT URL so the browser can upload a file directly to R2/S3.
+
+    Raises RuntimeError when called in local mode — presigned URLs require S3.
+    """
+    if not is_cloud():
+        raise RuntimeError("presigned_put_url is only available in cloud mode (APP_MODE=cloud)")
+    return _s3().generate_presigned_url(
+        "put_object",
+        Params={"Bucket": _bucket(), "Key": key},
+        ExpiresIn=expires,
+    )

@@ -133,3 +133,29 @@ def test_presigned_url_raises_in_local_mode(monkeypatch, tmp_path):
     s = reload_storage(monkeypatch, tmp_path)
     with pytest.raises(RuntimeError, match="cloud mode"):
         s.presigned_url("sessions/abc/video.mp4")
+
+
+# ── presigned_put_url (cloud backend) ──────────────────────────────────────────
+
+def test_presigned_put_url_raises_in_local_mode(monkeypatch, tmp_path):
+    s = reload_storage(monkeypatch, tmp_path)
+    with pytest.raises(RuntimeError, match="only available in cloud mode"):
+        s.presigned_put_url("sessions/abc/video.mp4")
+
+
+def test_presigned_put_url_calls_s3_in_cloud_mode(monkeypatch, tmp_path):
+    from unittest.mock import MagicMock, patch
+    s = reload_storage(monkeypatch, tmp_path, mode="cloud")
+    monkeypatch.setenv("S3_BUCKET", "test-bucket")
+    monkeypatch.setenv("S3_ACCESS_KEY", "key")
+    monkeypatch.setenv("S3_SECRET_KEY", "secret")
+    mock_client = MagicMock()
+    mock_client.generate_presigned_url.return_value = "https://r2.example.com/put-url"
+    with patch("storage._s3", return_value=mock_client):
+        url = s.presigned_put_url("sessions/abc/video.mp4", expires=300)
+    mock_client.generate_presigned_url.assert_called_once_with(
+        "put_object",
+        Params={"Bucket": "test-bucket", "Key": "sessions/abc/video.mp4"},
+        ExpiresIn=300,
+    )
+    assert url == "https://r2.example.com/put-url"
