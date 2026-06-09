@@ -185,7 +185,7 @@ def get_video_dimensions(video_path: str) -> tuple:
 
 
 def make_title_card(
-    lines: list, width: int, height: int, output_path: str, duration: float = 5.0
+    lines: list, width: int, height: int, output_path: str, duration: float = 5.0, fade_in_secs: float = 0.0
 ) -> None:
     """Generate a black title card with white centred text, encoded H.264/AAC.
 
@@ -239,18 +239,25 @@ def make_title_card(
             f":fontcolor=white:fontsize={fontsize}:x=(w-text_w)/2:y={y_expr}"
         )
 
+    if fade_in_secs > 0.0:
+        filters.append(f"fade=t=in:st=0:d={fade_in_secs}")
+
+    cmd = [
+        "ffmpeg", "-y",
+        "-f", "lavfi", "-i", f"color=black:size={width}x{height}:rate=30",
+        "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000",
+        "-vf", ",".join(filters),
+        "-map", "0:v", "-map", "1:a",   # explicit mapping ensures audio is always included
+        "-c:v", "libx264", "-preset", "ultrafast",
+        "-c:a", "aac",
+        "-t", str(duration),
+    ]
+    if fade_in_secs > 0.0:
+        cmd += ["-af", f"afade=t=in:st=0:d={fade_in_secs}"]
+    cmd.append(Path(output_path).name)
+
     result = subprocess.run(
-        [
-            "ffmpeg", "-y",
-            "-f", "lavfi", "-i", f"color=black:size={width}x{height}:rate=30",
-            "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000",
-            "-vf", ",".join(filters),
-            "-map", "0:v", "-map", "1:a",   # explicit mapping ensures audio is always included
-            "-c:v", "libx264", "-preset", "ultrafast",
-            "-c:a", "aac",
-            "-t", str(duration),
-            Path(output_path).name,  # relative output too (cwd=tmp_dir)
-        ],
+        cmd,
         check=False,
         capture_output=True,
         cwd=str(tmp_dir),  # all relative paths resolve here
@@ -367,7 +374,8 @@ def _run_generation(job_id: str, folder: str, mode: str,
                 continue
             try:
                 make_title_card(
-                    item["lines"], item["width"], item["height"], item["path"]
+                    item["lines"], item["width"], item["height"], item["path"],
+                    fade_in_secs=2.0,
                 )
                 item["ok"] = True
             except Exception as exc:
@@ -395,6 +403,7 @@ def _run_generation(job_id: str, folder: str, mode: str,
                     item["start_sec"],
                     item["end_sec"],
                     item["path"],
+                    2.0,  # fade_out_secs
                 )
 
             for item in plan:

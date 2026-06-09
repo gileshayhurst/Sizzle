@@ -700,7 +700,7 @@ def test_failed_clip_rolls_back_title_card(client, tmp_path):
 
     extract_call_count = [0]
 
-    def fail_second_clip(video_path, start, end, out):
+    def fail_second_clip(video_path, start, end, out, fade_out_secs=0.0):
         extract_call_count[0] += 1
         if extract_call_count[0] == 2:
             raise RuntimeError("simulated encode error")
@@ -792,11 +792,11 @@ def test_parallel_extraction_all_succeed(client, tmp_path):
 
     stitched = []
 
-    def fake_extract(video_path, start, end, output_path):
+    def fake_extract(video_path, start, end, output_path, fade_out_secs=0.0):
         from pathlib import Path
         Path(output_path).write_bytes(b"clip")
 
-    def fake_title(lines, w, h, out, duration=5.0):
+    def fake_title(lines, w, h, out, duration=5.0, fade_in_secs=0.0):
         from pathlib import Path
         Path(out).write_bytes(b"title")
 
@@ -838,13 +838,13 @@ def test_parallel_extraction_failed_clip_skipped(client, tmp_path):
 
     stitched = []
 
-    def fake_extract(video_path, start, end, output_path):
+    def fake_extract(video_path, start, end, output_path, fade_out_secs=0.0):
         from pathlib import Path
         if "v1" in video_path:
             raise RuntimeError("extraction failed")
         Path(output_path).write_bytes(b"clip")
 
-    def fake_title(lines, w, h, out, duration=5.0):
+    def fake_title(lines, w, h, out, duration=5.0, fade_in_secs=0.0):
         from pathlib import Path
         Path(out).write_bytes(b"title")
 
@@ -882,10 +882,10 @@ def test_parallel_extraction_all_fail_returns_error(client, tmp_path):
     (tmp_path / "v1.mp4").touch()
     (tmp_path / "v1.txt").write_text("[0:01] Speaker: hi\n[0:10] Speaker: bye\n", encoding="utf-8")
 
-    def fake_extract(video_path, start, end, output_path):
+    def fake_extract(video_path, start, end, output_path, fade_out_secs=0.0):
         raise RuntimeError("always fails")
 
-    def fake_title(lines, w, h, out, duration=5.0):
+    def fake_title(lines, w, h, out, duration=5.0, fade_in_secs=0.0):
         from pathlib import Path
         Path(out).write_bytes(b"title")
 
@@ -920,7 +920,7 @@ def test_duration_seconds_excludes_rolled_back_title_card(client, tmp_path):
 
     extract_call_count = [0]
 
-    def fail_second_clip(video_path, start, end, out):
+    def fail_second_clip(video_path, start, end, out, fade_out_secs=0.0):
         extract_call_count[0] += 1
         if extract_call_count[0] == 2:
             raise RuntimeError("simulated encode error")

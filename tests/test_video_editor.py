@@ -1,4 +1,6 @@
 import pytest
+import os
+import tempfile
 from unittest.mock import MagicMock, patch
 from subprocess import CalledProcessError
 from video_editor import (
@@ -133,3 +135,70 @@ def test_stitch_clips_propagates_ffmpeg_error(tmp_path):
     with patch("video_editor.subprocess.run", side_effect=mock_run):
         with pytest.raises(CalledProcessError):
             stitch_clips(["/tmp/clip_0.mp4"], output)
+
+
+def _captured_cmd(mock_run):
+    """Return the ffmpeg argv list from the first subprocess.run call."""
+    return mock_run.call_args[0][0]
+
+
+def test_extract_clip_no_fade_has_no_vf():
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = type("R", (), {"returncode": 0})()
+        extract_clip("input.mp4", 0.0, 10.0, "out.mp4")
+    cmd = _captured_cmd(mock_run)
+    assert "-vf" not in cmd
+
+
+def test_extract_clip_fade_out_adds_vf_and_af():
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = type("R", (), {"returncode": 0})()
+        extract_clip("input.mp4", 0.0, 10.0, "out.mp4", fade_out_secs=2.0)
+    cmd = _captured_cmd(mock_run)
+    assert "-vf" in cmd
+    vf_val = cmd[cmd.index("-vf") + 1]
+    assert "fade=t=out" in vf_val
+    assert "st=8.0" in vf_val   # 10.0 - 2.0
+    assert "d=2.0" in vf_val
+    assert "-af" in cmd
+    af_val = cmd[cmd.index("-af") + 1]
+    assert "afade=t=out" in af_val
+    assert "st=8.0" in af_val
+    assert "d=2.0" in af_val
+
+
+def test_extract_clip_fade_clamped_for_short_clip():
+    """Clip shorter than fade duration: fade_start clamped to 0."""
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = type("R", (), {"returncode": 0})()
+        extract_clip("input.mp4", 5.0, 6.0, "out.mp4", fade_out_secs=2.0)
+    cmd = _captured_cmd(mock_run)
+    vf_val = cmd[cmd.index("-vf") + 1]
+    # duration = 1.0, fade_start = max(0, 1.0-2.0) = 0.0
+    assert "st=0.0" in vf_val
+
+
+def test_make_title_card_no_fade_no_afade():
+    from generator_app import make_title_card
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0)
+        with tempfile.TemporaryDirectory() as tmp:
+            make_title_card(["Test"], 1920, 1080, os.path.join(tmp, "card.mp4"))
+    cmd = _captured_cmd(mock_run)
+    vf_val = cmd[cmd.index("-vf") + 1]
+    assert "fade" not in vf_val
+    assert "-af" not in cmd
+
+
+def test_make_title_card_fade_in_appends_filter_and_afade():
+    from generator_app import make_title_card
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0)
+        with tempfile.TemporaryDirectory() as tmp:
+            make_title_card(["Test"], 1920, 1080, os.path.join(tmp, "card.mp4"), fade_in_secs=2.0)
+    cmd = _captured_cmd(mock_run)
+    vf_val = cmd[cmd.index("-vf") + 1]
+    assert "fade=t=in:st=0:d=2.0" in vf_val
+    assert "-af" in cmd
+    af_val = cmd[cmd.index("-af") + 1]
+    assert "afade=t=in:st=0:d=2.0" in af_val

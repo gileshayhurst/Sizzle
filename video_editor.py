@@ -20,26 +20,34 @@ def parse_timestamp_to_seconds(ts: str) -> float:
     return float(int(parts[0]) * 60 + int(parts[1]))
 
 
-def extract_clip(video_path: str, start_sec: float, end_sec: float, output_path: str) -> None:
+def extract_clip(video_path: str, start_sec: float, end_sec: float, output_path: str, fade_out_secs: float = 0.0) -> None:
     # Re-encode (never stream-copy) so every clip starts on an I-frame.
     # -ss before -i: fast input seek. -t duration (not -to) is relative to the
     # seek point. -avoid_negative_ts make_zero zeroes each clip's timestamps so
     # the concat demuxer sees clean zero-based PTS on every clip — prevents AV drift.
+    duration = end_sec - start_sec
+    cmd = [
+        "ffmpeg", "-y",
+        "-ss", str(start_sec),
+        "-i", video_path,
+        "-t", str(duration),
+        "-avoid_negative_ts", "make_zero",
+        "-c:v", "libx264",
+        "-preset", "ultrafast",
+        "-r", "30",       # normalise to 30 fps — must match title cards so the
+        "-c:a", "aac",    # concat demuxer sees a single consistent video timebase
+        "-ar", "48000",
+        "-ac", "2",
+    ]
+    if fade_out_secs > 0.0:
+        fade_start = max(0.0, duration - fade_out_secs)
+        cmd += [
+            "-vf", f"fade=t=out:st={fade_start}:d={fade_out_secs}",
+            "-af", f"afade=t=out:st={fade_start}:d={fade_out_secs}",
+        ]
+    cmd.append(output_path)
     subprocess.run(
-        [
-            "ffmpeg", "-y",
-            "-ss", str(start_sec),
-            "-i", video_path,
-            "-t", str(end_sec - start_sec),
-            "-avoid_negative_ts", "make_zero",
-            "-c:v", "libx264",
-            "-preset", "ultrafast",
-            "-r", "30",       # normalise to 30 fps — must match title cards so the
-            "-c:a", "aac",    # concat demuxer sees a single consistent video timebase
-            "-ar", "48000",
-            "-ac", "2",
-            output_path,
-        ],
+        cmd,
         check=True,
         capture_output=True,
     )
