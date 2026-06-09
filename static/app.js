@@ -832,7 +832,7 @@ function _renderCardBody(body, card, entry, dateStr) {
   // Meta
   const meta = document.createElement('div');
   meta.className = 'reel-meta';
-  meta.textContent = `${escAttr(dateStr)} · ${entry.clip_count || 0} clips · ${escAttr(entry.source_folder || '')}`;
+  meta.textContent = `${dateStr} · ${entry.clip_count || 0} clips · ${entry.source_folder || ''}`;
   body.appendChild(meta);
 
   // Prompt
@@ -911,6 +911,8 @@ function _showDeleteConfirm(body, card, entry, dateStr, actions) {
   actions.appendChild(cancelBtn);
 
   async function doDelete(deleteFile) {
+    libOnly.disabled = true;
+    withFile.disabled = true;
     const url = `${GENERATOR_URL}/library/${entry.id}` + (deleteFile ? '?delete_file=true' : '');
     await fetch(url, { method: 'DELETE' });
     card.classList.add('fading');
@@ -989,6 +991,10 @@ function _showEditForm(body, card, entry, dateStr) {
   nameInput.addEventListener('keydown', e => {
     if (e.key === 'Escape') loadLibrary();
     if (e.key === 'Enter') saveBtn.click();
+  });
+
+  notesInput.addEventListener('keydown', e => {
+    if (e.key === 'Escape') loadLibrary();
   });
 }
 
