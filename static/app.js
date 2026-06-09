@@ -625,7 +625,12 @@ function watchGeneration(jobId) {
   _genWs = new WebSocket(wsUrl);
 
   _genWs.onmessage = (e) => {
-    const msg = JSON.parse(e.data);
+    let msg;
+    try {
+      msg = JSON.parse(e.data);
+    } catch {
+      return; // ignore malformed frames
+    }
     if (msg.type === 'log') {
       appendLog('gen-log', msg.message);
     } else if (msg.type === 'progress') {
@@ -651,6 +656,14 @@ function watchGeneration(jobId) {
     _genWs = null;
     appendLog('gen-log', '✗ Connection error — generation may still be running');
     $('topbar-controls').classList.remove('hidden');
+  };
+
+  _genWs.onclose = () => {
+    if (_genWs !== null) {
+      _genWs = null;
+      appendLog('gen-log', '✗ Connection closed unexpectedly — generation may still be running');
+      $('topbar-controls').classList.remove('hidden');
+    }
   };
 
   $('btn-cancel-gen').onclick = async () => {
