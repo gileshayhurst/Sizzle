@@ -766,6 +766,7 @@ def test_parallel_extraction_all_fail_returns_error(client, tmp_path):
 
     with patch("generator_app.extract_clip", side_effect=fake_extract), \
          patch("generator_app.make_title_card", side_effect=fake_title), \
+         patch("generator_app.stitch_clips"), \
          patch("generator_app._library_add"), \
          patch("generator_app.get_video_dimensions", return_value=(1920, 1080)):
         resp = client.post("/generate", json={

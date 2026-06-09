@@ -359,6 +359,9 @@ def _run_generation(job_id: str, folder: str, mode: str,
         for item in plan:
             if item["type"] != "title":
                 continue
+            if job["cancel"].is_set():
+                item["error"] = "cancelled"
+                continue
             try:
                 make_title_card(
                     item["lines"], item["width"], item["height"], item["path"]
@@ -404,7 +407,8 @@ def _run_generation(job_id: str, folder: str, mode: str,
                     item["error"] = str(exc)
                     _append_log(
                         job_id,
-                        f"✗ [{item['start_sec']:.1f}-{item['end_sec']:.1f}]"
+                        f"✗ {os.path.basename(item['video_path'])}"
+                        f" [{item['start_sec']:.1f}-{item['end_sec']:.1f}]"
                         f" extraction failed: {exc}",
                     )
 
