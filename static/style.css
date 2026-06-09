@@ -494,3 +494,100 @@ body {
 .btn-secondary:hover { border-color: #aaa; color: #fff; }
 .upload-file-list { list-style: none; padding: 0; margin: 0 0 16px; }
 .upload-file-list li { padding: 4px 0; font-size: 0.9rem; color: #ccc; }
+
+
+/* ─── Library card edit/delete UI ────────────────────────────────────────── */
+.reel-card-actions-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 6px;
+}
+.reel-btn-icon {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 13px;
+  padding: 2px 5px;
+  border-radius: 4px;
+  color: #8898aa;
+  line-height: 1;
+  transition: background 0.15s, color 0.15s;
+}
+.reel-btn-icon:hover { background: #232d3a; color: #c8daf0; }
+
+.reel-delete-confirm {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+}
+.reel-delete-confirm-label {
+  font-size: 11px;
+  color: #c87070;
+}
+.reel-btn.confirm-lib,
+.reel-btn.confirm-file {
+  background: #3a1a1a;
+  border-color: #7a3535;
+  color: #e08080;
+}
+.reel-btn.confirm-lib:hover,
+.reel-btn.confirm-file:hover {
+  background: #5a2525;
+}
+.reel-btn.cancel-del {
+  color: #8898aa;
+  background: none;
+  border-color: #2a3a4a;
+}
+
+.reel-edit-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 4px 0;
+}
+.reel-edit-name {
+  background: #151f29;
+  border: 1px solid #2a3a4a;
+  border-radius: 4px;
+  color: #c8daf0;
+  font-size: 12px;
+  padding: 4px 8px;
+  width: 100%;
+  box-sizing: border-box;
+}
+.reel-edit-notes {
+  background: #151f29;
+  border: 1px solid #2a3a4a;
+  border-radius: 4px;
+  color: #8898aa;
+  font-size: 11px;
+  padding: 4px 8px;
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  min-height: 48px;
+}
+.reel-edit-btns {
+  display: flex;
+  gap: 6px;
+}
+
+.reel-notes {
+  font-size: 11px;
+  color: #6a7f93;
+  margin-top: 3px;
+  font-style: italic;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+@keyframes fadeOutCard {
+  to { opacity: 0; transform: scale(0.97); }
+}
+.reel-card.fading {
+  animation: fadeOutCard 0.3s ease forwards;
+}

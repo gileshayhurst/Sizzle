@@ -771,49 +771,224 @@ function renderLibrary(entries) {
   entries.forEach(entry => {
     const card = document.createElement('div');
     card.className = 'reel-card';
+    card.dataset.id = entry.id;
 
     const mins = Math.floor((entry.duration_seconds || 0) / 60);
     const secs = (entry.duration_seconds || 0) % 60;
-    const durStr = `${mins}:${String(secs).padStart(2,'0')}`;
+    const durStr = `${mins}:${String(secs).padStart(2, '0')}`;
     const dateStr = entry.created_at ? entry.created_at.split('T')[0] : '';
 
-    card.innerHTML = `
-      <div class="reel-thumb" data-id="${entry.id}">
-        <div class="reel-play-icon">▶</div>
-        <div class="reel-duration">${durStr}</div>
-      </div>
-      <div class="reel-body">
-        <div class="reel-name" title="${escAttr(entry.filename)}">${escAttr(entry.filename)}</div>
-        <div class="reel-meta">${escAttr(dateStr)} · ${entry.clip_count || 0} clips · ${escAttr(entry.source_folder || '')}</div>
-        <div class="reel-prompt" title="${escAttr(entry.prompt)}">"${escAttr(entry.prompt)}"</div>
-        <div class="reel-actions">
-          <button class="reel-btn play" data-id="${entry.id}">▶ Play</button>
-          <button class="reel-btn show" data-id="${entry.id}" data-path="${escAttr(entry.path)}">📂 Show</button>
-          <button class="reel-btn delete" data-id="${entry.id}">🗑</button>
-        </div>
-      </div>`;
+    // Thumbnail
+    const thumb = document.createElement('div');
+    thumb.className = 'reel-thumb';
+    thumb.dataset.id = entry.id;
+    thumb.innerHTML = `<div class="reel-play-icon">▶</div><div class="reel-duration">${durStr}</div>`;
+    thumb.addEventListener('click', () => openLibraryPlayer(entry));
 
-    // Thumb click = play
-    card.querySelector('.reel-thumb').addEventListener('click', () => openLibraryPlayer(entry));
-    card.querySelector('.reel-btn.play').addEventListener('click', () => openLibraryPlayer(entry));
+    // Body
+    const body = document.createElement('div');
+    body.className = 'reel-body';
+    _renderCardBody(body, card, entry, dateStr);
 
-    // Show in explorer
-    card.querySelector('.reel-btn.show').addEventListener('click', async () => {
-      const folder = entry.path.replace(/[\\/][^\\/]+$/, '');
-      await fetch(GENERATOR_URL + '/open-folder', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ folder }),
-      });
-    });
-
-    // Delete
-    card.querySelector('.reel-btn.delete').addEventListener('click', async () => {
-      await fetch(`${GENERATOR_URL}/library/${entry.id}`, { method: 'DELETE' });
-      loadLibrary();
-    });
-
+    card.appendChild(thumb);
+    card.appendChild(body);
     grid.appendChild(card);
+  });
+}
+
+function _renderCardBody(body, card, entry, dateStr) {
+  body.innerHTML = '';
+
+  const displayName = entry.title || entry.filename;
+
+  // Name row (name + edit + delete icons)
+  const nameRow = document.createElement('div');
+  nameRow.style.cssText = 'display:flex;align-items:flex-start;justify-content:space-between;gap:4px';
+
+  const nameEl = document.createElement('div');
+  nameEl.className = 'reel-name';
+  nameEl.title = entry.filename;
+  nameEl.textContent = displayName;
+
+  const iconRow = document.createElement('div');
+  iconRow.style.cssText = 'display:flex;gap:2px;flex-shrink:0';
+
+  const editBtn = document.createElement('button');
+  editBtn.className = 'reel-btn-icon';
+  editBtn.title = 'Edit';
+  editBtn.textContent = '✏';
+
+  const deleteBtn = document.createElement('button');
+  deleteBtn.className = 'reel-btn-icon';
+  deleteBtn.title = 'Delete';
+  deleteBtn.textContent = '🗑';
+
+  iconRow.appendChild(editBtn);
+  iconRow.appendChild(deleteBtn);
+  nameRow.appendChild(nameEl);
+  nameRow.appendChild(iconRow);
+  body.appendChild(nameRow);
+
+  // Meta
+  const meta = document.createElement('div');
+  meta.className = 'reel-meta';
+  meta.textContent = `${escAttr(dateStr)} · ${entry.clip_count || 0} clips · ${escAttr(entry.source_folder || '')}`;
+  body.appendChild(meta);
+
+  // Prompt
+  const prompt = document.createElement('div');
+  prompt.className = 'reel-prompt';
+  prompt.title = entry.prompt || '';
+  prompt.textContent = `"${entry.prompt || ''}"`;
+  body.appendChild(prompt);
+
+  // Notes (shown only if present)
+  if (entry.notes) {
+    const notes = document.createElement('div');
+    notes.className = 'reel-notes';
+    notes.textContent = entry.notes;
+    body.appendChild(notes);
+  }
+
+  // Action buttons
+  const actions = document.createElement('div');
+  actions.className = 'reel-actions';
+
+  const playBtn = document.createElement('button');
+  playBtn.className = 'reel-btn play';
+  playBtn.dataset.id = entry.id;
+  playBtn.textContent = '▶ Play';
+
+  const showBtn = document.createElement('button');
+  showBtn.className = 'reel-btn show';
+  showBtn.dataset.id = entry.id;
+  showBtn.dataset.path = entry.path || '';
+  showBtn.textContent = '📂 Show';
+
+  actions.appendChild(playBtn);
+  actions.appendChild(showBtn);
+  body.appendChild(actions);
+
+  // Event listeners
+  playBtn.addEventListener('click', () => openLibraryPlayer(entry));
+
+  showBtn.addEventListener('click', async () => {
+    const folder = (entry.path || '').replace(/[\\/][^\\/]+$/, '');
+    await fetch(GENERATOR_URL + '/open-folder', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ folder }),
+    });
+  });
+
+  deleteBtn.addEventListener('click', () => _showDeleteConfirm(body, card, entry, dateStr, actions));
+
+  editBtn.addEventListener('click', () => _showEditForm(body, card, entry, dateStr));
+}
+
+function _showDeleteConfirm(body, card, entry, dateStr, actions) {
+  actions.innerHTML = '';
+
+  const label = document.createElement('span');
+  label.className = 'reel-delete-confirm-label';
+  label.textContent = 'Remove?';
+
+  const libOnly = document.createElement('button');
+  libOnly.className = 'reel-btn confirm-lib';
+  libOnly.textContent = 'Library only';
+
+  const withFile = document.createElement('button');
+  withFile.className = 'reel-btn confirm-file';
+  withFile.textContent = 'Also delete file';
+
+  const cancelBtn = document.createElement('button');
+  cancelBtn.className = 'reel-btn cancel-del';
+  cancelBtn.textContent = 'Cancel';
+
+  actions.appendChild(label);
+  actions.appendChild(libOnly);
+  actions.appendChild(withFile);
+  actions.appendChild(cancelBtn);
+
+  async function doDelete(deleteFile) {
+    const url = `${GENERATOR_URL}/library/${entry.id}` + (deleteFile ? '?delete_file=true' : '');
+    await fetch(url, { method: 'DELETE' });
+    card.classList.add('fading');
+    setTimeout(() => {
+      card.remove();
+      const remaining = document.querySelectorAll('.reel-card').length;
+      $('library-count').textContent = `Generated Reels (${remaining})`;
+      if (remaining === 0) {
+        const grid = $('library-grid');
+        const empty = document.createElement('div');
+        empty.className = 'library-empty';
+        empty.textContent = 'No reels generated yet.';
+        grid.appendChild(empty);
+      }
+    }, 300);
+  }
+
+  libOnly.addEventListener('click', () => doDelete(false));
+  withFile.addEventListener('click', () => doDelete(true));
+  cancelBtn.addEventListener('click', () => loadLibrary());
+}
+
+function _showEditForm(body, card, entry, dateStr) {
+  body.innerHTML = '';
+
+  const form = document.createElement('div');
+  form.className = 'reel-edit-form';
+
+  const nameInput = document.createElement('input');
+  nameInput.type = 'text';
+  nameInput.className = 'reel-edit-name';
+  nameInput.value = entry.title || entry.filename;
+  nameInput.placeholder = 'Display name';
+
+  const notesInput = document.createElement('textarea');
+  notesInput.className = 'reel-edit-notes';
+  notesInput.value = entry.notes || '';
+  notesInput.placeholder = 'Notes…';
+
+  const btns = document.createElement('div');
+  btns.className = 'reel-edit-btns';
+
+  const saveBtn = document.createElement('button');
+  saveBtn.className = 'reel-btn';
+  saveBtn.textContent = 'Save';
+
+  const cancelBtn = document.createElement('button');
+  cancelBtn.className = 'reel-btn';
+  cancelBtn.textContent = 'Cancel';
+
+  btns.appendChild(saveBtn);
+  btns.appendChild(cancelBtn);
+  form.appendChild(nameInput);
+  form.appendChild(notesInput);
+  form.appendChild(btns);
+  body.appendChild(form);
+
+  nameInput.focus();
+  nameInput.select();
+
+  saveBtn.addEventListener('click', async () => {
+    const newTitle = nameInput.value.trim() || entry.filename;
+    const newNotes = notesInput.value;
+    const resp = await fetch(`${GENERATOR_URL}/library/${entry.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: newTitle, notes: newNotes }),
+    });
+    if (resp.ok) {
+      loadLibrary();
+    }
+  });
+
+  cancelBtn.addEventListener('click', () => loadLibrary());
+
+  nameInput.addEventListener('keydown', e => {
+    if (e.key === 'Escape') loadLibrary();
+    if (e.key === 'Enter') saveBtn.click();
   });
 }
 
@@ -824,8 +999,9 @@ function openLibraryPlayer(entry) {
   const src = entry.play_url || `${GENERATOR_URL}/library-video/${entry.id}`;
   $('library-source').src = src;
   $('library-video').load();
+  const displayName = entry.title || entry.filename;
   $('library-player-meta').textContent =
-    `"${entry.prompt}" — ${entry.source_folder}`;
+    `${displayName} — "${entry.prompt}"`;
   $('library-player-overlay').classList.remove('hidden');
 }
 
