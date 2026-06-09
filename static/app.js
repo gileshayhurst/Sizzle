@@ -38,6 +38,17 @@ function _saveSelections() {
   }
 }
 
+function _clearSelections() {
+  // Remove the persisted payload so a page reload starts empty.
+  if (state.folder) {
+    try { localStorage.removeItem('sizzle_sel_' + state.folder); } catch (_) {}
+  }
+  // Reset in-memory Sets so the workspace renders with nothing selected
+  // if the user navigates back without reloading.
+  for (const filename of Object.keys(state.checked))     state.checked[filename]     = new Set();
+  for (const filename of Object.keys(state.highlighted)) state.highlighted[filename] = new Set();
+}
+
 // ─── DOM refs ─────────────────────────────────────────────────────────────────
 const $ = id => document.getElementById(id);
 
@@ -694,6 +705,7 @@ function watchGeneration(jobId) {
       if (msg.status === 'done') {
         $('gen-bar').style.width = '100%';
         state.resultJobId = jobId;
+        _clearSelections();
         showResult(msg.result);
       } else if (msg.status === 'error') {
         appendLog('gen-log', `✗ Error: ${msg.error}`);
