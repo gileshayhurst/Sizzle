@@ -246,7 +246,7 @@ def make_title_card(
             "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000",
             "-vf", ",".join(filters),
             "-map", "0:v", "-map", "1:a",   # explicit mapping ensures audio is always included
-            "-c:v", "libx264", "-preset", "fast",
+            "-c:v", "libx264", "-preset", "ultrafast",
             "-c:a", "aac",
             "-t", str(duration),
             Path(output_path).name,  # relative output too (cwd=tmp_dir)
