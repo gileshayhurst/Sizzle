@@ -453,7 +453,9 @@ def _run_generation(job_id: str, folder: str, mode: str,
         "segment_starts": segment_starts,
         "created_at": datetime.now().isoformat(timespec="seconds"),
     }
-    if storage.is_cloud() and session_key:
+    if storage.is_cloud() and session_key and reel_download_url:
+        # Only record the S3 key when the upload actually succeeded; otherwise
+        # the library endpoint would redirect to a non-existent R2 object.
         library_entry["reel_s3_key"] = f"{session_key}/{output_filename}"
     _library_add(library_entry)
 
@@ -481,9 +483,13 @@ def create_app(testing: bool = False) -> Flask:
         if storage.is_cloud():
             if not session_key:
                 return jsonify({"error": "session_key required in cloud mode"}), 400
-            # Download all session files from S3 into a local temp dir for ffmpeg
+            # Download all session files from S3 into a local temp dir for ffmpeg.
+            # Do NOT set _tmp_dir_to_cleanup in cloud mode — we keep the temp dir
+            # alive so /video/<job_id> and /library-video/<id> can serve the
+            # generated reel directly without relying on R2 (which may have failed
+            # to upload). The Render container restart cleans /tmp periodically.
             tmp_session_dir = tempfile.mkdtemp(prefix="sizzle_gen_")
-            _tmp_dir_to_cleanup = tmp_session_dir
+            _tmp_dir_to_cleanup = None  # intentionally no immediate cleanup
             for key in storage.list_keys(session_key + "/"):
                 filename = Path(key).name
                 storage.download_file(key, os.path.join(tmp_session_dir, filename))
@@ -564,12 +570,15 @@ def create_app(testing: bool = False) -> Flask:
         if not job or not job.get("result"):
             return jsonify({"error": "not found"}), 404
         result = job["result"]
+        # Prefer the local temp file — it exists as long as the container hasn't
+        # restarted and is the most reliable path (no R2 round-trip required).
+        path = Path(result["path"])
+        if path.is_file():
+            return send_file(str(path), conditional=True)
+        # Fallback: redirect to presigned R2 URL (only available when upload succeeded)
         if storage.is_cloud() and result.get("download_url"):
             return redirect(result["download_url"])
-        path = Path(result["path"])
-        if not path.is_file():
-            return jsonify({"error": "file not found on disk"}), 404
-        return send_file(str(path), conditional=True)
+        return jsonify({"error": "file not found on disk"}), 404
 
     @app.get("/library-video/<entry_id>")
     def serve_library_video(entry_id):
@@ -577,13 +586,15 @@ def create_app(testing: bool = False) -> Flask:
         entry = next((e for e in entries if e["id"] == entry_id), None)
         if not entry:
             return jsonify({"error": "not found"}), 404
-        if storage.is_cloud() and entry.get("reel_s3_key"):
-            # Re-sign on demand so the URL never expires
-            return redirect(storage.presigned_url(entry["reel_s3_key"]))
+        # Local file first — works as long as the generator container hasn't restarted.
         path = Path(entry["path"])
-        if not path.is_file():
-            return jsonify({"error": "file not found on disk"}), 404
-        return send_file(str(path), conditional=True)
+        if path.is_file():
+            return send_file(str(path), conditional=True)
+        # Fallback: R2 redirect (only when upload succeeded and key is recorded)
+        if storage.is_cloud() and entry.get("reel_s3_key"):
+            # Re-sign on demand so the URL is always fresh
+            return redirect(storage.presigned_url(entry["reel_s3_key"]))
+        return jsonify({"error": "file not found on disk"}), 404
 
     @app.get("/library")
     def get_library():

@@ -662,12 +662,10 @@ function showResult(result) {
 
   state.resultSegmentStarts = result.segment_starts || [];
 
-  // In cloud mode use the presigned download URL directly — the video element
-  // doesn't need CORS to load from R2, and skipping the generator redirect
-  // eliminates the cross-origin redirect chain that can silently fail.
-  const src = (APP_MODE === 'cloud' && result.download_url)
-    ? result.download_url
-    : `${GENERATOR_URL}/video/${state.resultJobId}`;
+  // Always serve through the generator endpoint — it serves directly from the
+  // local temp file (kept alive until container restart) so playback works
+  // even when the R2 upload failed or is slow.
+  const src = `${GENERATOR_URL}/video/${state.resultJobId}`;
   $('result-source').src = src;
   $('result-video').load();
 
