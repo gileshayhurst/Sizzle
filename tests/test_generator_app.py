@@ -553,11 +553,10 @@ def test_generation_result_includes_segment_starts(client, tmp_path):
     assert "segment_starts" in result
     assert isinstance(result["segment_starts"], list)
     assert len(result["segment_starts"]) >= 1
-    # segment_starts must point to the CLIP CONTENT start, not the title card.
-    # With a 5-second title card first, the first segment_start must be 5.0
-    # so that Prev/Next navigation lands on the actual content, not the black card.
-    assert result["segment_starts"][0] == 5.0, (
-        f"segment_starts[0] should be 5.0 (clip content start, after title card) "
+    # segment_starts must point to the TITLE CARD start so Prev/Next navigation
+    # lands at the beginning of the transition screen.  First card starts at t=0.
+    assert result["segment_starts"][0] == 0.0, (
+        f"segment_starts[0] should be 0.0 (title card start) "
         f"but got {result['segment_starts'][0]}"
     )
 
@@ -676,9 +675,9 @@ def test_card_failure_skips_clip_extraction_and_segment(client, tmp_path):
         "segment 1 should have been skipped when its card failed"
     )
 
-    # segment_starts must have exactly 1 entry at t=5.0 (clip content starts after
-    # the 5-second title card; failed card left no stale marker)
-    assert result["segment_starts"] == [5.0], (
+    # segment_starts must have exactly 1 entry at t=0.0 (title card start;
+    # failed card left no stale marker)
+    assert result["segment_starts"] == [0.0], (
         f"segment_starts={result['segment_starts']}; "
         "failed card should not leave a stale marker"
     )

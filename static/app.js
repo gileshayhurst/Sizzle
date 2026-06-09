@@ -86,12 +86,19 @@ $('folder-path-input').addEventListener('keydown', e => {
 
 async function openFolder(folder) {
   $('folder-error').classList.add('hidden');
-  const resp = await fetch('/load-folder', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ folder }),
-  });
-  const data = await resp.json();
+  let resp, data;
+  try {
+    resp = await fetch('/load-folder', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ folder }),
+    });
+    data = await resp.json();
+  } catch (err) {
+    $('folder-error').textContent = 'Could not open folder — try uploading your files again.';
+    $('folder-error').classList.remove('hidden');
+    return;
+  }
   if (!resp.ok) {
     $('folder-error').textContent = data.error || 'Failed to open folder';
     $('folder-error').classList.remove('hidden');

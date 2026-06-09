@@ -436,11 +436,10 @@ def _run_generation(job_id: str, folder: str, mode: str,
             if not title_item["ok"] or not clip_item["ok"]:
                 continue   # errors already logged in Phase 2
 
+            segment_starts.append(cumulative_time)  # points to title card start
             clip_paths.append(title_item["path"])
             cumulative_time += TITLE_CARD_DURATION
             title_card_count += 1
-
-            segment_starts.append(cumulative_time)  # points to clip content, not title card
             clip_paths.append(clip_item["path"])
             clip_durations.append(clip_item["end_sec"] - clip_item["start_sec"])
             cumulative_time += clip_item["end_sec"] - clip_item["start_sec"]
