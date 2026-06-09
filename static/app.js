@@ -16,6 +16,8 @@ const state = {
   librarySegmentStarts: [],
 };
 
+let _genWs = null;  // active generation WebSocket
+
 // ─── DOM refs ─────────────────────────────────────────────────────────────────
 const $ = id => document.getElementById(id);
 
@@ -615,42 +617,48 @@ async function submitGenerate(mode, selections) {
   }
 
   state.currentJobId = job_id;
-  pollGeneration(job_id);
+  watchGeneration(job_id);
 }
 
-function pollGeneration(jobId) {
-  let lastLogLen = 0;
+function watchGeneration(jobId) {
+  const wsUrl = GENERATOR_URL.replace(/^http/, 'ws') + `/ws/job/${jobId}`;
+  _genWs = new WebSocket(wsUrl);
 
-  const interval = setInterval(async () => {
-    const resp = await fetch(`${GENERATOR_URL}/status/${jobId}`);
-    const job = await resp.json();
-
-    const pct = job.total > 0 ? Math.round((job.done / job.total) * 100) : 0;
-    $('gen-bar').style.width = Math.max(pct, 5) + '%';
-
-    const newLines = job.log.slice(lastLogLen);
-    newLines.forEach(msg => appendLog('gen-log', msg));
-    lastLogLen = job.log.length;
-
-    if (job.status === 'done') {
-      clearInterval(interval);
-      $('gen-bar').style.width = '100%';
-      state.resultJobId = jobId;
-      showResult(job.result);
-    } else if (job.status === 'error') {
-      clearInterval(interval);
-      appendLog('gen-log', `✗ Error: ${job.error}`);
-      $('topbar-controls').classList.remove('hidden');
-    } else if (job.status === 'cancelled') {
-      clearInterval(interval);
-      showScreen('screen-workspace');
-      $('topbar-controls').classList.remove('hidden');
+  _genWs.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
+    if (msg.type === 'log') {
+      appendLog('gen-log', msg.message);
+    } else if (msg.type === 'progress') {
+      const pct = msg.total > 0 ? Math.round((msg.done / msg.total) * 100) : 0;
+      $('gen-bar').style.width = Math.max(pct, 5) + '%';
+    } else if (msg.type === 'done') {
+      _genWs = null;
+      if (msg.status === 'done') {
+        $('gen-bar').style.width = '100%';
+        state.resultJobId = jobId;
+        showResult(msg.result);
+      } else if (msg.status === 'error') {
+        appendLog('gen-log', `✗ Error: ${msg.error}`);
+        $('topbar-controls').classList.remove('hidden');
+      } else if (msg.status === 'cancelled') {
+        showScreen('screen-workspace');
+        $('topbar-controls').classList.remove('hidden');
+      }
     }
-  }, 2000);
+  };
+
+  _genWs.onerror = () => {
+    _genWs = null;
+    appendLog('gen-log', '✗ Connection error — generation may still be running');
+    $('topbar-controls').classList.remove('hidden');
+  };
 
   $('btn-cancel-gen').onclick = async () => {
     await fetch(`${GENERATOR_URL}/jobs/${jobId}`, { method: 'DELETE' });
-    clearInterval(interval);
+    if (_genWs) {
+      _genWs.close();
+      _genWs = null;
+    }
     showScreen('screen-workspace');
     $('topbar-controls').classList.remove('hidden');
   };
