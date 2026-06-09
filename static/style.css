@@ -200,6 +200,8 @@ body {
 .select-all-btn.checkbox-mode:hover { color: #27ae60; }
 .select-all-btn.highlight-mode { color: #f39c12; text-decoration: underline; }
 .select-all-btn.highlight-mode:hover { color: #e67e22; }
+.clear-all-btn { background: transparent; border: none; cursor: pointer; font-size: 10px; font-family: inherit; color: #888; text-decoration: underline; margin-right: 6px; }
+.clear-all-btn:hover { color: #555; }
 
 /* ANALYZE ZONE */
 .analyze-zone {
