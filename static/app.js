@@ -240,6 +240,12 @@ async function runAnalyze() {
   const prompt = $('analyze-input').value.trim();
   if (!prompt) return;
 
+  fetch('/prompt-history', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'use', text: prompt }),
+  });
+
   $('btn-analyze').textContent = 'Analyzing…';
   $('btn-analyze').disabled = true;
   $('analyze-input').disabled = true;
@@ -1443,3 +1449,151 @@ $('folder-badge').addEventListener('click', async (e) => {
   // Render on load and skip the server recent-folders fetch
   _renderRecentSessions();
 })();
+
+// ─── Prompt History ───────────────────────────────────────────────────────────
+
+let _phOutsideClickHandler = null;
+
+function _closePHPanel() {
+  $('prompt-history-panel').classList.add('hidden');
+  $('ph-template-save-area').classList.add('hidden');
+  if (_phOutsideClickHandler) {
+    document.removeEventListener('click', _phOutsideClickHandler);
+    _phOutsideClickHandler = null;
+  }
+}
+
+async function _openPHPanel() {
+  const panel = $('prompt-history-panel');
+  panel.classList.remove('hidden');
+
+  const data = await fetch('/prompt-history').then(r => r.json()).catch(() => ({ recent: [], templates: [] }));
+  _renderPHRecent(data.recent);
+  _renderPHTemplates(data.templates);
+
+  // Close on outside click
+  setTimeout(() => {
+    _phOutsideClickHandler = (e) => {
+      if (!panel.contains(e.target) && e.target !== $('btn-history-toggle')) {
+        _closePHPanel();
+      }
+    };
+    document.addEventListener('click', _phOutsideClickHandler);
+  }, 0);
+}
+
+function _renderPHRecent(items) {
+  const list = $('ph-recent-list');
+  list.innerHTML = '';
+  if (!items.length) {
+    list.innerHTML = '<div class="ph-empty">No history yet</div>';
+    return;
+  }
+  items.forEach(text => {
+    const item = document.createElement('div');
+    item.className = 'ph-item';
+    item.textContent = text;
+    item.addEventListener('click', () => {
+      $('analyze-input').value = text;
+      _closePHPanel();
+      _updateSaveTemplateBtn();
+    });
+    list.appendChild(item);
+  });
+}
+
+function _renderPHTemplates(templates) {
+  const list = $('ph-templates-list');
+  list.innerHTML = '';
+  if (!templates.length) {
+    list.innerHTML = '<div class="ph-empty">No templates saved</div>';
+    return;
+  }
+  templates.forEach(tpl => {
+    const row = document.createElement('div');
+    row.className = 'ph-item ph-template-row';
+
+    const label = document.createElement('span');
+    label.className = 'ph-template-label';
+    label.textContent = tpl.name;
+    label.addEventListener('click', () => {
+      $('analyze-input').value = tpl.text;
+      _closePHPanel();
+      _updateSaveTemplateBtn();
+    });
+
+    const del = document.createElement('button');
+    del.className = 'ph-delete-btn';
+    del.type = 'button';
+    del.textContent = '×';
+    del.title = 'Delete template';
+    del.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      await fetch('/prompt-history', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'delete_template', name: tpl.name }),
+      });
+      row.remove();
+      if (!$('ph-templates-list').children.length) {
+        $('ph-templates-list').innerHTML = '<div class="ph-empty">No templates saved</div>';
+      }
+    });
+
+    row.appendChild(label);
+    row.appendChild(del);
+    list.appendChild(row);
+  });
+}
+
+function _updateSaveTemplateBtn() {
+  const val = $('analyze-input').value.trim();
+  $('btn-save-template').classList.toggle('hidden', !val);
+}
+
+$('btn-history-toggle').addEventListener('click', (e) => {
+  e.stopPropagation();
+  const panel = $('prompt-history-panel');
+  if (panel.classList.contains('hidden')) {
+    _openPHPanel();
+  } else {
+    _closePHPanel();
+  }
+});
+
+$('analyze-input').addEventListener('input', _updateSaveTemplateBtn);
+
+$('btn-save-template').addEventListener('click', (e) => {
+  e.stopPropagation();
+  const saveArea = $('ph-template-save-area');
+  if (saveArea.classList.contains('hidden')) {
+    // Make sure panel is open
+    if ($('prompt-history-panel').classList.contains('hidden')) {
+      _openPHPanel();
+    }
+    saveArea.classList.remove('hidden');
+    $('ph-template-name').value = '';
+    $('ph-template-name').focus();
+  }
+});
+
+async function _doSaveTemplate() {
+  const name = $('ph-template-name').value.trim();
+  const text = $('analyze-input').value.trim();
+  if (!name || !text) return;
+  await fetch('/prompt-history', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'save_template', name, text }),
+  });
+  $('ph-template-save-area').classList.add('hidden');
+  // Refresh templates list
+  const data = await fetch('/prompt-history').then(r => r.json()).catch(() => ({ recent: [], templates: [] }));
+  _renderPHTemplates(data.templates);
+}
+
+$('ph-template-save-btn').addEventListener('click', _doSaveTemplate);
+$('ph-template-name').addEventListener('keydown', e => {
+  if (e.key === 'Enter') _doSaveTemplate();
+  if (e.key === 'Escape') $('ph-template-save-area').classList.add('hidden');
+});

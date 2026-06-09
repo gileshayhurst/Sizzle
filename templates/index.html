@@ -101,8 +101,28 @@
         <div class="analyze-zone">
           <div class="analyze-label">Analyze</div>
           <div id="analyze-bar">
-            <textarea id="analyze-input" class="footer-input analyze-input"
-                      placeholder="Describe what you're looking for…"></textarea>
+            <div class="prompt-wrap">
+              <textarea id="analyze-input" class="footer-input analyze-input"
+                        placeholder="Describe what you're looking for…"></textarea>
+              <button id="btn-history-toggle" class="btn-history-toggle" type="button" title="Prompt history">▾</button>
+              <button id="btn-save-template" class="btn-save-template hidden" type="button" title="Save as template">★</button>
+              <div id="prompt-history-panel" class="prompt-history-panel hidden">
+                <div class="prompt-history-section" id="ph-recent-section">
+                  <div class="prompt-history-heading">Recent</div>
+                  <div id="ph-recent-list"></div>
+                </div>
+                <div class="prompt-history-section" id="ph-templates-section">
+                  <div class="prompt-history-heading">
+                    Templates
+                    <span id="ph-template-save-area" class="ph-template-save-area hidden">
+                      <input id="ph-template-name" class="ph-template-name-input" type="text" placeholder="Template name…" maxlength="60" />
+                      <button id="ph-template-save-btn" class="ph-template-save-btn" type="button">Save</button>
+                    </span>
+                  </div>
+                  <div id="ph-templates-list"></div>
+                </div>
+              </div>
+            </div>
             <button id="btn-analyze" class="btn-analyze">Analyze</button>
           </div>
           <div id="analyze-error" class="error-msg hidden" style="padding:3px 14px;font-size:10px;"></div>

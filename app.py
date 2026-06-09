@@ -36,6 +36,7 @@ from shared import parse_transcript_lines as _parse_transcript_lines
 import storage
 
 RECENT_FOLDERS_PATH = Path(__file__).parent / "recent_folders.json"
+PROMPT_HISTORY_PATH = Path(__file__).parent / "prompt_history.json"
 
 # Maps session_key → local temp dir for the duration of the process
 _cloud_session_dirs: dict[str, str] = {}
@@ -44,6 +45,7 @@ _cloud_session_lock = threading.Lock()
 _jobs: dict = {}
 _jobs_lock = threading.Lock()
 _recent_folders_lock = threading.Lock()
+_prompt_history_lock = threading.Lock()
 _whisper_model = None
 _model_lock = threading.Lock()
 
@@ -179,6 +181,33 @@ def _save_recent_folder(folder: str, video_count: int) -> None:
         except OSError:
             pass  # history is best-effort; never fail a load-folder for this
 
+
+
+def _load_prompt_history() -> dict:
+    if not PROMPT_HISTORY_PATH.exists():
+        return {"recent": [], "templates": []}
+    try:
+        with PROMPT_HISTORY_PATH.open(encoding="utf-8") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return {"recent": [], "templates": []}
+
+
+def _save_prompt_history(data: dict) -> None:
+    try:
+        with PROMPT_HISTORY_PATH.open("w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+    except OSError:
+        pass
+
+
+def _prompt_history_use(text: str) -> None:
+    with _prompt_history_lock:
+        data = _load_prompt_history()
+        recent = [t for t in data.get("recent", []) if t != text]
+        recent.insert(0, text)
+        data["recent"] = recent[:10]
+        _save_prompt_history(data)
 
 
 def _run_analyze(folder: str, prompt: str) -> dict:
@@ -567,6 +596,38 @@ def create_app(testing: bool = False) -> Flask:
         if "error" in result:
             return jsonify(result), 500
         return jsonify(result)
+
+    @app.get("/prompt-history")
+    def get_prompt_history():
+        return jsonify(_load_prompt_history())
+
+    @app.post("/prompt-history")
+    def post_prompt_history():
+        body = request.get_json() or {}
+        action = body.get("action", "")
+        text = body.get("text", "").strip()
+        name = body.get("name", "").strip()
+        if action == "use":
+            if text:
+                _prompt_history_use(text)
+        elif action == "save_template":
+            if name and text:
+                with _prompt_history_lock:
+                    data = _load_prompt_history()
+                    templates = data.get("templates", [])
+                    templates = [t for t in templates if t["name"] != name]
+                    templates.append({"name": name, "text": text})
+                    data["templates"] = templates
+                    _save_prompt_history(data)
+        elif action == "delete_template":
+            if name:
+                with _prompt_history_lock:
+                    data = _load_prompt_history()
+                    data["templates"] = [t for t in data.get("templates", []) if t["name"] != name]
+                    _save_prompt_history(data)
+        else:
+            return jsonify({"error": "unknown action"}), 400
+        return jsonify({"ok": True})
 
     return app
 
