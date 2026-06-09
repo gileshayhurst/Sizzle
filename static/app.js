@@ -18,6 +18,26 @@ const state = {
 
 let _genWs = null;  // active generation WebSocket
 
+function _saveSelections() {
+  if (!state.folder) return;
+  try {
+    const key = 'sizzle_sel_' + state.folder;
+    const payload = {
+      checked: {},
+      highlighted: {},
+    };
+    for (const [filename, set] of Object.entries(state.checked)) {
+      payload.checked[filename] = [...set];
+    }
+    for (const [filename, set] of Object.entries(state.highlighted)) {
+      payload.highlighted[filename] = [...set];
+    }
+    localStorage.setItem(key, JSON.stringify(payload));
+  } catch (_) {
+    // localStorage may be unavailable (private mode quota, etc.) — fail silently
+  }
+}
+
 // ─── DOM refs ─────────────────────────────────────────────────────────────────
 const $ = id => document.getElementById(id);
 
@@ -131,6 +151,24 @@ async function loadTranscripts(folder) {
     if (!state.checked[f.name]) state.checked[f.name] = new Set();
     if (!state.highlighted[f.name]) state.highlighted[f.name] = new Set();
   });
+
+  // Restore persisted selections for this folder
+  try {
+    const key = 'sizzle_sel_' + state.folder;
+    const raw = localStorage.getItem(key);
+    if (raw) {
+      const saved = JSON.parse(raw);
+      const fileNames = new Set(state.files.map(f => f.name));
+      for (const [filename, arr] of Object.entries(saved.checked || {})) {
+        if (fileNames.has(filename)) state.checked[filename] = new Set(arr);
+      }
+      for (const [filename, arr] of Object.entries(saved.highlighted || {})) {
+        if (fileNames.has(filename)) state.highlighted[filename] = new Set(arr);
+      }
+    }
+  } catch (_) {
+    // Malformed or unavailable localStorage — silently ignore
+  }
 }
 
 function showWorkspace() {
@@ -207,6 +245,7 @@ async function runAnalyze() {
     if (state.activeFile) renderTranscript(state.activeFile);
     state.files.forEach(f => refreshBadge(f.name));
     updateGenerateBtn();
+    _saveSelections();
 
   } catch (err) {
     $('analyze-error').textContent = 'Network error: ' + err.message;
@@ -355,6 +394,7 @@ function renderCheckboxMode(fileObj) {
       _updateHeaderCbState(headerCb, group.lines, s);
       refreshBadge(fileObj.name);
       updateGenerateBtn();
+      _saveSelections();
     });
 
     groupEl.appendChild(labelEl);
@@ -395,6 +435,7 @@ function renderCheckboxMode(fileObj) {
         _updateHeaderCbState(headerCb, group.lines, s);
         refreshBadge(fileObj.name);
         updateGenerateBtn();
+        _saveSelections();
       });
 
       groupEl.appendChild(lineEl);
@@ -411,6 +452,7 @@ function checkAllInFile(filename) {
   renderTranscript(filename);
   refreshBadge(filename);
   updateGenerateBtn();
+  _saveSelections();
 }
 
 function renderTranscript(filename) {
@@ -423,7 +465,10 @@ function renderTranscript(filename) {
 let _dragActive = false;
 let _dragSetTo = null;   // true = highlighting, false = un-highlighting
 let _hlAbortController = null;  // cancels stale mousedown/mousemove listeners
-document.addEventListener('mouseup', () => { _dragActive = false; });
+document.addEventListener('mouseup', () => {
+  if (_dragActive) _saveSelections();
+  _dragActive = false;
+});
 
 function renderHighlightMode(fileObj) {
   const scroll = $('transcript-scroll');
@@ -524,6 +569,7 @@ function highlightAllInFile(filename) {
   renderTranscript(filename);
   refreshBadge(filename);
   updateGenerateBtn();
+  _saveSelections();
 }
 
 // ─── Recent folders ───────────────────────────────────────────────────────────
