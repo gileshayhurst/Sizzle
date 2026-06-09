@@ -218,6 +218,62 @@ def test_status_unknown_job_returns_404(client):
     assert resp.status_code == 404
 
 
+# ─── Library delete ───────────────────────────────────────────────────────────
+
+def test_delete_library_entry_removes_from_json(client, tmp_path):
+    """DELETE /library/<id> removes the entry; file is not deleted."""
+    reel_file = tmp_path / "reel.mp4"
+    reel_file.write_bytes(b"fake reel")
+    entry = {
+        "id": "del-test-1",
+        "filename": "reel.mp4",
+        "path": str(reel_file),
+        "source_folder": "test/",
+        "prompt": "test",
+        "duration_seconds": 10,
+        "clip_count": 1,
+        "segment_starts": [],
+        "created_at": "2026-06-08T00:00:00",
+    }
+    with patch("generator_app._load_library", return_value=[entry]), \
+         patch("generator_app._save_library") as mock_save:
+        resp = client.delete(f"/library/del-test-1")
+    assert resp.status_code == 200
+    assert resp.get_json() == {"ok": True}
+    saved = mock_save.call_args[0][0]
+    assert not any(e["id"] == "del-test-1" for e in saved)
+    assert reel_file.exists()   # file NOT deleted
+
+
+def test_delete_library_entry_with_delete_file_removes_file(client, tmp_path):
+    """DELETE /library/<id>?delete_file=true also deletes the .mp4 file."""
+    reel_file = tmp_path / "reel.mp4"
+    reel_file.write_bytes(b"fake reel")
+    entry = {
+        "id": "del-test-2",
+        "filename": "reel.mp4",
+        "path": str(reel_file),
+        "source_folder": "test/",
+        "prompt": "test",
+        "duration_seconds": 10,
+        "clip_count": 1,
+        "segment_starts": [],
+        "created_at": "2026-06-08T00:00:00",
+    }
+    with patch("generator_app._load_library", return_value=[entry]), \
+         patch("generator_app._save_library"):
+        resp = client.delete(f"/library/del-test-2?delete_file=true")
+    assert resp.status_code == 200
+    assert not reel_file.exists()   # file IS deleted
+
+
+def test_delete_library_entry_not_found_returns_404(client):
+    """DELETE /library/<id> returns 404 when the id doesn't exist."""
+    with patch("generator_app._load_library", return_value=[]):
+        resp = client.delete("/library/no-such-id")
+    assert resp.status_code == 404
+
+
 def test_cancel_job(client):
     from generator_app import _jobs, _jobs_lock
     job_id = "cancel-gen-test-456"

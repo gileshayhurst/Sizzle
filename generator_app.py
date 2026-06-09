@@ -721,10 +721,22 @@ def create_app(testing: bool = False) -> Flask:
 
     @app.delete("/library/<entry_id>")
     def delete_library_entry(entry_id):
+        delete_file = request.args.get("delete_file") == "true"
+        file_path_to_delete = None
         with _library_lock:
             entries = _load_library()
+            entry = next((e for e in entries if e["id"] == entry_id), None)
+            if entry is None:
+                return jsonify({"error": "not found"}), 404
+            if delete_file:
+                file_path_to_delete = entry.get("path")
             entries = [e for e in entries if e["id"] != entry_id]
             _save_library(entries)
+        if file_path_to_delete:
+            try:
+                Path(file_path_to_delete).unlink(missing_ok=True)
+            except Exception:
+                pass  # best-effort; never fail a delete over a missing file
         return jsonify({"ok": True})
 
     @app.post("/open-folder")
