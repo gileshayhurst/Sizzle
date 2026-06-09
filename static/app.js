@@ -1054,9 +1054,11 @@ function _showEditForm(body, card, entry, dateStr) {
 
 function openLibraryPlayer(entry) {
   state.librarySegmentStarts = entry.segment_starts || [];
-  // play_url is a fresh presigned R2 URL injected by the /library endpoint
-  // in cloud mode — use it directly to avoid the cross-origin redirect chain.
-  const src = entry.play_url || `${GENERATOR_URL}/library-video/${entry.id}`;
+  // Always route through the generator's /library-video endpoint so the
+  // response passes through Flask (flask-cors adds CORS headers).  Direct
+  // presigned R2 URLs are blocked by Chrome's ORB since they don't carry CORS
+  // headers — routing through Flask sidesteps this entirely.
+  const src = `${GENERATOR_URL}/library-video/${entry.id}`;
   const displayName = entry.title || entry.filename;
   $('library-player-meta').textContent =
     `${displayName} — "${entry.prompt}"`;

@@ -62,7 +62,12 @@ def library_key() -> str:
 def upload_file(local_path: str, key: str) -> None:
     """Copy a local file into storage at the given key."""
     if is_cloud():
-        _s3().upload_file(local_path, _bucket(), key)
+        import mimetypes
+        content_type = mimetypes.guess_type(local_path)[0] or "application/octet-stream"
+        _s3().upload_file(
+            local_path, _bucket(), key,
+            ExtraArgs={"ContentType": content_type},
+        )
     else:
         dest = _data_root() / key
         dest.parent.mkdir(parents=True, exist_ok=True)
@@ -135,6 +140,20 @@ def list_keys(prefix: str) -> list[str]:
             for p in root.rglob("*")
             if p.is_file()
         ]
+
+
+def read_file_bytes(key: str) -> bytes:
+    """Read a file from storage and return its raw bytes.
+
+    In cloud mode fetches from S3/R2.  In local mode reads from disk.
+    Raises on any I/O error — callers should handle exceptions.
+    """
+    if is_cloud():
+        buf = io.BytesIO()
+        _s3().download_fileobj(_bucket(), key, buf)
+        return buf.getvalue()
+    else:
+        return (_data_root() / key).read_bytes()
 
 
 def presigned_url(key: str, expires: int = 3600) -> str:

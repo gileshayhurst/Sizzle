@@ -699,24 +699,32 @@ def create_app(testing: bool = False) -> Flask:
         path = Path(entry["path"])
         if path.is_file():
             return send_file(str(path), conditional=True)
-        # Fallback: R2 redirect (only when upload succeeded and key is recorded)
+        # Fallback: stream from R2 *through* Flask so the response carries the
+        # CORS headers that flask-cors adds.  A redirect to a presigned URL would
+        # send the browser directly to R2 (no CORS headers) and Chrome would
+        # block the response with ERR_BLOCKED_BY_ORB.
         if storage.is_cloud() and entry.get("reel_s3_key"):
-            # Re-sign on demand so the URL is always fresh
-            return redirect(storage.presigned_url(entry["reel_s3_key"]))
+            try:
+                import io as _io
+                data = storage.read_file_bytes(entry["reel_s3_key"])
+                return send_file(
+                    _io.BytesIO(data),
+                    mimetype="video/mp4",
+                    conditional=True,
+                    download_name=entry.get("filename", "reel.mp4"),
+                )
+            except Exception as exc:
+                return jsonify({"error": f"cloud fetch failed: {exc}"}), 502
         return jsonify({"error": "file not found on disk"}), 404
 
     @app.get("/library")
     def get_library():
         entries = _load_library()
-        if storage.is_cloud():
-            # Inject a fresh presigned download URL for each entry so the
-            # browser can play directly from R2 without a redirect chain.
-            for entry in entries:
-                if entry.get("reel_s3_key"):
-                    try:
-                        entry["play_url"] = storage.presigned_url(entry["reel_s3_key"])
-                    except Exception:
-                        pass  # best-effort; frontend falls back to /library-video/<id>
+        # Note: we deliberately do NOT inject presigned R2 URLs here.
+        # Chrome's ORB (Opaque Response Blocking) rejects cross-origin media
+        # responses that don't pass through a CORS-aware server.  All video
+        # playback is routed through /library-video/<id> which proxies R2
+        # content via Flask (flask-cors adds the required headers).
         return jsonify(entries)
 
     @app.delete("/library/<entry_id>")
