@@ -599,7 +599,8 @@ def create_app(testing: bool = False) -> Flask:
 
     @app.get("/prompt-history")
     def get_prompt_history():
-        return jsonify(_load_prompt_history())
+        with _prompt_history_lock:
+            return jsonify(_load_prompt_history())
 
     @app.post("/prompt-history")
     def post_prompt_history():
