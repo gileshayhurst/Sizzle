@@ -372,7 +372,8 @@ def _run_generation(job_id: str, folder: str, mode: str,
                 item["ok"] = True
             except Exception as exc:
                 item["error"] = str(exc)
-                _append_log(job_id, f"· Could not create title card: {exc}")
+                label = " | ".join(item.get("lines", []))
+                _append_log(job_id, f"✗ Title card failed [{label}]: {exc}")
 
         # Clips: parallel
         max_workers = min(4, os.cpu_count() or 4)
@@ -420,6 +421,22 @@ def _run_generation(job_id: str, folder: str, mode: str,
                 job["status"] = "cancelled"
             return
 
+        # ── Phase 2 summary ──────────────────────────────────────────────
+        ok_titles = sum(1 for it in plan if it["type"] == "title" and it["ok"])
+        ok_clips  = sum(1 for it in plan if it["type"] == "clip"  and it["ok"])
+        fail_titles = sum(1 for it in plan if it["type"] == "title" and not it["ok"])
+        fail_clips  = sum(1 for it in plan if it["type"] == "clip"  and not it["ok"])
+        _append_log(
+            job_id,
+            f"· Extraction summary: {ok_titles}/{ok_titles+fail_titles} title cards ok,"
+            f" {ok_clips}/{ok_clips+fail_clips} clips ok"
+        )
+        for it in plan:
+            if not it["ok"]:
+                kind = it["type"]
+                err  = it.get("error", "unknown error")
+                _append_log(job_id, f"  ✗ {kind} failed: {err}")
+
         # ── Phase 3: Assemble ────────────────────────────────────────────
         clip_paths = []
         clip_durations = []
@@ -434,6 +451,11 @@ def _run_generation(job_id: str, folder: str, mode: str,
             i += 2
 
             if not title_item["ok"] or not clip_item["ok"]:
+                _append_log(
+                    job_id,
+                    f"  · Skipping segment {title_card_count+1}:"
+                    f" title_ok={title_item['ok']} clip_ok={clip_item['ok']}"
+                )
                 continue   # errors already logged in Phase 2
 
             segment_starts.append(cumulative_time)  # points to title card start
@@ -443,6 +465,11 @@ def _run_generation(job_id: str, folder: str, mode: str,
             clip_paths.append(clip_item["path"])
             clip_durations.append(clip_item["end_sec"] - clip_item["start_sec"])
             cumulative_time += clip_item["end_sec"] - clip_item["start_sec"]
+
+        _append_log(
+            job_id,
+            f"· Assembling {title_card_count} segment(s) → {len(clip_paths)} file(s) to stitch"
+        )
 
         if not clip_paths:
             with _jobs_lock:
