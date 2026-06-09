@@ -852,6 +852,7 @@ $('btn-open-folder').addEventListener('click', async () => {
 async function fetchLibrary() {
   const resp = await fetch(GENERATOR_URL + '/library');
   state.libraryEntries = await resp.json();
+  state.librarySort = $('library-sort').value;
   renderLibrary();
 }
 
@@ -1039,7 +1040,7 @@ function _showDeleteConfirm(body, card, entry, dateStr, actions) {
 
   libOnly.addEventListener('click', () => doDelete(false));
   withFile.addEventListener('click', () => doDelete(true));
-  cancelBtn.addEventListener('click', () => fetchLibrary());
+  cancelBtn.addEventListener('click', () => renderLibrary());
 }
 
 function _showEditForm(body, card, entry, dateStr) {
@@ -1093,15 +1094,15 @@ function _showEditForm(body, card, entry, dateStr) {
     }
   });
 
-  cancelBtn.addEventListener('click', () => fetchLibrary());
+  cancelBtn.addEventListener('click', () => renderLibrary());
 
   nameInput.addEventListener('keydown', e => {
-    if (e.key === 'Escape') fetchLibrary();
+    if (e.key === 'Escape') renderLibrary();
     if (e.key === 'Enter') saveBtn.click();
   });
 
   notesInput.addEventListener('keydown', e => {
-    if (e.key === 'Escape') fetchLibrary();
+    if (e.key === 'Escape') renderLibrary();
   });
 }
 
