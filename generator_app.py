@@ -4,6 +4,7 @@ import shutil
 import subprocess
 import tempfile
 import threading
+import time
 import uuid
 import concurrent.futures
 from datetime import datetime
@@ -520,6 +521,51 @@ def _run_generation(job_id: str, folder: str, mode: str,
         job["status"] = "done"
 
 
+# ─── WebSocket job handler ────────────────────────────────────────────────────
+
+def _job_ws_impl(ws, job_id):
+    """Stream job progress over a WebSocket until the job reaches a terminal state."""
+    last_log_len = 0
+    while True:
+        with _jobs_lock:
+            job = _jobs.get(job_id)
+            if job is None:
+                try:
+                    ws.send(json.dumps({
+                        "type": "done",
+                        "status": "error",
+                        "error": "job not found",
+                        "result": None,
+                    }))
+                except Exception:
+                    pass
+                return
+            log_snapshot = list(job["log"])
+            done         = job["done"]
+            total        = job["total"]
+            status       = job["status"]
+            result       = job.get("result")
+            error        = job.get("error")
+
+        try:
+            for msg in log_snapshot[last_log_len:]:
+                ws.send(json.dumps({"type": "log", "message": msg}))
+            last_log_len = len(log_snapshot)
+            ws.send(json.dumps({"type": "progress", "done": done, "total": total}))
+            if status in ("done", "error", "cancelled"):
+                ws.send(json.dumps({
+                    "type": "done",
+                    "status": status,
+                    "result": result,
+                    "error": error,
+                }))
+                return
+        except Exception:
+            return  # client disconnected
+
+        time.sleep(0.2)
+
+
 # ─── Flask app ────────────────────────────────────────────────────────────────
 
 def create_app(testing: bool = False) -> Flask:
@@ -527,48 +573,7 @@ def create_app(testing: bool = False) -> Flask:
     CORS(app)
     app.config["TESTING"] = testing
 
-    import time as _time
-
     sock = Sock(app)
-
-    def _job_ws_impl(ws, job_id):
-        last_log_len = 0
-        while True:
-            with _jobs_lock:
-                job = _jobs.get(job_id)
-            if job is None:
-                ws.send(json.dumps({
-                    "type": "done",
-                    "status": "error",
-                    "error": "job not found",
-                    "result": None,
-                }))
-                return
-            # Push new log lines
-            log_snapshot = list(job["log"])
-            for msg in log_snapshot[last_log_len:]:
-                ws.send(json.dumps({"type": "log", "message": msg}))
-            last_log_len = len(log_snapshot)
-            # Push progress
-            ws.send(json.dumps({
-                "type": "progress",
-                "done": job["done"],
-                "total": job["total"],
-            }))
-            status = job["status"]
-            if status in ("done", "error", "cancelled"):
-                ws.send(json.dumps({
-                    "type": "done",
-                    "status": status,
-                    "result": job.get("result"),
-                    "error": job.get("error"),
-                }))
-                return
-            _time.sleep(0.2)
-
-    # Export handler for direct unit-testing (flask-sock 0.7.0 has no test client).
-    import generator_app as _self
-    _self._job_ws_handler = _job_ws_impl
 
     @sock.route("/ws/job/<job_id>")
     def job_ws(ws, job_id):

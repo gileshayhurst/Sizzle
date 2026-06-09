@@ -1,5 +1,4 @@
 import json
-import json as _json
 import os
 import threading
 import time
@@ -845,26 +844,19 @@ class _MockWS:
         self.sent = []
 
     def send(self, data):
-        self.sent.append(_json.loads(data))
+        self.sent.append(json.loads(data))
 
 
-def _call_job_ws(app, job_id):
-    """Invoke the job_ws handler directly with a mock WebSocket."""
-    import generator_app as _ga
+def _call_job_ws(job_id):
+    """Invoke _job_ws_impl directly with a mock WebSocket."""
+    from generator_app import _job_ws_impl
     ws = _MockWS()
-    # job_ws is defined inside create_app; retrieve via the module-level reference
-    # set during app creation.
-    assert hasattr(_ga, "_job_ws_handler"), (
-        "_job_ws_handler not exported from generator_app — "
-        "ensure create_app sets generator_app._job_ws_handler = job_ws"
-    )
-    _ga._job_ws_handler(ws, job_id)
+    _job_ws_impl(ws, job_id)
     return ws.sent
 
 
 def test_ws_done_job_sends_log_progress_done():
     """A job already in 'done' state delivers log, progress, and done messages."""
-    app = create_app(testing=True)
     from generator_app import _jobs, _jobs_lock
     job_id = "ws-test-done"
     with _jobs_lock:
@@ -885,7 +877,7 @@ def test_ws_done_job_sends_log_progress_done():
             "cancel": threading.Event(),
         }
 
-    messages = _call_job_ws(app, job_id)
+    messages = _call_job_ws(job_id)
 
     types = [m["type"] for m in messages]
     assert "log" in types
@@ -899,8 +891,7 @@ def test_ws_done_job_sends_log_progress_done():
 
 def test_ws_unknown_job_sends_error_done():
     """An unknown job_id causes the WS to send a done/error message and close."""
-    app = create_app(testing=True)
-    messages = _call_job_ws(app, "nonexistent-job-xyz")
+    messages = _call_job_ws("nonexistent-job-xyz")
 
     assert len(messages) == 1
     assert messages[0]["type"] == "done"
