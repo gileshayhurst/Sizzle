@@ -420,11 +420,13 @@ def _run_generation(job_id: str, folder: str, mode: str,
     reel_download_url = None
     if storage.is_cloud() and session_key:
         reel_s3_key = f"{session_key}/{output_filename}"
+        _append_log(job_id, f"⟳ Uploading reel to cloud storage…")
         try:
             storage.upload_file(output_path, reel_s3_key)
             reel_download_url = storage.presigned_url(reel_s3_key)
+            _append_log(job_id, f"✓ Reel uploaded to cloud storage")
         except Exception as exc:
-            _append_log(job_id, f"⚠ Could not upload reel to S3: {exc}")
+            _append_log(job_id, f"✗ Could not upload reel to cloud storage: {exc}")
 
     result = {
         "path": output_path,
@@ -585,7 +587,17 @@ def create_app(testing: bool = False) -> Flask:
 
     @app.get("/library")
     def get_library():
-        return jsonify(_load_library())
+        entries = _load_library()
+        if storage.is_cloud():
+            # Inject a fresh presigned download URL for each entry so the
+            # browser can play directly from R2 without a redirect chain.
+            for entry in entries:
+                if entry.get("reel_s3_key"):
+                    try:
+                        entry["play_url"] = storage.presigned_url(entry["reel_s3_key"])
+                    except Exception:
+                        pass  # best-effort; frontend falls back to /library-video/<id>
+        return jsonify(entries)
 
     @app.delete("/library/<entry_id>")
     def delete_library_entry(entry_id):

@@ -662,7 +662,12 @@ function showResult(result) {
 
   state.resultSegmentStarts = result.segment_starts || [];
 
-  const src = `${GENERATOR_URL}/video/${state.resultJobId}`;
+  // In cloud mode use the presigned download URL directly — the video element
+  // doesn't need CORS to load from R2, and skipping the generator redirect
+  // eliminates the cross-origin redirect chain that can silently fail.
+  const src = (APP_MODE === 'cloud' && result.download_url)
+    ? result.download_url
+    : `${GENERATOR_URL}/video/${state.resultJobId}`;
   $('result-source').src = src;
   $('result-video').load();
 
@@ -795,7 +800,10 @@ function renderLibrary(entries) {
 
 function openLibraryPlayer(entry) {
   state.librarySegmentStarts = entry.segment_starts || [];
-  $('library-source').src = `${GENERATOR_URL}/library-video/${entry.id}`;
+  // play_url is a fresh presigned R2 URL injected by the /library endpoint
+  // in cloud mode — use it directly to avoid the cross-origin redirect chain.
+  const src = entry.play_url || `${GENERATOR_URL}/library-video/${entry.id}`;
+  $('library-source').src = src;
   $('library-video').load();
   $('library-player-meta').textContent =
     `"${entry.prompt}" — ${entry.source_folder}`;
