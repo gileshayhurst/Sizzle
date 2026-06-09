@@ -1,4 +1,5 @@
 import json
+import json as _json
 import os
 import threading
 import time
@@ -833,3 +834,75 @@ def test_duration_seconds_excludes_rolled_back_title_card(client, tmp_path):
         f"duration_seconds={result['duration_seconds']}; "
         "rolled-back title card must not add to duration"
     )
+
+
+# ─── WebSocket ────────────────────────────────────────────────────────────────
+
+class _MockWS:
+    """Minimal WebSocket stub for unit-testing the job_ws handler."""
+
+    def __init__(self):
+        self.sent = []
+
+    def send(self, data):
+        self.sent.append(_json.loads(data))
+
+
+def _call_job_ws(app, job_id):
+    """Invoke the job_ws handler directly with a mock WebSocket."""
+    import generator_app as _ga
+    ws = _MockWS()
+    # job_ws is defined inside create_app; retrieve via the module-level reference
+    # set during app creation.
+    assert hasattr(_ga, "_job_ws_handler"), (
+        "_job_ws_handler not exported from generator_app — "
+        "ensure create_app sets generator_app._job_ws_handler = job_ws"
+    )
+    _ga._job_ws_handler(ws, job_id)
+    return ws.sent
+
+
+def test_ws_done_job_sends_log_progress_done():
+    """A job already in 'done' state delivers log, progress, and done messages."""
+    app = create_app(testing=True)
+    from generator_app import _jobs, _jobs_lock
+    job_id = "ws-test-done"
+    with _jobs_lock:
+        _jobs[job_id] = {
+            "type": "generation",
+            "status": "done",
+            "total": 1,
+            "done": 1,
+            "log": ["✓ Done"],
+            "result": {
+                "filename": "test.mp4",
+                "clip_count": 2,
+                "duration_seconds": 30,
+                "segment_starts": [],
+                "path": "/tmp/test.mp4",
+            },
+            "error": None,
+            "cancel": threading.Event(),
+        }
+
+    messages = _call_job_ws(app, job_id)
+
+    types = [m["type"] for m in messages]
+    assert "log" in types
+    assert "progress" in types
+    assert "done" in types
+
+    done_msg = next(m for m in messages if m["type"] == "done")
+    assert done_msg["status"] == "done"
+    assert done_msg["result"]["filename"] == "test.mp4"
+
+
+def test_ws_unknown_job_sends_error_done():
+    """An unknown job_id causes the WS to send a done/error message and close."""
+    app = create_app(testing=True)
+    messages = _call_job_ws(app, "nonexistent-job-xyz")
+
+    assert len(messages) == 1
+    assert messages[0]["type"] == "done"
+    assert messages[0]["status"] == "error"
+    assert "not found" in messages[0]["error"]

@@ -28,6 +28,7 @@ if not shutil.which("ffmpeg") and _sys.platform == "win32":
 
 from flask import Flask, jsonify, redirect, request, send_file
 from flask_cors import CORS
+from flask_sock import Sock
 
 from loader import scan_videos
 from video_editor import check_ffmpeg, extract_clip, parse_timestamp_to_seconds, stitch_clips
@@ -525,6 +526,53 @@ def create_app(testing: bool = False) -> Flask:
     app = Flask(__name__)
     CORS(app)
     app.config["TESTING"] = testing
+
+    import time as _time
+
+    sock = Sock(app)
+
+    def _job_ws_impl(ws, job_id):
+        last_log_len = 0
+        while True:
+            with _jobs_lock:
+                job = _jobs.get(job_id)
+            if job is None:
+                ws.send(json.dumps({
+                    "type": "done",
+                    "status": "error",
+                    "error": "job not found",
+                    "result": None,
+                }))
+                return
+            # Push new log lines
+            log_snapshot = list(job["log"])
+            for msg in log_snapshot[last_log_len:]:
+                ws.send(json.dumps({"type": "log", "message": msg}))
+            last_log_len = len(log_snapshot)
+            # Push progress
+            ws.send(json.dumps({
+                "type": "progress",
+                "done": job["done"],
+                "total": job["total"],
+            }))
+            status = job["status"]
+            if status in ("done", "error", "cancelled"):
+                ws.send(json.dumps({
+                    "type": "done",
+                    "status": status,
+                    "result": job.get("result"),
+                    "error": job.get("error"),
+                }))
+                return
+            _time.sleep(0.2)
+
+    # Export handler for direct unit-testing (flask-sock 0.7.0 has no test client).
+    import generator_app as _self
+    _self._job_ws_handler = _job_ws_impl
+
+    @sock.route("/ws/job/<job_id>")
+    def job_ws(ws, job_id):
+        _job_ws_impl(ws, job_id)
 
     @app.post("/generate")
     def generate():
