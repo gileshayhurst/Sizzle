@@ -218,6 +218,7 @@ document.querySelectorAll('.mode-btn').forEach(btn => {
     state.mode = btn.dataset.mode;
     if (state.activeFile) renderTranscript(state.activeFile);
     updateSelectAllBtn();
+    updateClearAllBtn();
     updateGenerateBtn();
   });
 });
@@ -333,6 +334,7 @@ function selectFile(filename) {
   });
   renderTranscript(filename);
   updateSelectAllBtn();
+  updateClearAllBtn();
 }
 
 function updateSelectAllBtn() {
@@ -345,6 +347,18 @@ function updateSelectAllBtn() {
     btn.textContent = 'highlight all';
     btn.className = 'select-all-btn highlight-mode';
     btn.onclick = () => highlightAllInFile(state.activeFile);
+  }
+}
+
+function updateClearAllBtn() {
+  const btn = $('btn-clear-all');
+  if (!btn) return;  // guard: button may not exist in all layouts
+  if (state.mode === 'checkbox') {
+    btn.textContent = 'uncheck all';
+    btn.onclick = () => uncheckAllInFile(state.activeFile);
+  } else {
+    btn.textContent = 'clear all';
+    btn.onclick = () => clearHighlightsInFile(state.activeFile);
   }
 }
 
@@ -473,6 +487,15 @@ function checkAllInFile(filename) {
   _saveSelections();
 }
 
+function uncheckAllInFile(filename) {
+  if (!state.checked[filename]) return;
+  state.checked[filename] = new Set();
+  renderTranscript(filename);
+  refreshBadge(filename);
+  updateGenerateBtn();
+  _saveSelections();
+}
+
 function renderTranscript(filename) {
   const fileObj = state.files.find(f => f.name === filename);
   if (state.mode === 'checkbox') renderCheckboxMode(fileObj);
@@ -584,6 +607,15 @@ function highlightAllInFile(filename) {
   const fileObj = state.files.find(f => f.name === filename);
   if (!fileObj) return;
   fileObj.lines.forEach(l => state.highlighted[filename].add(l.raw));
+  renderTranscript(filename);
+  refreshBadge(filename);
+  updateGenerateBtn();
+  _saveSelections();
+}
+
+function clearHighlightsInFile(filename) {
+  if (!state.highlighted[filename]) return;
+  state.highlighted[filename] = new Set();
   renderTranscript(filename);
   refreshBadge(filename);
   updateGenerateBtn();
