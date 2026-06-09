@@ -274,6 +274,76 @@ def test_delete_library_entry_not_found_returns_404(client):
     assert resp.status_code == 404
 
 
+# ─── Library edit ─────────────────────────────────────────────────────────────
+
+def test_patch_library_entry_updates_title_and_notes(client):
+    """PATCH /library/<id> updates title and notes fields and returns updated entry."""
+    entry = {
+        "id": "edit-test-1",
+        "filename": "reel.mp4",
+        "path": "/tmp/reel.mp4",
+        "source_folder": "test/",
+        "prompt": "test",
+        "duration_seconds": 10,
+        "clip_count": 1,
+        "segment_starts": [],
+        "created_at": "2026-06-08T00:00:00",
+    }
+    with patch("generator_app._load_library", return_value=[entry]), \
+         patch("generator_app._save_library") as mock_save:
+        resp = client.patch(
+            "/library/edit-test-1",
+            json={"title": "My Reel", "notes": "Great footage"},
+            content_type="application/json",
+        )
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["title"] == "My Reel"
+    assert data["notes"] == "Great footage"
+    saved = mock_save.call_args[0][0]
+    updated = next(e for e in saved if e["id"] == "edit-test-1")
+    assert updated["title"] == "My Reel"
+    assert updated["notes"] == "Great footage"
+
+
+def test_patch_library_entry_not_found_returns_404(client):
+    """PATCH /library/<id> returns 404 when the id doesn't exist."""
+    with patch("generator_app._load_library", return_value=[]):
+        resp = client.patch(
+            "/library/no-such-id",
+            json={"title": "X"},
+            content_type="application/json",
+        )
+    assert resp.status_code == 404
+
+
+def test_patch_library_entry_ignores_unknown_keys(client):
+    """PATCH /library/<id> silently ignores fields other than title and notes."""
+    entry = {
+        "id": "edit-test-2",
+        "filename": "reel.mp4",
+        "path": "/tmp/reel.mp4",
+        "source_folder": "test/",
+        "prompt": "original",
+        "duration_seconds": 10,
+        "clip_count": 1,
+        "segment_starts": [],
+        "created_at": "2026-06-08T00:00:00",
+    }
+    with patch("generator_app._load_library", return_value=[entry]), \
+         patch("generator_app._save_library") as mock_save:
+        resp = client.patch(
+            "/library/edit-test-2",
+            json={"title": "New", "prompt": "hacked", "id": "spoofed"},
+            content_type="application/json",
+        )
+    assert resp.status_code == 200
+    saved = mock_save.call_args[0][0]
+    updated = next(e for e in saved if e["id"] == "edit-test-2")
+    assert updated["prompt"] == "original"   # not overwritten
+    assert updated["id"] == "edit-test-2"    # not overwritten
+
+
 def test_cancel_job(client):
     from generator_app import _jobs, _jobs_lock
     job_id = "cancel-gen-test-456"

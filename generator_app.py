@@ -739,6 +739,21 @@ def create_app(testing: bool = False) -> Flask:
                 pass  # best-effort; never fail a delete over a missing file
         return jsonify({"ok": True})
 
+    @app.patch("/library/<entry_id>")
+    def edit_library_entry(entry_id):
+        body = request.get_json() or {}
+        with _library_lock:
+            entries = _load_library()
+            entry = next((e for e in entries if e["id"] == entry_id), None)
+            if entry is None:
+                return jsonify({"error": "not found"}), 404
+            if "title" in body:
+                entry["title"] = str(body["title"])
+            if "notes" in body:
+                entry["notes"] = str(body["notes"])
+            _save_library(entries)
+        return jsonify(entry)
+
     @app.post("/open-folder")
     def open_folder_in_explorer():
         folder = (request.get_json() or {}).get("folder", "").strip()
