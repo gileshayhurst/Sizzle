@@ -14,6 +14,8 @@ const state = {
   lastPrompt: '',     // prompt used for the most recent Analyze call
   resultSegmentStarts: [],
   librarySegmentStarts: [],
+  librarySort: 'newest',
+  libraryEntries: [],
 };
 
 let _genWs = null;  // active generation WebSocket
@@ -60,8 +62,13 @@ document.querySelectorAll('.nav-tab').forEach(btn => {
     const tab = btn.dataset.tab;
     $('tab-create').classList.toggle('hidden', tab !== 'create');
     $('tab-library').classList.toggle('hidden', tab !== 'library');
-    if (tab === 'library') loadLibrary();
+    if (tab === 'library') fetchLibrary();
   });
+});
+
+$('library-sort').addEventListener('change', e => {
+  state.librarySort = e.target.value;
+  renderLibrary();
 });
 
 // ─── Screen helpers ───────────────────────────────────────────────────────────
@@ -842,17 +849,25 @@ $('btn-open-folder').addEventListener('click', async () => {
 });
 
 // ─── Library ──────────────────────────────────────────────────────────────────
-async function loadLibrary() {
+async function fetchLibrary() {
   const resp = await fetch(GENERATOR_URL + '/library');
-  const entries = await resp.json();
-  renderLibrary(entries);
+  state.libraryEntries = await resp.json();
+  renderLibrary();
 }
 
-function escAttr(s) {
-  return String(s ?? '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
+function renderLibrary() {
+  const entries = [...state.libraryEntries];
+  const sort = state.librarySort;
+  if (sort === 'newest') {
+    entries.sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
+  } else if (sort === 'oldest') {
+    entries.sort((a, b) => (a.created_at || '').localeCompare(b.created_at || ''));
+  } else if (sort === 'most-clips') {
+    entries.sort((a, b) => (b.clip_count || 0) - (a.clip_count || 0));
+  } else if (sort === 'fewest-clips') {
+    entries.sort((a, b) => (a.clip_count || 0) - (b.clip_count || 0));
+  }
 
-function renderLibrary(entries) {
   const grid = $('library-grid');
   grid.innerHTML = '';
   $('library-count').textContent = `Generated Reels (${entries.length})`;
@@ -875,14 +890,12 @@ function renderLibrary(entries) {
     const durStr = `${mins}:${String(secs).padStart(2, '0')}`;
     const dateStr = entry.created_at ? entry.created_at.split('T')[0] : '';
 
-    // Thumbnail
     const thumb = document.createElement('div');
     thumb.className = 'reel-thumb';
     thumb.dataset.id = entry.id;
     thumb.innerHTML = `<div class="reel-play-icon">▶</div><div class="reel-duration">${durStr}</div>`;
     thumb.addEventListener('click', () => openLibraryPlayer(entry));
 
-    // Body
     const body = document.createElement('div');
     body.className = 'reel-body';
     _renderCardBody(body, card, entry, dateStr);
@@ -891,6 +904,10 @@ function renderLibrary(entries) {
     card.appendChild(body);
     grid.appendChild(card);
   });
+}
+
+function escAttr(s) {
+  return String(s ?? '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 function _renderCardBody(body, card, entry, dateStr) {
@@ -1015,22 +1032,14 @@ function _showDeleteConfirm(body, card, entry, dateStr, actions) {
     await fetch(url, { method: 'DELETE' });
     card.classList.add('fading');
     setTimeout(() => {
-      card.remove();
-      const remaining = document.querySelectorAll('.reel-card').length;
-      $('library-count').textContent = `Generated Reels (${remaining})`;
-      if (remaining === 0) {
-        const grid = $('library-grid');
-        const empty = document.createElement('div');
-        empty.className = 'library-empty';
-        empty.textContent = 'No reels generated yet.';
-        grid.appendChild(empty);
-      }
+      state.libraryEntries = state.libraryEntries.filter(e => e.id !== entry.id);
+      renderLibrary();
     }, 300);
   }
 
   libOnly.addEventListener('click', () => doDelete(false));
   withFile.addEventListener('click', () => doDelete(true));
-  cancelBtn.addEventListener('click', () => loadLibrary());
+  cancelBtn.addEventListener('click', () => fetchLibrary());
 }
 
 function _showEditForm(body, card, entry, dateStr) {
@@ -1080,19 +1089,19 @@ function _showEditForm(body, card, entry, dateStr) {
       body: JSON.stringify({ title: newTitle, notes: newNotes }),
     });
     if (resp.ok) {
-      loadLibrary();
+      fetchLibrary();
     }
   });
 
-  cancelBtn.addEventListener('click', () => loadLibrary());
+  cancelBtn.addEventListener('click', () => fetchLibrary());
 
   nameInput.addEventListener('keydown', e => {
-    if (e.key === 'Escape') loadLibrary();
+    if (e.key === 'Escape') fetchLibrary();
     if (e.key === 'Enter') saveBtn.click();
   });
 
   notesInput.addEventListener('keydown', e => {
-    if (e.key === 'Escape') loadLibrary();
+    if (e.key === 'Escape') fetchLibrary();
   });
 }
 
