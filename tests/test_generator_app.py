@@ -656,6 +656,131 @@ def test_duration_seconds_includes_title_card_time(client, tmp_path):
     )
 
 
+# ─── Parallel clip extraction ─────────────────────────────────────────────────
+
+def test_parallel_extraction_all_succeed(client, tmp_path):
+    """All clips extracted; stitch receives title+clip pairs in order."""
+    (tmp_path / "v1.mp4").touch()
+    (tmp_path / "v2.mp4").touch()
+    (tmp_path / "v1.txt").write_text("[0:01] Speaker: hello\n[0:10] Speaker: done\n", encoding="utf-8")
+    (tmp_path / "v2.txt").write_text("[0:01] Speaker: world\n[0:10] Speaker: end\n", encoding="utf-8")
+
+    stitched = []
+
+    def fake_extract(video_path, start, end, output_path):
+        from pathlib import Path
+        Path(output_path).write_bytes(b"clip")
+
+    def fake_title(lines, w, h, out, duration=5.0):
+        from pathlib import Path
+        Path(out).write_bytes(b"title")
+
+    def fake_stitch(paths, out):
+        stitched.extend(paths)
+        from pathlib import Path
+        Path(out).write_bytes(b"reel")
+
+    with patch("generator_app.extract_clip", side_effect=fake_extract), \
+         patch("generator_app.make_title_card", side_effect=fake_title), \
+         patch("generator_app.stitch_clips", side_effect=fake_stitch), \
+         patch("generator_app._library_add"), \
+         patch("generator_app.get_video_dimensions", return_value=(1920, 1080)):
+        resp = client.post("/generate", json={
+            "folder": str(tmp_path),
+            "mode": "highlight",
+            "selections": {
+                "v1.mp4": ["[0:01] Speaker: hello"],
+                "v2.mp4": ["[0:01] Speaker: world"],
+            },
+            "output_filename": "out.mp4",
+            "prompt": "test",
+        })
+    assert resp.status_code == 200
+    job_id = resp.get_json()["job_id"]
+    from generator_app import _jobs
+    job = _jobs[job_id]
+    assert job["status"] == "done"
+    # Two segments → two title+clip pairs → 4 paths
+    assert len(stitched) == 4
+
+
+def test_parallel_extraction_failed_clip_skipped(client, tmp_path):
+    """A failed clip extraction skips that segment; other segments still appear."""
+    (tmp_path / "v1.mp4").touch()
+    (tmp_path / "v2.mp4").touch()
+    (tmp_path / "v1.txt").write_text("[0:01] Speaker: bad\n[0:10] Speaker: end\n", encoding="utf-8")
+    (tmp_path / "v2.txt").write_text("[0:01] Speaker: good\n[0:10] Speaker: end\n", encoding="utf-8")
+
+    stitched = []
+
+    def fake_extract(video_path, start, end, output_path):
+        from pathlib import Path
+        if "v1" in video_path:
+            raise RuntimeError("extraction failed")
+        Path(output_path).write_bytes(b"clip")
+
+    def fake_title(lines, w, h, out, duration=5.0):
+        from pathlib import Path
+        Path(out).write_bytes(b"title")
+
+    def fake_stitch(paths, out):
+        stitched.extend(paths)
+        from pathlib import Path
+        Path(out).write_bytes(b"reel")
+
+    with patch("generator_app.extract_clip", side_effect=fake_extract), \
+         patch("generator_app.make_title_card", side_effect=fake_title), \
+         patch("generator_app.stitch_clips", side_effect=fake_stitch), \
+         patch("generator_app._library_add"), \
+         patch("generator_app.get_video_dimensions", return_value=(1920, 1080)):
+        resp = client.post("/generate", json={
+            "folder": str(tmp_path),
+            "mode": "highlight",
+            "selections": {
+                "v1.mp4": ["[0:01] Speaker: bad"],
+                "v2.mp4": ["[0:01] Speaker: good"],
+            },
+            "output_filename": "out.mp4",
+            "prompt": "test",
+        })
+    assert resp.status_code == 200
+    job_id = resp.get_json()["job_id"]
+    from generator_app import _jobs
+    job = _jobs[job_id]
+    assert job["status"] == "done"
+    # v1 failed, v2 succeeded → 1 title + 1 clip = 2 paths
+    assert len(stitched) == 2
+
+
+def test_parallel_extraction_all_fail_returns_error(client, tmp_path):
+    """When every clip fails, job status is 'error'."""
+    (tmp_path / "v1.mp4").touch()
+    (tmp_path / "v1.txt").write_text("[0:01] Speaker: hi\n[0:10] Speaker: bye\n", encoding="utf-8")
+
+    def fake_extract(video_path, start, end, output_path):
+        raise RuntimeError("always fails")
+
+    def fake_title(lines, w, h, out, duration=5.0):
+        from pathlib import Path
+        Path(out).write_bytes(b"title")
+
+    with patch("generator_app.extract_clip", side_effect=fake_extract), \
+         patch("generator_app.make_title_card", side_effect=fake_title), \
+         patch("generator_app._library_add"), \
+         patch("generator_app.get_video_dimensions", return_value=(1920, 1080)):
+        resp = client.post("/generate", json={
+            "folder": str(tmp_path),
+            "mode": "highlight",
+            "selections": {"v1.mp4": ["[0:01] Speaker: hi"]},
+            "output_filename": "out.mp4",
+            "prompt": "test",
+        })
+    assert resp.status_code == 200
+    job_id = resp.get_json()["job_id"]
+    from generator_app import _jobs
+    assert _jobs[job_id]["status"] == "error"
+
+
 def test_duration_seconds_excludes_rolled_back_title_card(client, tmp_path):
     """When a clip extraction fails and its title card is rolled back, that card's
     5 seconds must NOT be counted in duration_seconds."""

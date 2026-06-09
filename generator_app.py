@@ -5,6 +5,7 @@ import subprocess
 import tempfile
 import threading
 import uuid
+import concurrent.futures
 from datetime import datetime
 from pathlib import Path
 
@@ -314,77 +315,128 @@ def _run_generation(job_id: str, folder: str, mode: str,
     output_path = str(Path(folder) / output_filename)
 
     with tempfile.TemporaryDirectory() as tmp_dir:
-        clip_paths = []
-        clip_durations = []
-        segment_starts = []
-        cumulative_time = 0.0
-        clip_index = 0
+        # ── Phase 1: Plan ────────────────────────────────────────────────
+        plan = []      # ordered list of {"type": "title"|"clip", ...}
+        item_idx = 0
         seg_num = 0
-        title_card_count = 0
 
         for vp, segs in video_segments:
-            if job["cancel"].is_set():
-                with _jobs_lock:
-                    job["status"] = "cancelled"
-                return
-
             try:
                 width, height = get_video_dimensions(str(vp))
             except Exception:
                 width, height = 1920, 1080
-
             for start_sec, end_sec in segs:
                 seg_num += 1
+                card_path = os.path.join(tmp_dir, f"clip_{item_idx:04d}.mp4")
+                item_idx += 1
+                clip_path = os.path.join(tmp_dir, f"clip_{item_idx:04d}.mp4")
+                item_idx += 1
+                plan.append({
+                    "type": "title",
+                    "path": card_path,
+                    "lines": [
+                        vp.stem,
+                        f"from {_format_seconds(start_sec)}",
+                        f"Segment {seg_num} / {total_segs}",
+                    ],
+                    "width": width,
+                    "height": height,
+                    "ok": False,
+                    "error": None,
+                })
+                plan.append({
+                    "type": "clip",
+                    "path": clip_path,
+                    "video_path": str(vp),
+                    "start_sec": start_sec,
+                    "end_sec": end_sec,
+                    "ok": False,
+                    "error": None,
+                })
 
-                card_path = os.path.join(tmp_dir, f"clip_{clip_index:04d}.mp4")
-                card_lines = [
-                    vp.stem,
-                    f"from {_format_seconds(start_sec)}",
-                    f"Segment {seg_num} / {total_segs}",
-                ]
-                # Record the transition card start BEFORE adding the card's duration
-                # so navigation seeks to the visible title card, not past it.
-                segment_starts.append(cumulative_time)
-                card_added = False
+        # ── Phase 2: Execute ─────────────────────────────────────────────
+        # Title cards: serial (fast, ~0.1s each)
+        for item in plan:
+            if item["type"] != "title":
+                continue
+            try:
+                make_title_card(
+                    item["lines"], item["width"], item["height"], item["path"]
+                )
+                item["ok"] = True
+            except Exception as exc:
+                item["error"] = str(exc)
+                _append_log(job_id, f"· Could not create title card: {exc}")
 
-                try:
-                    make_title_card(card_lines, width, height, card_path)
-                    clip_paths.append(card_path)
-                    clip_index += 1
-                    cumulative_time += TITLE_CARD_DURATION
-                    card_added = True
-                    title_card_count += 1
-                except Exception as exc:
-                    # Card failed — remove the stale segment marker and skip this
-                    # segment entirely.  Do not attempt clip extraction: without a
-                    # title card the segment is incomplete, and cumulative_time was
-                    # not advanced so subsequent segment_starts would be offset.
-                    segment_starts.pop()
-                    _append_log(job_id, f"· Could not create title card for {vp.name}: {exc}")
+        # Clips: parallel
+        max_workers = min(4, os.cpu_count() or 4)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            for idx, item in enumerate(plan):
+                if item["type"] != "clip":
                     continue
+                # Skip if the paired title card failed
+                title_item = plan[idx - 1]
+                if not title_item["ok"]:
+                    item["error"] = "title card failed"
+                    continue
+                if job["cancel"].is_set():
+                    item["error"] = "cancelled"
+                    continue
+                item["future"] = executor.submit(
+                    extract_clip,
+                    item["video_path"],
+                    item["start_sec"],
+                    item["end_sec"],
+                    item["path"],
+                )
 
-                # Always write extracted clips to .mp4 regardless of source
-                # extension.  Non-MP4 containers (e.g. .webm) do not support the
-                # H.264/AAC encoding used here and would cause ffmpeg to error.
-                clip_path = os.path.join(tmp_dir, f"clip_{clip_index:04d}.mp4")
+            for item in plan:
+                if item["type"] != "clip" or "future" not in item:
+                    continue
+                if job["cancel"].is_set():
+                    item["future"].cancel()
+                    item["error"] = "cancelled"
+                    continue
                 try:
-                    extract_clip(str(vp), start_sec, end_sec, clip_path)
-                    clip_paths.append(clip_path)
-                    clip_durations.append(end_sec - start_sec)
-                    cumulative_time += end_sec - start_sec
-                    clip_index += 1
+                    item["future"].result()
+                    item["ok"] = True
                 except Exception as exc:
-                    # Clip extraction failed — roll back the title card that was
-                    # already appended so the reel does not contain an orphaned card.
-                    segment_starts.pop()
-                    if card_added:
-                        clip_paths.pop()
-                        cumulative_time -= TITLE_CARD_DURATION
-                        title_card_count -= 1
+                    item["error"] = str(exc)
                     _append_log(
                         job_id,
-                        f"✗ {vp.name} [{start_sec:.1f}-{end_sec:.1f}] — extraction failed: {exc}",
+                        f"✗ [{item['start_sec']:.1f}-{item['end_sec']:.1f}]"
+                        f" extraction failed: {exc}",
                     )
+
+        if job["cancel"].is_set():
+            with _jobs_lock:
+                job["status"] = "cancelled"
+            return
+
+        # ── Phase 3: Assemble ────────────────────────────────────────────
+        clip_paths = []
+        clip_durations = []
+        segment_starts = []
+        cumulative_time = 0.0
+        title_card_count = 0
+
+        i = 0
+        while i < len(plan):
+            title_item = plan[i]
+            clip_item = plan[i + 1]
+            i += 2
+
+            if not title_item["ok"] or not clip_item["ok"]:
+                continue   # errors already logged in Phase 2
+
+            segment_starts.append(cumulative_time)
+            clip_paths.append(title_item["path"])
+            cumulative_time += TITLE_CARD_DURATION
+            title_card_count += 1
+
+            clip_paths.append(clip_item["path"])
+            clip_durations.append(clip_item["end_sec"] - clip_item["start_sec"])
+            cumulative_time += clip_item["end_sec"] - clip_item["start_sec"]
 
         if not clip_paths:
             with _jobs_lock:
