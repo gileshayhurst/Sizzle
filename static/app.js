@@ -853,6 +853,7 @@ function _renderCardBody(body, card, entry, dateStr) {
 
   const nameEl = document.createElement('div');
   nameEl.className = 'reel-name';
+  nameEl.style.cssText = 'min-width:0;flex:1';
   nameEl.title = entry.filename;
   nameEl.textContent = displayName;
 
@@ -862,7 +863,7 @@ function _renderCardBody(body, card, entry, dateStr) {
   const editBtn = document.createElement('button');
   editBtn.className = 'reel-btn-icon';
   editBtn.title = 'Edit';
-  editBtn.textContent = '✏';
+  editBtn.textContent = '✏️';
 
   const deleteBtn = document.createElement('button');
   deleteBtn.className = 'reel-btn-icon';
@@ -1049,17 +1050,19 @@ function openLibraryPlayer(entry) {
   // play_url is a fresh presigned R2 URL injected by the /library endpoint
   // in cloud mode — use it directly to avoid the cross-origin redirect chain.
   const src = entry.play_url || `${GENERATOR_URL}/library-video/${entry.id}`;
-  $('library-source').src = src;
-  $('library-video').load();
   const displayName = entry.title || entry.filename;
   $('library-player-meta').textContent =
     `${displayName} — "${entry.prompt}"`;
+  // Show the overlay before calling load() — browsers defer loading media in
+  // display:none elements, so the video must be visible before we trigger load.
   $('library-player-overlay').classList.remove('hidden');
+  $('library-video').src = src;
+  $('library-video').load();
 }
 
 $('btn-close-player').addEventListener('click', () => {
   $('library-video').pause();
-  $('library-source').src = '';
+  $('library-video').src = '';
   $('library-player-overlay').classList.add('hidden');
 });
 

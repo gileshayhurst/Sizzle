@@ -245,6 +245,7 @@ def make_title_card(
             "-f", "lavfi", "-i", f"color=black:size={width}x{height}:rate=30",
             "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000",
             "-vf", ",".join(filters),
+            "-map", "0:v", "-map", "1:a",   # explicit mapping ensures audio is always included
             "-c:v", "libx264", "-preset", "fast",
             "-c:a", "aac",
             "-t", str(duration),
@@ -435,11 +436,11 @@ def _run_generation(job_id: str, folder: str, mode: str,
             if not title_item["ok"] or not clip_item["ok"]:
                 continue   # errors already logged in Phase 2
 
-            segment_starts.append(cumulative_time)
             clip_paths.append(title_item["path"])
             cumulative_time += TITLE_CARD_DURATION
             title_card_count += 1
 
+            segment_starts.append(cumulative_time)  # points to clip content, not title card
             clip_paths.append(clip_item["path"])
             clip_durations.append(clip_item["end_sec"] - clip_item["start_sec"])
             cumulative_time += clip_item["end_sec"] - clip_item["start_sec"]

@@ -35,6 +35,8 @@ def extract_clip(video_path: str, start_sec: float, end_sec: float, output_path:
             "-c:v", "libx264",
             "-preset", "fast",
             "-c:a", "aac",
+            "-ar", "48000",   # normalise to 48 kHz — must match title cards so the
+            "-ac", "2",       # concat demuxer sees a single consistent audio timebase
             output_path,
         ],
         check=True,
