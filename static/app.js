@@ -1103,34 +1103,58 @@ $('folder-badge').addEventListener('click', async (e) => {
   dropdown.style.left = rect.left + 'px';
   _folderDropdown = dropdown;
 
-  // Fetch recent folders
-  let recents = [];
-  try {
-    const resp = await fetch('/recent-folders');
-    recents = await resp.json();
-  } catch (_) {}
-
-  recents.forEach(entry => {
-    const btn = document.createElement('button');
-    btn.textContent = '📁 ' + entry.path.split(/[\\/]/).pop() + '/';
-    btn.title = entry.path;
-    btn.addEventListener('click', () => {
-      _closeFolderDropdown();
-      openFolder(entry.path);
+  // Fetch recent folders (cloud: localStorage; local: server endpoint)
+  if (APP_MODE === 'cloud') {
+    const sessions = JSON.parse(localStorage.getItem('sizzleRecentSessions') || '[]');
+    sessions.forEach(s => {
+      const btn = document.createElement('button');
+      btn.textContent = '📁 ' + s.name + '/';
+      btn.title = s.name;
+      btn.addEventListener('click', async () => {
+        _closeFolderDropdown();
+        await openFolder(s.folder);
+        $('folder-badge').textContent = '📁 ' + s.name + '/ ▾';
+      });
+      dropdown.appendChild(btn);
     });
-    dropdown.appendChild(btn);
-  });
 
-  const newBtn = document.createElement('button');
-  newBtn.className = 'dropdown-new-folder';
-  newBtn.textContent = '📂 Select new folder...';
-  newBtn.addEventListener('click', async () => {
-    _closeFolderDropdown();
-    const resp = await fetch('/browse', { method: 'POST' });
-    const { path } = await resp.json();
-    if (path) openFolder(path);
-  });
-  dropdown.appendChild(newBtn);
+    const newBtn = document.createElement('button');
+    newBtn.className = 'dropdown-new-folder';
+    newBtn.textContent = '📂 Upload new files...';
+    newBtn.addEventListener('click', () => {
+      _closeFolderDropdown();
+      showScreen('screen-folder-picker');
+    });
+    dropdown.appendChild(newBtn);
+  } else {
+    let recents = [];
+    try {
+      const resp = await fetch('/recent-folders');
+      recents = await resp.json();
+    } catch (_) {}
+
+    recents.forEach(entry => {
+      const btn = document.createElement('button');
+      btn.textContent = '📁 ' + entry.path.split(/[\\/]/).pop() + '/';
+      btn.title = entry.path;
+      btn.addEventListener('click', () => {
+        _closeFolderDropdown();
+        openFolder(entry.path);
+      });
+      dropdown.appendChild(btn);
+    });
+
+    const newBtn = document.createElement('button');
+    newBtn.className = 'dropdown-new-folder';
+    newBtn.textContent = '📂 Select new folder...';
+    newBtn.addEventListener('click', async () => {
+      _closeFolderDropdown();
+      const resp = await fetch('/browse', { method: 'POST' });
+      const { path } = await resp.json();
+      if (path) openFolder(path);
+    });
+    dropdown.appendChild(newBtn);
+  }
 
   document.body.appendChild(dropdown);
 
@@ -1298,7 +1322,10 @@ $('folder-badge').addEventListener('click', async (e) => {
         selectedFiles.filter(f => ext(f.name) !== '.txt').length,
         commitData.folder
       );
-      openFolder(commitData.folder);
+      await openFolder(commitData.folder);
+      // openFolder() sets the badge to the session UUID; override with the
+      // human-readable folder name that was selected in the browser.
+      $('folder-badge').textContent = '📁 ' + selectedFolderName + '/ ▾';
 
     } catch (err) {
       showScreen('screen-folder-picker');

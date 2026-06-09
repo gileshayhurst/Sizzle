@@ -44,6 +44,7 @@ def test_extract_clip_calls_correct_ffmpeg_args():
         "-avoid_negative_ts", "make_zero",
         "-c:v", "libx264",
         "-preset", "fast",
+        "-r", "30",
         "-c:a", "aac",
         "-ar", "48000",
         "-ac", "2",

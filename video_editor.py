@@ -34,9 +34,10 @@ def extract_clip(video_path: str, start_sec: float, end_sec: float, output_path:
             "-avoid_negative_ts", "make_zero",
             "-c:v", "libx264",
             "-preset", "fast",
-            "-c:a", "aac",
-            "-ar", "48000",   # normalise to 48 kHz — must match title cards so the
-            "-ac", "2",       # concat demuxer sees a single consistent audio timebase
+            "-r", "30",       # normalise to 30 fps — must match title cards so the
+            "-c:a", "aac",    # concat demuxer sees a single consistent video timebase
+            "-ar", "48000",
+            "-ac", "2",
             output_path,
         ],
         check=True,
@@ -57,6 +58,7 @@ def stitch_clips(clip_paths: list[str], output_path: str) -> None:
                 "-safe", "0",
                 "-i", concat_list_path,
                 "-c", "copy",
+                "-movflags", "+faststart",
                 output_path,
             ],
             capture_output=True,
