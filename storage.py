@@ -128,8 +128,15 @@ def list_keys(prefix: str) -> list[str]:
     mirroring S3 list_objects_v2 behaviour.
     """
     if is_cloud():
-        resp = _s3().list_objects_v2(Bucket=_bucket(), Prefix=prefix)
-        return [obj["Key"] for obj in resp.get("Contents", [])]
+        keys = []
+        kwargs: dict = {"Bucket": _bucket(), "Prefix": prefix}
+        while True:
+            resp = _s3().list_objects_v2(**kwargs)
+            keys.extend(obj["Key"] for obj in resp.get("Contents", []))
+            if not resp.get("IsTruncated"):
+                break
+            kwargs["ContinuationToken"] = resp["NextContinuationToken"]
+        return keys
     else:
         root = _data_root() / prefix
         if not root.exists():

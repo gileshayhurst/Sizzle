@@ -159,3 +159,75 @@ def test_presigned_put_url_calls_s3_in_cloud_mode(monkeypatch, tmp_path):
         ExpiresIn=300,
     )
     assert url == "https://r2.example.com/put-url"
+
+
+# ── list_keys pagination (cloud backend) ───────────────────────────────────────
+
+def test_list_keys_follows_pagination(monkeypatch, tmp_path):
+    """list_keys must follow IsTruncated pages to return all keys."""
+    from unittest.mock import MagicMock, patch
+    s = reload_storage(monkeypatch, tmp_path, mode="cloud")
+    monkeypatch.setenv("S3_BUCKET", "test-bucket")
+    monkeypatch.setenv("S3_ACCESS_KEY", "key")
+    monkeypatch.setenv("S3_SECRET_KEY", "secret")
+
+    page1 = {
+        "Contents": [{"Key": "p/a"}, {"Key": "p/b"}],
+        "IsTruncated": True,
+        "NextContinuationToken": "tok1",
+    }
+    page2 = {
+        "Contents": [{"Key": "p/c"}],
+        "IsTruncated": False,
+    }
+
+    mock_s3 = MagicMock()
+    mock_s3.list_objects_v2.side_effect = [page1, page2]
+
+    with patch("storage._s3", return_value=mock_s3):
+        result = s.list_keys("p/")
+
+    assert result == ["p/a", "p/b", "p/c"]
+    assert mock_s3.list_objects_v2.call_count == 2
+    second_call_kwargs = mock_s3.list_objects_v2.call_args_list[1][1]
+    assert second_call_kwargs["ContinuationToken"] == "tok1"
+
+
+def test_list_keys_single_page_no_truncation(monkeypatch, tmp_path):
+    """Single page returns normally without continuation."""
+    from unittest.mock import MagicMock, patch
+    s = reload_storage(monkeypatch, tmp_path, mode="cloud")
+    monkeypatch.setenv("S3_BUCKET", "test-bucket")
+    monkeypatch.setenv("S3_ACCESS_KEY", "key")
+    monkeypatch.setenv("S3_SECRET_KEY", "secret")
+
+    page = {
+        "Contents": [{"Key": "p/a"}],
+        "IsTruncated": False,
+    }
+    mock_s3 = MagicMock()
+    mock_s3.list_objects_v2.return_value = page
+
+    with patch("storage._s3", return_value=mock_s3):
+        result = s.list_keys("p/")
+
+    assert result == ["p/a"]
+    assert mock_s3.list_objects_v2.call_count == 1
+
+
+def test_list_keys_empty_result(monkeypatch, tmp_path):
+    """Empty bucket returns empty list."""
+    from unittest.mock import MagicMock, patch
+    s = reload_storage(monkeypatch, tmp_path, mode="cloud")
+    monkeypatch.setenv("S3_BUCKET", "test-bucket")
+    monkeypatch.setenv("S3_ACCESS_KEY", "key")
+    monkeypatch.setenv("S3_SECRET_KEY", "secret")
+
+    page = {"IsTruncated": False}
+    mock_s3 = MagicMock()
+    mock_s3.list_objects_v2.return_value = page
+
+    with patch("storage._s3", return_value=mock_s3):
+        result = s.list_keys("p/")
+
+    assert result == []
