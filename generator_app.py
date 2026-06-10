@@ -545,6 +545,17 @@ def _run_generation(job_id: str, folder: str,
         library_entry["reel_s3_key"] = f"{session_key}/{output_filename}"
     _library_add(library_entry)
 
+    # Schedule cleanup of the cloud session temp dir 1 hour after generation.
+    # The dir is kept alive so /video/<job_id> can serve the reel directly
+    # without an R2 round-trip.  After the TTL the local file is gone and the
+    # endpoint falls back to the presigned R2 URL.
+    if storage.is_cloud() and folder.startswith(tempfile.gettempdir()):
+        def _deferred_cleanup(path=folder):
+            shutil.rmtree(path, ignore_errors=True)
+        _cleanup_timer = threading.Timer(3600, _deferred_cleanup)
+        _cleanup_timer.daemon = True
+        _cleanup_timer.start()
+
     with _jobs_lock:
         job["result"]["entry_id"] = library_entry["id"]
         job["status"] = "done"

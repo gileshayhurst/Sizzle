@@ -1191,3 +1191,40 @@ def test_generation_result_includes_entry_id(tmp_path, client):
     result = _jobs[job_id]["result"]
     assert "entry_id" in result, "result must contain entry_id"
     assert result["entry_id"] == captured_entry["id"]
+
+
+def test_cloud_temp_dir_cleanup_scheduled(client, tmp_path):
+    """In cloud mode, a deferred cleanup timer must be started after generation."""
+    (tmp_path / "vid.mp4").touch()
+    (tmp_path / "vid.txt").write_text("[0:05] Speaker: Hi.", encoding="utf-8")
+
+    timers_started = []
+    real_timer = __import__("threading").Timer
+
+    def fake_timer(delay, fn):
+        timers_started.append(delay)
+        t = real_timer(0.001, lambda: None)  # fires immediately but harmlessly
+        return t
+
+    with patch("generator_app.extract_clip"), \
+         patch("generator_app.stitch_clips"), \
+         patch("generator_app.check_ffmpeg"), \
+         patch("generator_app.make_title_card"), \
+         patch("generator_app.get_video_dimensions", return_value=(1920, 1080)), \
+         patch("generator_app._library_add"), \
+         patch("generator_app.scan_videos", return_value=[tmp_path / "vid.mp4"]), \
+         patch("storage.is_cloud", return_value=True), \
+         patch("generator_app.storage.is_cloud", return_value=True), \
+         patch("storage.list_keys", return_value=[]), \
+         patch("generator_app.threading.Timer", side_effect=fake_timer):
+        resp = client.post("/generate", json={
+            "folder": str(tmp_path),
+            "session_key": "sessions/test",
+            "mode": "highlight",
+            "selections": {"vid.mp4": ["[0:05] Speaker: Hi."]},
+            "output_filename": "out.mp4",
+        })
+
+    assert resp.status_code == 200
+    assert len(timers_started) >= 1
+    assert timers_started[0] == 3600   # 1 hour
