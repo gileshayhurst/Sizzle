@@ -20,6 +20,119 @@ const state = {
   libraryEntries: [],
 };
 
+// ─── IndexedDB helpers (persist FileSystemDirectoryHandle across reloads) ────
+function _idbOpen() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open('sizzle', 1);
+    req.onupgradeneeded = () => req.result.createObjectStore('kv');
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+async function _idbSave(key, value) {
+  const db = await _idbOpen();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('kv', 'readwrite');
+    tx.objectStore('kv').put(value, key);
+    tx.oncomplete = resolve;
+    tx.onerror = () => reject(tx.error);
+  });
+}
+async function _idbLoad(key) {
+  const db = await _idbOpen();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('kv', 'readonly');
+    const req = tx.objectStore('kv').get(key);
+    req.onsuccess = () => resolve(req.result ?? null);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+// ─── Downloads record in localStorage ────────────────────────────────────────
+// sizzle_downloads: { [entryId]: { folderName, filename, localFolderPath|null } }
+function _getDownloads() {
+  try { return JSON.parse(localStorage.getItem('sizzle_downloads') || '{}'); }
+  catch { return {}; }
+}
+function _getDownload(entryId) { return _getDownloads()[entryId] || null; }
+function _setDownload(entryId, info) {
+  const d = _getDownloads();
+  d[entryId] = info;
+  localStorage.setItem('sizzle_downloads', JSON.stringify(d));
+}
+
+// ─── Output folder name display ───────────────────────────────────────────────
+function _updateOutputFolderUI() {
+  const name = localStorage.getItem('sizzle_output_folder_name');
+  const label = name ? `📁 ${name}` : '📁 Set output folder';
+  const r = $('btn-set-output-folder');
+  const l = $('btn-lib-set-output-folder');
+  if (r) r.textContent = label;
+  if (l) l.textContent = label;
+}
+
+// ─── Output folder picker ─────────────────────────────────────────────────────
+async function _pickOutputFolder() {
+  let handle;
+  try {
+    handle = await window.showDirectoryPicker({ mode: 'readwrite' });
+  } catch (e) {
+    if (e.name === 'AbortError') return null; // user cancelled
+    throw e;
+  }
+  await _idbSave('sizzle_output_dir_handle', handle);
+  localStorage.setItem('sizzle_output_folder_name', handle.name);
+  _updateOutputFolderUI();
+  return handle;
+}
+
+// ─── Core save: write blob to dir handle, probe for OS path ──────────────────
+async function _saveToOutputFolder(handle, filename, blob, entryId) {
+  // Write video file
+  const fh = await handle.getFileHandle(filename, { create: true });
+  const writable = await fh.createWritable();
+  await writable.write(blob);
+  await writable.close();
+
+  // Write probe file, ask server to locate it on disk
+  const probeUuid = crypto.randomUUID();
+  const probeName = `sizzle_probe_${probeUuid}.tmp`;
+  let localFolderPath = null;
+  try {
+    const probeFh = await handle.getFileHandle(probeName, { create: true });
+    const probeW = await probeFh.createWritable();
+    await probeW.write(probeUuid);
+    await probeW.close();
+
+    const scanResp = await fetch(`${GENERATOR_URL}/find-local-folder`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ probe_name: probeName, probe_content: probeUuid }),
+    });
+    if (scanResp.ok) localFolderPath = (await scanResp.json()).path || null;
+  } catch { /* probe scan is best-effort */ }
+
+  try { await handle.removeEntry(probeName); } catch { /* best-effort */ }
+
+  _setDownload(entryId, { folderName: handle.name, filename, localFolderPath });
+  return { folderName: handle.name, localFolderPath };
+}
+
+// ─── Auto-save the just-generated reel to the output folder ──────────────────
+async function _autoSaveReelResult(jobId, filename, entryId) {
+  const handle = await _idbLoad('sizzle_output_dir_handle');
+  if (!handle) return null;
+
+  const perm = await handle.queryPermission({ mode: 'readwrite' });
+  if (perm !== 'granted') await handle.requestPermission({ mode: 'readwrite' });
+
+  const resp = await fetch(`${GENERATOR_URL}/video/${jobId}`);
+  if (!resp.ok) throw new Error(`Video fetch failed: ${resp.status}`);
+  const blob = await resp.blob();
+
+  return _saveToOutputFolder(handle, filename, blob, entryId);
+}
+
 let _genWs = null;  // active generation WebSocket
 
 function _saveSelections() {
@@ -839,6 +952,26 @@ function watchGeneration(jobId) {
         state.resultJobId = jobId;
         _clearSelections();
         showResult(msg.result);
+          if (APP_MODE === 'cloud' && msg.result.entry_id) {
+            const openBtn = $('btn-open-folder');
+            openBtn.textContent = '⬇ Saving…';
+            openBtn.disabled = true;
+            _autoSaveReelResult(jobId, msg.result.filename, msg.result.entry_id)
+              .then(saved => {
+                openBtn.disabled = false;
+                if (saved) {
+                  openBtn.textContent = `✓ Saved to ${saved.folderName}`;
+                  openBtn.dataset.savedPath = saved.localFolderPath || '';
+                  openBtn.dataset.savedFilename = msg.result.filename;
+                } else {
+                  openBtn.textContent = '⬇ Download';
+                }
+              })
+              .catch(() => {
+                openBtn.disabled = false;
+                openBtn.textContent = '⬇ Download';
+              });
+          }
       } else if (msg.status === 'error') {
         appendLog('gen-log', `✗ Error: ${msg.error}`);
         $('topbar-controls').classList.remove('hidden');
@@ -953,14 +1086,32 @@ $('btn-new-reel').addEventListener('click', () => {
 
 $('btn-open-folder').addEventListener('click', async () => {
   if (APP_MODE === 'cloud') {
-    // Open the S3 presigned download URL in a new tab.
-    if (state.resultDownloadUrl) {
-      window.open(state.resultDownloadUrl, '_blank');
+    const localPath = $('btn-open-folder').dataset.savedPath;
+    const filename = $('btn-open-folder').dataset.savedFilename;
+    if (localPath && filename) {
+      await fetch(GENERATOR_URL + '/open-folder', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ folder: localPath, file_path: localPath + '\\' + filename }),
+      });
+      return;
     }
+    // No OS path — try reading from dir handle as blob URL
+    if (filename) {
+      const handle = await _idbLoad('sizzle_output_dir_handle').catch(() => null);
+      if (handle) {
+        try {
+          const fh = await handle.getFileHandle(filename);
+          window.open(URL.createObjectURL(await fh.getFile()), '_blank');
+          return;
+        } catch { /* fall through */ }
+      }
+    }
+    // Final fallback: presigned URL
+    if (state.resultDownloadUrl) window.open(state.resultDownloadUrl, '_blank');
     return;
   }
-  // Pass the exact output file path so Explorer can highlight it directly,
-  // making the generated reel immediately visible even in a crowded folder.
+  // Local mode (unchanged)
   await fetch(GENERATOR_URL + '/open-folder', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -1566,6 +1717,15 @@ $('folder-badge').addEventListener('click', async (e) => {
 
   // Render on load and skip the server recent-folders fetch
   _renderRecentSessions();
+
+  // Show output-folder buttons (cloud-only) and init their labels
+  const setFolderBtns = [$('btn-set-output-folder'), $('btn-lib-set-output-folder')];
+  setFolderBtns.forEach(btn => {
+    if (!btn) return;
+    btn.classList.remove('hidden');
+    btn.addEventListener('click', _pickOutputFolder);
+  });
+  _updateOutputFolderUI();
 })();
 
 // ─── Prompt History ───────────────────────────────────────────────────────────
