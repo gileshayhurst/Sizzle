@@ -190,9 +190,13 @@ function pollTranscription(jobId, folder) {
 }
 
 async function loadTranscripts(folder) {
-  const resp = await fetch(`/transcripts?folder=${encodeURIComponent(folder)}`);
-  const data = await resp.json();
+  const [transcResp, libResp] = await Promise.all([
+    fetch(`/transcripts?folder=${encodeURIComponent(folder)}`),
+    fetch(GENERATOR_URL + '/library').catch(() => null),
+  ]);
+  const data = await transcResp.json();
   state.files = data.files;
+  if (libResp && libResp.ok) state.libraryEntries = await libResp.json();
   state.files.forEach(f => {
     if (!state.checked[f.name]) state.checked[f.name] = new Set();
     if (!state.highlighted[f.name]) state.highlighted[f.name] = new Set();
@@ -219,8 +223,11 @@ async function loadTranscripts(folder) {
 
 function showWorkspace() {
   const base = state.folderName || 'sizzle_reel';
-  const existingStems = new Set(state.files.map(f => f.name.replace(/\.[^.]+$/, '').toLowerCase()));
-  $('output-filename').value = existingStems.has(base.toLowerCase()) ? base + '1.mp4' : base + '.mp4';
+  const takenStems = new Set([
+    ...state.files.map(f => f.name.replace(/\.[^.]+$/, '').toLowerCase()),
+    ...state.libraryEntries.map(e => (e.filename || '').replace(/\.[^.]+$/, '').toLowerCase()),
+  ]);
+  $('output-filename').value = takenStems.has(base.toLowerCase()) ? base + '1.mp4' : base + '.mp4';
 
   showScreen('screen-workspace');
   $('topbar-controls').classList.remove('hidden');
