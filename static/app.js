@@ -124,7 +124,10 @@ async function _autoSaveReelResult(jobId, filename, entryId) {
   if (!handle) return null;
 
   const perm = await handle.queryPermission({ mode: 'readwrite' });
-  if (perm !== 'granted') await handle.requestPermission({ mode: 'readwrite' });
+  if (perm !== 'granted') {
+    const result = await handle.requestPermission({ mode: 'readwrite' });
+    if (result !== 'granted') return null;
+  }
 
   const resp = await fetch(`${GENERATOR_URL}/video/${jobId}`);
   if (!resp.ok) throw new Error(`Video fetch failed: ${resp.status}`);
@@ -1102,7 +1105,9 @@ $('btn-open-folder').addEventListener('click', async () => {
       if (handle) {
         try {
           const fh = await handle.getFileHandle(filename);
-          window.open(URL.createObjectURL(await fh.getFile()), '_blank');
+          const objUrl = URL.createObjectURL(await fh.getFile());
+          window.open(objUrl, '_blank');
+          URL.revokeObjectURL(objUrl);
           return;
         } catch { /* fall through */ }
       }
