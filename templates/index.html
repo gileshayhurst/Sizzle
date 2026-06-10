@@ -189,6 +189,7 @@
             </div>
             <button id="btn-new-reel" class="btn-primary">+ New Reel</button>
             <button id="btn-open-folder" class="btn-secondary">📂 Open Folder</button>
+            <button id="btn-set-output-folder" class="btn-secondary hidden">📁 Set output folder</button>
           </div>
         </div>
       </div>
@@ -200,6 +201,7 @@
   <main id="tab-library" class="tab-panel hidden">
     <div class="library-toolbar">
       <span id="library-count" class="library-count"></span>
+      <button id="btn-lib-set-output-folder" class="btn-secondary hidden">📁 Set output folder</button>
       <select id="library-sort" class="library-sort-select">
         <option value="newest">Date: Newest</option>
         <option value="oldest">Date: Oldest</option>
@@ -224,6 +226,21 @@
       </div>
     </div>
   </main>
+
+  <!-- "Not downloaded" modal — shown by Show button in cloud mode -->
+  <div id="not-downloaded-modal" class="overlay hidden">
+    <div class="overlay-card" style="max-width:440px">
+      <button id="btn-not-downloaded-close" class="overlay-close">✕</button>
+      <div style="font-size:14px;font-weight:600;color:#b8d8ff;margin-bottom:10px">
+        You have not downloaded this file
+      </div>
+      <div id="not-downloaded-body" style="color:#7090a8;margin-bottom:18px;font-size:12px"></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button id="btn-not-downloaded-save" class="btn-primary"></button>
+        <button id="btn-not-downloaded-view" class="btn-secondary">View in Browser</button>
+      </div>
+    </div>
+  </div>
 
 </div>
 <script src="/static/app.js"></script>
