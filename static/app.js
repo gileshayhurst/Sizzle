@@ -49,6 +49,8 @@ function _clearSelections() {
   // if the user navigates back without reloading.
   for (const filename of Object.keys(state.checked))     state.checked[filename]     = new Set();
   for (const filename of Object.keys(state.highlighted)) state.highlighted[filename] = new Set();
+  $('analyze-add-row').classList.add('hidden');
+  $('analyze-add-input').value = '';
 }
 
 // ─── DOM refs ─────────────────────────────────────────────────────────────────
@@ -236,6 +238,11 @@ $('analyze-input').addEventListener('keydown', e => {
   if (e.key === 'Enter') runAnalyze();
 });
 
+$('btn-analyze-add').addEventListener('click', runAddAnalyze);
+$('analyze-add-input').addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) runAddAnalyze();
+});
+
 async function runAnalyze() {
   const prompt = $('analyze-input').value.trim();
   if (!prompt) return;
@@ -278,6 +285,7 @@ async function runAnalyze() {
     state.files.forEach(f => refreshBadge(f.name));
     updateGenerateBtn();
     _saveSelections();
+    $('analyze-add-row').classList.remove('hidden');
 
   } catch (err) {
     $('analyze-error').textContent = 'Network error: ' + err.message;
@@ -286,6 +294,51 @@ async function runAnalyze() {
     $('btn-analyze').textContent = 'Analyze';
     $('btn-analyze').disabled = false;
     $('analyze-input').disabled = false;
+  }
+}
+
+async function runAddAnalyze() {
+  const prompt = $('analyze-add-input').value.trim();
+  if (!prompt) return;
+
+  $('btn-analyze-add').textContent = 'Analyzing…';
+  $('btn-analyze-add').disabled = true;
+  $('analyze-add-input').disabled = true;
+  $('analyze-error').classList.add('hidden');
+
+  try {
+    const resp = await fetch('/analyze', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ folder: state.folder, prompt }),
+    });
+    const data = await resp.json();
+
+    if (!resp.ok) {
+      $('analyze-error').textContent = data.error || 'Analyze failed';
+      $('analyze-error').classList.remove('hidden');
+      return;
+    }
+
+    // Union — add new lines without removing existing selections
+    state.files.forEach(f => {
+      const lines = data.highlights[f.name] || [];
+      lines.forEach(l => state.checked[f.name].add(l));
+      lines.forEach(l => state.highlighted[f.name].add(l));
+    });
+
+    if (state.activeFile) renderTranscript(state.activeFile);
+    state.files.forEach(f => refreshBadge(f.name));
+    updateGenerateBtn();
+    _saveSelections();
+
+  } catch (err) {
+    $('analyze-error').textContent = 'Network error: ' + err.message;
+    $('analyze-error').classList.remove('hidden');
+  } finally {
+    $('btn-analyze-add').textContent = '+ Add to selection';
+    $('btn-analyze-add').disabled = false;
+    $('analyze-add-input').disabled = false;
   }
 }
 
