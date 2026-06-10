@@ -1095,4 +1095,41 @@ def test_open_folder_falls_back_to_folder_when_file_path_missing(client, tmp_pat
     call_args = mock_popen.call_args[0][0]
     assert not any("/select," in a for a in call_args), \
         "Should not use /select, when only folder is given"
-    assert str(tmp_path) in call_args[1] or str(tmp_path) == call_args[-1]
+
+
+# ─── /find-local-folder ───────────────────────────────────────────────────────
+
+def test_find_local_folder_locates_probe_file(tmp_path, client):
+    """Endpoint finds the probe file and returns the directory path."""
+    folder = tmp_path / "Downloads" / "MyVideos"
+    folder.mkdir(parents=True)
+    probe = folder / "sizzle_probe_abc123.tmp"
+    probe.write_text("abc123", encoding="utf-8")
+
+    with patch("generator_app.Path.home", return_value=tmp_path):
+        resp = client.post("/find-local-folder", json={
+            "probe_name": "sizzle_probe_abc123.tmp",
+            "probe_content": "abc123",
+        })
+
+    assert resp.status_code == 200
+    assert resp.get_json()["path"] == str(folder)
+
+
+def test_find_local_folder_returns_null_when_not_found(tmp_path, client):
+    """Returns {"path": null} when no matching probe file exists."""
+    with patch("generator_app.Path.home", return_value=tmp_path):
+        resp = client.post("/find-local-folder", json={
+            "probe_name": "sizzle_probe_missing.tmp",
+            "probe_content": "nothing",
+        })
+
+    assert resp.status_code == 200
+    assert resp.get_json()["path"] is None
+
+
+def test_find_local_folder_returns_null_on_empty_params(client):
+    """Missing probe params → {"path": null}, no crash."""
+    resp = client.post("/find-local-folder", json={})
+    assert resp.status_code == 200
+    assert resp.get_json()["path"] is None

@@ -817,6 +817,46 @@ def create_app(testing: bool = False) -> Flask:
             _save_library(entries)
         return jsonify(entry)
 
+    @app.post("/find-local-folder")
+    def find_local_folder():
+        body = request.get_json() or {}
+        probe_name = body.get("probe_name", "").strip()
+        probe_content = body.get("probe_content", "").strip()
+        if not probe_name or not probe_content:
+            return jsonify({"path": None})
+
+        home = Path.home()
+        search_roots = ["Downloads", "Videos", "Documents", "Desktop", "Pictures"]
+
+        for root_name in search_roots:
+            root = home / root_name
+            if not root.exists():
+                continue
+            # Collect folders up to depth 2 under this root
+            dirs_to_check = [root]
+            try:
+                for item in root.iterdir():
+                    if item.is_dir():
+                        dirs_to_check.append(item)
+                        try:
+                            for subitem in item.iterdir():
+                                if subitem.is_dir():
+                                    dirs_to_check.append(subitem)
+                        except (PermissionError, OSError):
+                            pass
+            except (PermissionError, OSError):
+                pass
+
+            for folder_path in dirs_to_check:
+                probe_path = folder_path / probe_name
+                try:
+                    if probe_path.is_file() and probe_path.read_text(encoding="utf-8").strip() == probe_content:
+                        return jsonify({"path": str(folder_path)})
+                except (PermissionError, OSError):
+                    continue
+
+        return jsonify({"path": None})
+
     @app.post("/open-folder")
     def open_folder_in_explorer():
         body = request.get_json() or {}
