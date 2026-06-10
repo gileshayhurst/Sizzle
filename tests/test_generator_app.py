@@ -241,6 +241,43 @@ def test_group_lines_into_segments_none_selected():
     assert result == []
 
 
+def test_group_lines_into_segments_uses_video_duration_for_last_segment():
+    """When video_duration is provided, last segment ends at video end, not +10s."""
+    from generator_app import _group_lines_into_segments
+    lines = [
+        {"raw": "a", "seconds": 5.0},
+        {"raw": "b", "seconds": 10.0},
+    ]
+    result = _group_lines_into_segments(lines, {"a", "b"}, video_duration=30.0)
+    assert result == [(5.0, 30.0)]
+
+
+def test_group_lines_into_segments_falls_back_to_plus_ten_without_duration():
+    """When video_duration is None, existing +10 behaviour is preserved."""
+    from generator_app import _group_lines_into_segments
+    lines = [
+        {"raw": "a", "seconds": 5.0},
+        {"raw": "b", "seconds": 10.0},
+    ]
+    result = _group_lines_into_segments(lines, {"a", "b"}, video_duration=None)
+    assert result == [(5.0, 20.0)]
+
+
+def test_get_video_duration_returns_seconds():
+    from generator_app import get_video_duration
+    from unittest.mock import patch, MagicMock
+    with patch("generator_app.subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(stdout="127.5\n", returncode=0)
+        assert get_video_duration("/fake/video.mp4") == 127.5
+
+
+def test_get_video_duration_returns_none_on_failure():
+    from generator_app import get_video_duration
+    from unittest.mock import patch
+    with patch("generator_app.subprocess.run", side_effect=Exception("ffprobe missing")):
+        assert get_video_duration("/fake/video.mp4") is None
+
+
 # ─── Job / status / cancel routes ─────────────────────────────────────────────
 
 def test_status_unknown_job_returns_404(client):

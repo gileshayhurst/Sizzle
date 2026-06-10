@@ -91,7 +91,7 @@ def _library_add(entry: dict) -> None:
 
 
 def _group_lines_into_segments(
-    all_lines: list, selected_raws: set
+    all_lines: list, selected_raws: set, video_duration: float | None = None
 ) -> list:
     """Convert selected transcript lines into (start_sec, end_sec) clip ranges."""
     segments = []
@@ -106,7 +106,8 @@ def _group_lines_into_segments(
                 current = []
 
     if current:
-        segments.append((current[0]["seconds"], current[-1]["seconds"] + 10.0))
+        end = video_duration if video_duration is not None else current[-1]["seconds"] + 10.0
+        segments.append((current[0]["seconds"], end))
 
     return segments
 
@@ -166,6 +167,27 @@ def get_video_dimensions(video_path: str) -> tuple:
         print(f"Warning: could not probe dimensions for {video_path}: {exc}",
               file=__import__("sys").stderr)
         return (1920, 1080)
+
+
+def get_video_duration(video_path: str) -> float | None:
+    """Return the video duration in seconds, or None on failure."""
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe", "-v", "error",
+                "-show_entries", "format=duration",
+                "-of", "csv=p=0",
+                video_path,
+            ],
+            capture_output=True,
+            check=True,
+            text=True,
+            encoding="utf-8",
+            timeout=5,
+        )
+        return float(result.stdout.strip())
+    except Exception:
+        return None
 
 
 def make_title_card(
@@ -293,7 +315,8 @@ def _run_generation(job_id: str, folder: str,
             continue
 
         all_lines = _parse_transcript_lines(txt_path.read_text(encoding="utf-8"))
-        segs = _group_lines_into_segments(all_lines, set(selected_raws))
+        duration = get_video_duration(str(vp))
+        segs = _group_lines_into_segments(all_lines, set(selected_raws), video_duration=duration)
 
         if segs:
             _append_log(job_id, f"✓ {vp.name} — {len(segs)} segment(s)")
