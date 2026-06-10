@@ -175,6 +175,62 @@ function _clearSelections() {
 // ─── DOM refs ─────────────────────────────────────────────────────────────────
 const $ = id => document.getElementById(id);
 
+// ─── "Not downloaded" modal ───────────────────────────────────────────────────
+let _modalEntry = null;
+
+function _showNotDownloadedModal(entry) {
+  _modalEntry = entry;
+  const folderName = localStorage.getItem('sizzle_output_folder_name') || 'output folder';
+  $('not-downloaded-body').textContent =
+    `"${entry.filename}" has not been saved to your local machine.`;
+  $('btn-not-downloaded-save').textContent = `Save to ${folderName}`;
+  $('not-downloaded-modal').classList.remove('hidden');
+}
+
+$('btn-not-downloaded-close').addEventListener('click', () => {
+  $('not-downloaded-modal').classList.add('hidden');
+  _modalEntry = null;
+});
+
+$('btn-not-downloaded-view').addEventListener('click', () => {
+  if (_modalEntry) {
+    window.open(`${GENERATOR_URL}/library-video/${_modalEntry.id}`, '_blank');
+  }
+  $('not-downloaded-modal').classList.add('hidden');
+  _modalEntry = null;
+});
+
+$('btn-not-downloaded-save').addEventListener('click', async () => {
+  if (!_modalEntry) return;
+  const entry = _modalEntry;
+  $('not-downloaded-modal').classList.add('hidden');
+  _modalEntry = null;
+
+  let handle = await _idbLoad('sizzle_output_dir_handle').catch(() => null);
+  if (!handle) {
+    handle = await _pickOutputFolder();
+    if (!handle) return;
+  }
+
+  const saveBtn = document.querySelector(`.reel-btn.show[data-id="${entry.id}"]`);
+  if (saveBtn) { saveBtn.textContent = '⬇ Saving…'; saveBtn.disabled = true; }
+
+  try {
+    const resp = await fetch(`${GENERATOR_URL}/library-video/${entry.id}`);
+    if (!resp.ok) throw new Error(`Fetch failed: ${resp.status}`);
+    const blob = await resp.blob();
+    const saved = await _saveToOutputFolder(handle, entry.filename, blob, entry.id);
+
+    if (saveBtn) {
+      saveBtn.disabled = false;
+      saveBtn.textContent = saved.localFolderPath ? '📂 Show' : '🌐 View';
+    }
+  } catch (err) {
+    if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = '📂 Show'; }
+    alert(`Save failed: ${err.message}`);
+  }
+});
+
 // ─── Navigation ───────────────────────────────────────────────────────────────
 document.querySelectorAll('.nav-tab').forEach(btn => {
   btn.addEventListener('click', () => {
@@ -1255,9 +1311,19 @@ function _renderCardBody(body, card, entry, dateStr) {
   showBtn.className = 'reel-btn show';
   showBtn.dataset.id = entry.id;
   showBtn.dataset.path = entry.path || '';
-  // In cloud mode there is no local folder to reveal; the button becomes a
-  // download link that opens the reel via the generator proxy endpoint.
-  showBtn.textContent = APP_MODE === 'cloud' ? '⬇ Download' : '📂 Show';
+
+  if (APP_MODE === 'cloud') {
+    const dlInfo = _getDownload(entry.id);
+    if (dlInfo && dlInfo.localFolderPath) {
+      showBtn.textContent = '📂 Show';
+    } else if (dlInfo) {
+      showBtn.textContent = '🌐 View';
+    } else {
+      showBtn.textContent = '📂 Show';
+    }
+  } else {
+    showBtn.textContent = '📂 Show';
+  }
 
   actions.appendChild(playBtn);
   actions.appendChild(showBtn);
@@ -1268,11 +1334,35 @@ function _renderCardBody(body, card, entry, dateStr) {
 
   showBtn.addEventListener('click', async () => {
     if (APP_MODE === 'cloud') {
-      // Open the video through the generator proxy (handles CORS + S3 fallback).
-      window.open(`${GENERATOR_URL}/library-video/${entry.id}`, '_blank');
+      const info = _getDownload(entry.id);
+      if (info) {
+        if (info.localFolderPath) {
+          await fetch(GENERATOR_URL + '/open-folder', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              folder: info.localFolderPath,
+              file_path: info.localFolderPath + '\\' + info.filename,
+            }),
+          });
+        } else {
+          const handle = await _idbLoad('sizzle_output_dir_handle').catch(() => null);
+          if (handle) {
+            try {
+              const fh = await handle.getFileHandle(info.filename);
+              const objUrl = URL.createObjectURL(await fh.getFile());
+              window.open(objUrl, '_blank');
+              URL.revokeObjectURL(objUrl);
+              return;
+            } catch { /* fall through to proxy */ }
+          }
+          window.open(`${GENERATOR_URL}/library-video/${entry.id}`, '_blank');
+        }
+      } else {
+        _showNotDownloadedModal(entry);
+      }
       return;
     }
-    // Local mode: open the containing folder with the file highlighted.
     const folder = (entry.path || '').replace(/[\\/][^\\/]+$/, '');
     await fetch(GENERATOR_URL + '/open-folder', {
       method: 'POST',
