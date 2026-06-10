@@ -49,8 +49,9 @@ function _clearSelections() {
   // if the user navigates back without reloading.
   for (const filename of Object.keys(state.checked))     state.checked[filename]     = new Set();
   for (const filename of Object.keys(state.highlighted)) state.highlighted[filename] = new Set();
-  $('analyze-add-row').classList.add('hidden');
-  $('analyze-add-input').value = '';
+  $('analyze-add-row')?.classList.add('hidden');
+  const addInput = $('analyze-add-input');
+  if (addInput) addInput.value = '';
 }
 
 // ─── DOM refs ─────────────────────────────────────────────────────────────────
@@ -323,6 +324,8 @@ async function runAddAnalyze() {
     // Union — add new lines without removing existing selections
     state.files.forEach(f => {
       const lines = data.highlights[f.name] || [];
+      if (!state.checked[f.name])     state.checked[f.name]     = new Set();
+      if (!state.highlighted[f.name]) state.highlighted[f.name] = new Set();
       lines.forEach(l => state.checked[f.name].add(l));
       lines.forEach(l => state.highlighted[f.name].add(l));
     });
