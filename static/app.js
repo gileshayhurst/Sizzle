@@ -108,7 +108,7 @@ $('folder-path-input').addEventListener('keydown', e => {
 async function openFolder(folder) {
   // Show a neutral loading indicator while the folder loads.
   // In cloud mode /load-folder downloads files from remote storage which can
-  // take ~10 seconds. Without feedback the user may click "Upload & Transcribe"
+  // take ~10 seconds. Without feedback the user may click "Upload"
   // and see a spurious "Select a folder or files first." error.
   const folderErr = $('folder-error');
   const btnLoad   = $('btn-load-folder');
@@ -1391,7 +1391,7 @@ $('folder-badge').addEventListener('click', async (e) => {
   }
 
   // Open Folder → upload
-  btnLoad.textContent = 'Upload & Transcribe';
+  btnLoad.textContent = 'Upload';
   btnLoad.onclick = () => doUpload();
 
   async function doUpload() {
@@ -1476,7 +1476,7 @@ $('folder-badge').addEventListener('click', async (e) => {
       folderErr.classList.remove('hidden');
     } finally {
       btnLoad.disabled = false;
-      btnLoad.textContent = 'Upload & Transcribe';
+      btnLoad.textContent = 'Upload';
     }
   }
 
@@ -1511,9 +1511,10 @@ $('folder-badge').addEventListener('click', async (e) => {
       metaSpan.textContent = `${s.video_count} video${s.video_count !== 1 ? 's' : ''} · ${relativeTime(s.last_opened)}`;
       li.appendChild(nameSpan);
       li.appendChild(metaSpan);
-      li.addEventListener('click', () => {
+      li.addEventListener('click', async () => {
         pathInput.value = s.name;
-        openFolder(s.folder);
+        await openFolder(s.folder);
+        $('folder-badge').textContent = '📁 ' + s.name + '/ ▾';
       });
       list.appendChild(li);
     });
