@@ -519,7 +519,8 @@ def create_app(testing: bool = False) -> Flask:
             job = _jobs.get(job_id)
             if job:
                 job["cancel"].set()
-                _jobs[job_id]["status"] = "cancelled"
+                if job["status"] == "running":
+                    job["status"] = "cancelled"
         return jsonify({"ok": True})
 
     @app.get("/transcripts")

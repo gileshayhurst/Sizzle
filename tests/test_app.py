@@ -1,4 +1,5 @@
 import os
+import threading
 from unittest.mock import patch, MagicMock
 from pathlib import Path
 
@@ -73,6 +74,22 @@ def test_status_returns_job_state(client):
 def test_status_unknown_job_returns_404(client):
     resp = client.get("/status/nonexistent-id")
     assert resp.status_code == 404
+
+
+def test_cancel_does_not_overwrite_done_status(client):
+    """Cancelling a completed transcription job must leave status='done'."""
+    from app import _jobs, _jobs_lock
+    job_id = "cancel-race-done-app-test"
+    with _jobs_lock:
+        _jobs[job_id] = {
+            "type": "transcription", "status": "done",
+            "total": 1, "done": 1, "log": [], "result": {},
+            "error": None, "cancel": threading.Event(),
+        }
+    resp = client.delete(f"/jobs/{job_id}")
+    assert resp.status_code == 200
+    with _jobs_lock:
+        assert _jobs[job_id]["status"] == "done"
 
 
 def test_group_by_minute_buckets_lines():
