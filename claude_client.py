@@ -20,7 +20,7 @@ Rules:
 
 def query_claude(transcript: str, prompt: str) -> str:
     message = _client.messages.create(
-        model="claude-opus-4-7",
+        model="claude-opus-4-8",
         max_tokens=256,
         system=_SYSTEM_PROMPT,
         messages=[

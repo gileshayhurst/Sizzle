@@ -288,7 +288,7 @@ def make_title_card(
 
 # ─── Generation worker ────────────────────────────────────────────────────────
 
-def _run_generation(job_id: str, folder: str, mode: str,
+def _run_generation(job_id: str, folder: str,
                     selections: dict, prompt: str, output_filename: str,
                     session_key: str = None) -> None:
     """Extract and stitch clips from selected transcript lines."""
@@ -394,7 +394,7 @@ def _run_generation(job_id: str, folder: str, mode: str,
             try:
                 make_title_card(
                     item["lines"], item["width"], item["height"], item["path"],
-                    fade_in_secs=2.0,
+                    duration=TITLE_CARD_DURATION, fade_in_secs=2.0,
                 )
                 item["ok"] = True
             except Exception as exc:
@@ -684,14 +684,14 @@ def create_app(testing: bool = False) -> Flask:
             # This prevents a live daemon thread from calling patched symbols
             # during a subsequent test's patch window.
             try:
-                _run_generation(job_id, folder, mode, selections, prompt, output_filename, session_key=session_key)
+                _run_generation(job_id, folder, selections, prompt, output_filename, session_key=session_key)
             finally:
                 if _tmp_dir_to_cleanup:
                     shutil.rmtree(_tmp_dir_to_cleanup, ignore_errors=True)
         else:
             def _run_with_cleanup():
                 try:
-                    _run_generation(job_id, folder, mode, selections, prompt, output_filename, session_key)
+                    _run_generation(job_id, folder, selections, prompt, output_filename, session_key)
                 finally:
                     if _tmp_dir_to_cleanup:
                         shutil.rmtree(_tmp_dir_to_cleanup, ignore_errors=True)
@@ -823,7 +823,8 @@ def create_app(testing: bool = False) -> Flask:
         body = request.get_json() or {}
         probe_name = body.get("probe_name", "").strip()
         probe_content = body.get("probe_content", "").strip()
-        if not probe_name or not probe_content:
+        if (not probe_name or not probe_content or
+                '/' in probe_name or '\\' in probe_name or '..' in probe_name):
             return jsonify({"path": None})
 
         home = Path.home()
