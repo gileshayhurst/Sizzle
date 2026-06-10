@@ -1133,3 +1133,37 @@ def test_find_local_folder_returns_null_on_empty_params(client):
     resp = client.post("/find-local-folder", json={})
     assert resp.status_code == 200
     assert resp.get_json()["path"] is None
+
+
+# ─── entry_id in result ───────────────────────────────────────────────────────
+
+def test_generation_result_includes_entry_id(tmp_path, client):
+    """The job result must include entry_id matching the library entry."""
+    video = tmp_path / "clip.mp4"
+    video.touch()
+    txt = tmp_path / "clip.txt"
+    txt.write_text("[0:00] Speaker: Hello world\n", encoding="utf-8")
+
+    captured_entry = {}
+
+    def fake_add(entry):
+        captured_entry.update(entry)
+
+    with patch("generator_app._library_add", side_effect=fake_add), \
+         patch("generator_app.make_title_card"), \
+         patch("generator_app.extract_clip"), \
+         patch("generator_app.stitch_clips"), \
+         patch("generator_app.get_video_dimensions", return_value=(1920, 1080)):
+        resp = client.post("/generate", json={
+            "folder": str(tmp_path),
+            "prompt": "test",
+            "output_filename": "out.mp4",
+            "selections": {"clip.mp4": ["[0:00] Speaker: Hello world"]},
+        })
+        assert resp.status_code == 200
+        job_id = resp.get_json()["job_id"]
+
+    from generator_app import _jobs
+    result = _jobs[job_id]["result"]
+    assert "entry_id" in result, "result must contain entry_id"
+    assert result["entry_id"] == captured_entry["id"]

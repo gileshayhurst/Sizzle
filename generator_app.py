@@ -573,6 +573,7 @@ def _run_generation(job_id: str, folder: str, mode: str,
     _library_add(library_entry)
 
     with _jobs_lock:
+        job["result"]["entry_id"] = library_entry["id"]
         job["status"] = "done"
 
 
