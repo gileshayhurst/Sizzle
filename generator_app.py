@@ -97,9 +97,20 @@ def _library_add(entry: dict) -> None:
 
 
 def _filter_generated_reels(video_paths: list) -> list:
-    """Remove paths recorded as generated reels. Fails open."""
+    """Remove paths recorded as generated reels. Fails open.
+
+    In cloud mode, matches by filename only — full paths differ between sessions
+    so path-based matching would never filter anything.
+    """
     try:
-        library_paths = {Path(e["path"]).resolve() for e in _load_library()}
+        library = _load_library()
+        if storage.is_cloud():
+            library_filenames = {
+                e.get("filename") or Path(e["path"]).name
+                for e in library
+            }
+            return [vp for vp in video_paths if vp.name not in library_filenames]
+        library_paths = {Path(e["path"]).resolve() for e in library}
     except Exception:
         return video_paths
     return [vp for vp in video_paths if vp.resolve() not in library_paths]

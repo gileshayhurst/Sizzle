@@ -13,6 +13,7 @@ const state = {
   resultJobId: null,
   lastPrompt: '',     // prompt used for the most recent Analyze call
   resultSegmentStarts: [],
+  resultDownloadUrl: null,
   librarySegmentStarts: [],
   librarySort: 'newest',
   libraryEntries: [],
@@ -877,6 +878,7 @@ function showResult(result) {
   $('topbar-controls').classList.remove('hidden');
 
   state.resultSegmentStarts = result.segment_starts || [];
+  state.resultDownloadUrl = result.download_url || null;
 
   // Always serve through the generator endpoint — it serves directly from the
   // local temp file (kept alive until container restart) so playback works
@@ -888,8 +890,24 @@ function showResult(result) {
   $('result-filename').textContent = result.filename;
   const mins = Math.floor(result.duration_seconds / 60);
   const secs = result.duration_seconds % 60;
+  const savedLabel = APP_MODE === 'cloud' ? 'uploaded to cloud' : 'saved to folder';
   $('result-info').textContent =
-    `${mins}:${String(secs).padStart(2,'0')} · ${result.clip_count} clips · saved to folder`;
+    `${mins}:${String(secs).padStart(2,'0')} · ${result.clip_count} clips · ${savedLabel}`;
+
+  // In cloud mode the "Open Folder" button becomes a download link (there is no
+  // local folder to open).  If the R2 upload failed, hide the button entirely.
+  const openBtn = $('btn-open-folder');
+  if (APP_MODE === 'cloud') {
+    if (state.resultDownloadUrl) {
+      openBtn.textContent = '⬇ Download';
+      openBtn.style.display = '';
+    } else {
+      openBtn.style.display = 'none';
+    }
+  } else {
+    openBtn.textContent = '📂 Open Folder';
+    openBtn.style.display = '';
+  }
 }
 
 // ─── Segment skip ─────────────────────────────────────────────────────────────
@@ -932,6 +950,13 @@ $('btn-new-reel').addEventListener('click', () => {
 });
 
 $('btn-open-folder').addEventListener('click', async () => {
+  if (APP_MODE === 'cloud') {
+    // Open the S3 presigned download URL in a new tab.
+    if (state.resultDownloadUrl) {
+      window.open(state.resultDownloadUrl, '_blank');
+    }
+    return;
+  }
   await fetch(GENERATOR_URL + '/open-folder', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
