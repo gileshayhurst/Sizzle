@@ -33,7 +33,7 @@ from flask_sock import Sock
 
 from loader import scan_videos
 from video_editor import check_ffmpeg, extract_clip, parse_timestamp_to_seconds, stitch_clips
-from shared import parse_transcript_lines as _parse_transcript_lines
+from shared import parse_transcript_lines as _parse_transcript_lines, filter_generated_reels as _filter_generated_reels
 import storage
 
 LIBRARY_PATH = Path(__file__).parent / "sizzle_library.json"
@@ -70,15 +70,7 @@ def _append_log(job_id: str, message: str) -> None:
 # ─── Library helpers ──────────────────────────────────────────────────────────
 
 def _load_library() -> list:
-    if storage.is_cloud():
-        return storage.read_json(storage.library_key())
-    if not LIBRARY_PATH.exists():
-        return []
-    try:
-        with LIBRARY_PATH.open(encoding="utf-8") as f:
-            return json.load(f)
-    except (json.JSONDecodeError, OSError):
-        return []
+    return storage.load_library()
 
 
 def _save_library(entries: list) -> None:
@@ -95,25 +87,6 @@ def _library_add(entry: dict) -> None:
         entries.insert(0, entry)
         _save_library(entries)
 
-
-def _filter_generated_reels(video_paths: list) -> list:
-    """Remove paths recorded as generated reels. Fails open.
-
-    In cloud mode, matches by filename only — full paths differ between sessions
-    so path-based matching would never filter anything.
-    """
-    try:
-        library = _load_library()
-        if storage.is_cloud():
-            library_filenames = {
-                e.get("filename") or Path(e["path"]).name
-                for e in library
-            }
-            return [vp for vp in video_paths if vp.name not in library_filenames]
-        library_paths = {Path(e["path"]).resolve() for e in library}
-    except Exception:
-        return video_paths
-    return [vp for vp in video_paths if vp.resolve() not in library_paths]
 
 
 

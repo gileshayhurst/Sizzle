@@ -1,5 +1,7 @@
 import re as _re
 
+import storage as _storage
+from pathlib import Path as _Path
 from video_editor import parse_timestamp_to_seconds
 
 _LINE_RE = _re.compile(r'^\[(\d+:\d{2})\]\s+\w+:\s*(.*)')
@@ -29,3 +31,25 @@ def parse_transcript_lines(raw_text: str) -> list[dict]:
             "minute_bucket": int(seconds) // 60,
         })
     return lines
+
+
+def filter_generated_reels(video_paths: list, library: list = None) -> list:
+    """Remove video paths recorded as generated reels. Fails open.
+
+    In cloud mode, matches by filename only — full paths differ between
+    sessions so path-based matching would never filter anything.
+    Pass library explicitly in tests to avoid live storage reads.
+    """
+    try:
+        if library is None:
+            library = _storage.load_library()
+        if _storage.is_cloud():
+            library_filenames = {
+                e.get("filename") or _Path(e["path"]).name
+                for e in library
+            }
+            return [vp for vp in video_paths if vp.name not in library_filenames]
+        library_paths = {_Path(e["path"]).resolve() for e in library}
+    except Exception:
+        return video_paths
+    return [vp for vp in video_paths if vp.resolve() not in library_paths]

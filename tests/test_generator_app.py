@@ -594,23 +594,22 @@ def test_generation_result_includes_segment_starts(client, tmp_path):
 # ─── /library routes ──────────────────────────────────────────────────────────
 
 def test_library_starts_empty(client, tmp_path, monkeypatch):
-    import generator_app as gen_module
-    monkeypatch.setattr(gen_module, "LIBRARY_PATH", tmp_path / "lib.json")
-    resp = client.get("/library")
+    with patch("storage.load_library", return_value=[]):
+        resp = client.get("/library")
     assert resp.status_code == 200
     assert resp.get_json() == []
 
 
 def test_library_delete_removes_entry(client, tmp_path, monkeypatch):
     import generator_app as gen_module
-    lib_path = tmp_path / "lib.json"
-    monkeypatch.setattr(gen_module, "LIBRARY_PATH", lib_path)
-    lib_path.write_text(json.dumps([{"id": "abc123", "filename": "x.mp4"}]), encoding="utf-8")
-    resp = client.delete("/library/abc123")
+    initial_entries = [{"id": "abc123", "filename": "x.mp4"}]
+    saved = []
+    with patch("storage.load_library", return_value=list(initial_entries)), \
+         patch.object(gen_module, "_save_library", side_effect=lambda entries: saved.extend(entries)):
+        resp = client.delete("/library/abc123")
     assert resp.status_code == 200
     assert resp.get_json()["ok"] is True
-    remaining = json.loads(lib_path.read_text(encoding="utf-8"))
-    assert remaining == []
+    assert saved == []
 
 
 # ─── Error-recovery in _run_generation ───────────────────────────────────────
@@ -1131,6 +1130,15 @@ def test_find_local_folder_returns_null_when_not_found(tmp_path, client):
 def test_find_local_folder_returns_null_on_empty_params(client):
     """Missing probe params → {"path": null}, no crash."""
     resp = client.post("/find-local-folder", json={})
+    assert resp.status_code == 200
+    assert resp.get_json()["path"] is None
+
+
+def test_find_local_folder_rejects_traversal_probe_name(client):
+    resp = client.post("/find-local-folder", json={
+        "probe_name": "../../etc/passwd",
+        "probe_content": "anything",
+    })
     assert resp.status_code == 200
     assert resp.get_json()["path"] is None
 

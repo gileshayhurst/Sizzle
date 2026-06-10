@@ -32,7 +32,7 @@ from loader import scan_videos
 from timestamp_parser import parse_timestamps
 from transcriber import transcribe_video
 from video_editor import parse_timestamp_to_seconds
-from shared import parse_transcript_lines as _parse_transcript_lines
+from shared import parse_transcript_lines as _parse_transcript_lines, filter_generated_reels as _filter_generated_reels
 import storage
 
 RECENT_FOLDERS_PATH = Path(__file__).parent / "recent_folders.json"
@@ -116,43 +116,6 @@ def _group_by_minute(lines: list[dict]) -> list[dict]:
         })
     return result
 
-
-
-def _filter_generated_reels(video_paths: list[Path]) -> list[Path]:
-    """Remove paths that are recorded as generated reels in the library.
-
-    Prevents previously generated sizzle reels saved in the source folder
-    from being re-discovered as source videos on subsequent folder opens.
-    Fails open: if the library cannot be read, all paths are returned unchanged.
-
-    In cloud mode, matches by filename only — full paths differ between sessions
-    so path-based matching would never filter anything.
-    """
-    try:
-        library = _load_library()
-        if storage.is_cloud():
-            library_filenames = {
-                entry.get("filename") or Path(entry["path"]).name
-                for entry in library
-            }
-            return [vp for vp in video_paths if vp.name not in library_filenames]
-        library_paths = {Path(entry["path"]).resolve() for entry in library}
-    except Exception:
-        return video_paths
-    return [vp for vp in video_paths if vp.resolve() not in library_paths]
-
-
-def _load_library() -> list:
-    if storage.is_cloud():
-        return storage.read_json(storage.library_key())
-    library_path = Path(__file__).parent / "sizzle_library.json"
-    if not library_path.exists():
-        return []
-    try:
-        with library_path.open(encoding="utf-8") as f:
-            return json.load(f)
-    except (json.JSONDecodeError, OSError):
-        return []
 
 
 def _load_recent_folders() -> list:

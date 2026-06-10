@@ -110,8 +110,7 @@ def test_transcripts_endpoint_returns_structured_data(client, tmp_path):
 
 def test_load_folder_excludes_generated_reels(client, tmp_path, monkeypatch):
     """Videos that appear in the library are treated as generated output, not source."""
-    import app as app_module
-    import json as _json
+    from unittest.mock import patch
 
     source = tmp_path / "source.mp4"
     reel = tmp_path / "NOBU_sizzle.mp4"
@@ -119,15 +118,13 @@ def test_load_folder_excludes_generated_reels(client, tmp_path, monkeypatch):
     reel.touch()
     (tmp_path / "source.txt").write_text("[0:05] Speaker: Hi.", encoding="utf-8")
 
-    lib_path = tmp_path / "lib.json"
-    lib_path.write_text(_json.dumps([{
+    library = [{
         "id": "abc", "filename": "NOBU_sizzle.mp4", "path": str(reel),
         "source_folder": "tmp/", "prompt": "", "duration_seconds": 10,
         "clip_count": 1, "created_at": "2026-01-01T00:00:00",
-    }]), encoding="utf-8")
-    monkeypatch.setattr(app_module, "_load_library", lambda: _json.loads(lib_path.read_text(encoding="utf-8")))
-
-    resp = client.post("/load-folder", json={"folder": str(tmp_path)})
+    }]
+    with patch("storage.load_library", return_value=library):
+        resp = client.post("/load-folder", json={"folder": str(tmp_path)})
     assert resp.status_code == 200
     data = resp.get_json()
     assert "NOBU_sizzle.mp4" not in data["files"]
@@ -137,8 +134,7 @@ def test_load_folder_excludes_generated_reels(client, tmp_path, monkeypatch):
 def test_transcripts_excludes_generated_reels(client, tmp_path, monkeypatch):
     """GET /transcripts filters out library entries so generated reels don't appear
     in the sidebar."""
-    import app as app_module
-    import json as _json
+    from unittest.mock import patch
 
     source = tmp_path / "source.mp4"
     reel = tmp_path / "NOBU_sizzle.mp4"
@@ -146,15 +142,13 @@ def test_transcripts_excludes_generated_reels(client, tmp_path, monkeypatch):
     reel.touch()
     (tmp_path / "source.txt").write_text("[0:05] Speaker: Hi.", encoding="utf-8")
 
-    lib_path = tmp_path / "lib.json"
-    lib_path.write_text(_json.dumps([{
+    library = [{
         "id": "abc", "filename": "NOBU_sizzle.mp4", "path": str(reel),
         "source_folder": "tmp/", "prompt": "", "duration_seconds": 10,
         "clip_count": 1, "created_at": "2026-01-01T00:00:00",
-    }]), encoding="utf-8")
-    monkeypatch.setattr(app_module, "_load_library", lambda: _json.loads(lib_path.read_text(encoding="utf-8")))
-
-    resp = client.get(f"/transcripts?folder={tmp_path}")
+    }]
+    with patch("storage.load_library", return_value=library):
+        resp = client.get(f"/transcripts?folder={tmp_path}")
     assert resp.status_code == 200
     data = resp.get_json()
     names = [f["name"] for f in data["files"]]

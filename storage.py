@@ -182,3 +182,16 @@ def presigned_put_url(key: str, expires: int = 3600) -> str:
         Params={"Bucket": _bucket(), "Key": key},
         ExpiresIn=expires,
     )
+
+
+def load_library() -> list:
+    """Load the sizzle library JSON. Returns [] on missing or corrupt."""
+    if is_cloud():
+        return read_json(library_key())
+    path = _data_root() / "sizzle_library.json"
+    if not path.exists():
+        return []
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return []

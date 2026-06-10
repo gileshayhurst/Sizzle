@@ -1,3 +1,6 @@
+from pathlib import Path
+from unittest.mock import patch
+
 from shared import parse_transcript_lines
 
 
@@ -38,3 +41,37 @@ def test_parse_skips_blank_lines():
     raw = "[0:05] Speaker: First.\n\n[1:30] Speaker: Second."
     result = parse_transcript_lines(raw)
     assert len(result) == 2
+
+
+def test_filter_removes_reel_path_local_mode():
+    from shared import filter_generated_reels
+    library = [{"path": str(Path("/videos/reel.mp4").resolve()), "filename": "reel.mp4"}]
+    paths = [Path("/videos/source.mp4"), Path("/videos/reel.mp4")]
+    with patch("storage.is_cloud", return_value=False):
+        result = filter_generated_reels(paths, library=library)
+    assert [p.name for p in result] == ["source.mp4"]
+
+
+def test_filter_removes_reel_by_filename_cloud_mode():
+    from shared import filter_generated_reels
+    library = [{"filename": "reel.mp4", "path": "/ignored"}]
+    paths = [Path("/tmp/source.mp4"), Path("/tmp/reel.mp4")]
+    with patch("storage.is_cloud", return_value=True):
+        result = filter_generated_reels(paths, library=library)
+    assert [p.name for p in result] == ["source.mp4"]
+
+
+def test_filter_fails_open_on_load_library_exception():
+    from shared import filter_generated_reels
+    paths = [Path("/a.mp4"), Path("/b.mp4")]
+    with patch("storage.load_library", side_effect=RuntimeError("db error")):
+        result = filter_generated_reels(paths)   # library=None → calls load_library
+    assert result == paths
+
+
+def test_filter_returns_all_when_library_empty():
+    from shared import filter_generated_reels
+    paths = [Path("/a.mp4"), Path("/b.mp4")]
+    with patch("storage.is_cloud", return_value=False):
+        result = filter_generated_reels(paths, library=[])
+    assert result == paths
