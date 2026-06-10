@@ -136,6 +136,8 @@ body {
   border-radius: 4px; padding: 7px 10px; color: #b0c0d8; font-family: inherit; font-size: 12px;
 }
 .error-msg { color: #e94560; font-size: 11px; }
+/* Loading state overrides the red error colour — higher specificity wins */
+.error-msg.folder-loading { color: #888; font-style: italic; }
 
 /* RECENT FOLDERS */
 .recent-folders-section { margin-top: 8px; padding-top: 16px; border-top: 1px solid #1a2840; }

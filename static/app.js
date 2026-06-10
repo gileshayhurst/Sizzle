@@ -106,7 +106,17 @@ $('folder-path-input').addEventListener('keydown', e => {
 });
 
 async function openFolder(folder) {
-  $('folder-error').classList.add('hidden');
+  // Show a neutral loading indicator while the folder loads.
+  // In cloud mode /load-folder downloads files from remote storage which can
+  // take ~10 seconds. Without feedback the user may click "Upload & Transcribe"
+  // and see a spurious "Select a folder or files first." error.
+  const folderErr = $('folder-error');
+  const btnLoad   = $('btn-load-folder');
+  folderErr.textContent = 'Loading folder…';
+  folderErr.classList.remove('hidden');
+  folderErr.classList.add('folder-loading');
+  if (btnLoad) btnLoad.disabled = true;
+
   let resp, data;
   try {
     resp = await fetch('/load-folder', {
@@ -116,15 +126,23 @@ async function openFolder(folder) {
     });
     data = await resp.json();
   } catch (err) {
-    $('folder-error').textContent = 'Could not open folder — try uploading your files again.';
-    $('folder-error').classList.remove('hidden');
+    folderErr.classList.remove('folder-loading');
+    folderErr.textContent = 'Could not open folder — try uploading your files again.';
+    // folderErr stays visible as an error
+    if (btnLoad) btnLoad.disabled = false;
     return;
   }
+
+  folderErr.classList.remove('folder-loading');
+  if (btnLoad) btnLoad.disabled = false;
+
   if (!resp.ok) {
-    $('folder-error').textContent = data.error || 'Failed to open folder';
-    $('folder-error').classList.remove('hidden');
+    folderErr.textContent = data.error || 'Failed to open folder';
+    folderErr.classList.remove('hidden');
     return;
   }
+
+  folderErr.classList.add('hidden');
   state.folder = folder;
   state.files = [];
   state.checked = {};
