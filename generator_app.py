@@ -811,9 +811,23 @@ def create_app(testing: bool = False) -> Flask:
 
     @app.post("/open-folder")
     def open_folder_in_explorer():
-        folder = (request.get_json() or {}).get("folder", "").strip()
-        if folder and Path(folder).exists():
-            subprocess.Popen(['explorer', folder])
+        body = request.get_json() or {}
+        folder = body.get("folder", "").strip()
+        file_path = body.get("file_path", "").strip()
+
+        # In cloud mode (Linux containers) there is no local folder to open;
+        # skip silently so the endpoint remains safe to call from all modes.
+        if not folder:
+            return jsonify({"ok": True})
+
+        try:
+            if file_path and Path(file_path).is_file():
+                # Highlight the specific file in Explorer (Windows only).
+                subprocess.Popen(['explorer', f'/select,{file_path}'])
+            elif Path(folder).exists():
+                subprocess.Popen(['explorer', folder])
+        except Exception:
+            pass  # no-op on non-Windows (Linux/macOS) where explorer doesn't exist
         return jsonify({"ok": True})
 
     return app

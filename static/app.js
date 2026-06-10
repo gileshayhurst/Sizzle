@@ -14,6 +14,7 @@ const state = {
   lastPrompt: '',     // prompt used for the most recent Analyze call
   resultSegmentStarts: [],
   resultDownloadUrl: null,
+  resultPath: null,
   librarySegmentStarts: [],
   librarySort: 'newest',
   libraryEntries: [],
@@ -879,6 +880,7 @@ function showResult(result) {
 
   state.resultSegmentStarts = result.segment_starts || [];
   state.resultDownloadUrl = result.download_url || null;
+  state.resultPath = result.path || null;
 
   // Always serve through the generator endpoint — it serves directly from the
   // local temp file (kept alive until container restart) so playback works
@@ -957,10 +959,12 @@ $('btn-open-folder').addEventListener('click', async () => {
     }
     return;
   }
+  // Pass the exact output file path so Explorer can highlight it directly,
+  // making the generated reel immediately visible even in a crowded folder.
   await fetch(GENERATOR_URL + '/open-folder', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ folder: state.folder }),
+    body: JSON.stringify({ folder: state.folder, file_path: state.resultPath }),
   });
 });
 
@@ -1095,7 +1099,9 @@ function _renderCardBody(body, card, entry, dateStr) {
   showBtn.className = 'reel-btn show';
   showBtn.dataset.id = entry.id;
   showBtn.dataset.path = entry.path || '';
-  showBtn.textContent = '📂 Show';
+  // In cloud mode there is no local folder to reveal; the button becomes a
+  // download link that opens the reel via the generator proxy endpoint.
+  showBtn.textContent = APP_MODE === 'cloud' ? '⬇ Download' : '📂 Show';
 
   actions.appendChild(playBtn);
   actions.appendChild(showBtn);
@@ -1105,11 +1111,17 @@ function _renderCardBody(body, card, entry, dateStr) {
   playBtn.addEventListener('click', () => openLibraryPlayer(entry));
 
   showBtn.addEventListener('click', async () => {
+    if (APP_MODE === 'cloud') {
+      // Open the video through the generator proxy (handles CORS + S3 fallback).
+      window.open(`${GENERATOR_URL}/library-video/${entry.id}`, '_blank');
+      return;
+    }
+    // Local mode: open the containing folder with the file highlighted.
     const folder = (entry.path || '').replace(/[\\/][^\\/]+$/, '');
     await fetch(GENERATOR_URL + '/open-folder', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ folder }),
+      body: JSON.stringify({ folder, file_path: entry.path }),
     });
   });
 

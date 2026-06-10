@@ -1022,3 +1022,47 @@ def test_ws_unknown_job_sends_error_done():
     assert messages[0]["type"] == "done"
     assert messages[0]["status"] == "error"
     assert "not found" in messages[0]["error"]
+
+
+# ─── /open-folder ─────────────────────────────────────────────────────────────
+
+def test_open_folder_returns_ok_when_folder_missing(client):
+    """open-folder returns 200 even when the path does not exist."""
+    resp = client.post("/open-folder", json={"folder": "/nonexistent/path/xyz"})
+    assert resp.status_code == 200
+    assert resp.get_json()["ok"] is True
+
+
+def test_open_folder_handles_popen_exception(client, tmp_path):
+    """open-folder returns 200 even when subprocess.Popen raises (e.g. no explorer on Linux)."""
+    with patch("generator_app.subprocess.Popen",
+               side_effect=FileNotFoundError("No such file: 'explorer'")):
+        resp = client.post("/open-folder", json={"folder": str(tmp_path)})
+    assert resp.status_code == 200
+    assert resp.get_json()["ok"] is True
+
+
+def test_open_folder_uses_select_syntax_when_file_path_given(client, tmp_path):
+    """/select,filepath syntax is used when file_path is provided and exists."""
+    reel = tmp_path / "reel.mp4"
+    reel.write_bytes(b"fake")
+    with patch("generator_app.subprocess.Popen") as mock_popen:
+        resp = client.post("/open-folder", json={
+            "folder": str(tmp_path),
+            "file_path": str(reel),
+        })
+    assert resp.status_code == 200
+    call_args = mock_popen.call_args[0][0]   # first positional arg (the command list)
+    assert any("/select," in a for a in call_args), \
+        f"Expected /select, in explorer args, got: {call_args}"
+
+
+def test_open_folder_falls_back_to_folder_when_file_path_missing(client, tmp_path):
+    """Falls back to opening the folder when file_path is absent."""
+    with patch("generator_app.subprocess.Popen") as mock_popen:
+        resp = client.post("/open-folder", json={"folder": str(tmp_path)})
+    assert resp.status_code == 200
+    call_args = mock_popen.call_args[0][0]
+    assert not any("/select," in a for a in call_args), \
+        "Should not use /select, when only folder is given"
+    assert str(tmp_path) in call_args[1] or str(tmp_path) == call_args[-1]
