@@ -105,7 +105,7 @@ $('folder-path-input').addEventListener('keydown', e => {
   }
 });
 
-async function openFolder(folder) {
+async function openFolder(folder, displayName) {
   // Show a neutral loading indicator while the folder loads.
   // In cloud mode /load-folder downloads files from remote storage which can
   // take ~10 seconds. Without feedback the user may click "Upload"
@@ -144,12 +144,12 @@ async function openFolder(folder) {
 
   folderErr.classList.add('hidden');
   state.folder = folder;
+  state.folderName = displayName || folder.split(/[\\/]/).pop();
   state.files = [];
   state.checked = {};
   state.highlighted = {};
 
-  $('folder-badge').textContent = '📁 ' + folder.split(/[\\/]/).pop() + '/ ▾';
-  $('output-filename').value = folder.split(/[\\/]/).pop() + '_sizzle.mp4';
+  $('folder-badge').textContent = '📁 ' + state.folderName + '/ ▾';
 
   if (data.job_id) {
     // Needs transcription
@@ -218,6 +218,10 @@ async function loadTranscripts(folder) {
 }
 
 function showWorkspace() {
+  const base = state.folderName || 'sizzle_reel';
+  const existingStems = new Set(state.files.map(f => f.name.replace(/\.[^.]+$/, '').toLowerCase()));
+  $('output-filename').value = existingStems.has(base.toLowerCase()) ? base + '1.mp4' : base + '.mp4';
+
   showScreen('screen-workspace');
   $('topbar-controls').classList.remove('hidden');
   renderSidebar();
@@ -1255,8 +1259,7 @@ $('folder-badge').addEventListener('click', async (e) => {
       btn.title = s.name;
       btn.addEventListener('click', async () => {
         _closeFolderDropdown();
-        await openFolder(s.folder);
-        $('folder-badge').textContent = '📁 ' + s.name + '/ ▾';
+        await openFolder(s.folder, s.name);
       });
       dropdown.appendChild(btn);
     });
@@ -1465,10 +1468,7 @@ $('folder-badge').addEventListener('click', async (e) => {
         selectedFiles.filter(f => ext(f.name) !== '.txt').length,
         commitData.folder
       );
-      await openFolder(commitData.folder);
-      // openFolder() sets the badge to the session UUID; override with the
-      // human-readable folder name that was selected in the browser.
-      $('folder-badge').textContent = '📁 ' + selectedFolderName + '/ ▾';
+      await openFolder(commitData.folder, selectedFolderName);
 
     } catch (err) {
       showScreen('screen-folder-picker');
@@ -1513,8 +1513,7 @@ $('folder-badge').addEventListener('click', async (e) => {
       li.appendChild(metaSpan);
       li.addEventListener('click', async () => {
         pathInput.value = s.name;
-        await openFolder(s.folder);
-        $('folder-badge').textContent = '📁 ' + s.name + '/ ▾';
+        await openFolder(s.folder, s.name);
       });
       list.appendChild(li);
     });
