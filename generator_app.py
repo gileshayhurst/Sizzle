@@ -208,6 +208,14 @@ def make_title_card(
     entirely.
     """
     fontsize = max(24, height // 15)
+
+    # Reduce font size if the longest line would overflow the frame.
+    # Rough estimate: Arial glyph width ≈ 0.55× fontsize.
+    max_chars = max(len(line) for line in lines)
+    usable_width = width - 80
+    while fontsize > 16 and max_chars * fontsize * 0.55 > usable_width:
+        fontsize = int(fontsize * 0.9)
+
     tmp_dir = Path(output_path).parent
     prefix = Path(output_path).stem  # unique per clip, e.g. "clip_0000"
 
@@ -247,7 +255,7 @@ def make_title_card(
             y_expr = f"(h-{total_h})/2+{y_off}"
         filters.append(
             f"drawtext={fontfile_arg}textfile={tf_name}"
-            f":fontcolor=white:fontsize={fontsize}:x=(w-text_w)/2:y={y_expr}"
+            f":fontcolor=white:fontsize={fontsize}:x=max(20,(w-text_w)/2):y={y_expr}"
         )
 
     if fade_in_secs > 0.0:

@@ -144,6 +144,36 @@ def test_make_title_card_does_not_wrap_short_title(tmp_path):
     assert vf_arg.count("drawtext=") == 1
 
 
+def test_make_title_card_reduces_fontsize_for_long_line(tmp_path):
+    """Font size must be reduced when a line would overflow the frame width."""
+    from generator_app import make_title_card
+    import re
+    out = str(tmp_path / "card.mp4")
+    # 50 chars at default fontsize (72 for 1080p) → 50*72*0.55=1980 > 1920-80=1840
+    long_line = "A" * 50
+    with patch("generator_app.subprocess.run") as mock_run, \
+         patch("generator_app._find_system_font", return_value=None):
+        mock_run.return_value = MagicMock(returncode=0)
+        make_title_card([long_line], 1920, 1080, out)
+    vf_value = mock_run.call_args[0][0][mock_run.call_args[0][0].index("-vf") + 1]
+    match = re.search(r"fontsize=(\d+)", vf_value)
+    assert match, "fontsize not found in drawtext filter"
+    assert int(match.group(1)) < 72, "Expected font size to be reduced below default 72"
+
+
+def test_make_title_card_x_expression_uses_max_clamp(tmp_path):
+    """The drawtext x expression must clamp to prevent text starting off-screen."""
+    from generator_app import make_title_card
+    out = str(tmp_path / "card.mp4")
+    with patch("generator_app.subprocess.run") as mock_run, \
+         patch("generator_app._find_system_font", return_value=None):
+        mock_run.return_value = MagicMock(returncode=0)
+        make_title_card(["Hello"], 1920, 1080, out)
+    vf_value = mock_run.call_args[0][0][mock_run.call_args[0][0].index("-vf") + 1]
+    assert "max(20,(w-text_w)/2)" in vf_value, \
+        f"Expected max(20,...) clamp in x expression, got: {vf_value}"
+
+
 # ─── get_video_dimensions ─────────────────────────────────────────────────────
 
 def test_get_video_dimensions_returns_width_height():
