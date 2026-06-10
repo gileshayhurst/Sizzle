@@ -40,6 +40,7 @@ PROMPT_HISTORY_PATH = Path(__file__).parent / "prompt_history.json"
 
 # Maps session_key → local temp dir for the duration of the process
 _cloud_session_dirs: dict[str, str] = {}
+_cloud_session_ready: dict[str, threading.Event] = {}
 _cloud_session_lock = threading.Lock()
 
 _jobs: dict = {}
@@ -222,18 +223,31 @@ def _run_analyze(folder: str, prompt: str) -> dict:
 def _ensure_cloud_session(session_key: str) -> str:
     """Download session files from S3 into a local temp dir if not already cached.
 
-    Returns the local temp dir path. Thread-safe.
+    Thread-safe: concurrent callers for the same session_key block until the
+    first caller finishes downloading (rather than getting a half-populated dir).
     """
     with _cloud_session_lock:
         if session_key in _cloud_session_dirs:
-            return _cloud_session_dirs[session_key]
-        tmp = tempfile.mkdtemp(prefix="sizzle_session_")
-        _cloud_session_dirs[session_key] = tmp
+            event = _cloud_session_ready[session_key]
+            is_new = False
+        else:
+            tmp = tempfile.mkdtemp(prefix="sizzle_session_")
+            _cloud_session_dirs[session_key] = tmp
+            event = threading.Event()
+            _cloud_session_ready[session_key] = event
+            is_new = True
 
-    # Download outside the lock — this can take time
-    for key in storage.list_keys(session_key + "/"):
-        filename = Path(key).name
-        storage.download_file(key, os.path.join(tmp, filename))
+    if not is_new:
+        event.wait()          # block until the first caller finishes
+        return _cloud_session_dirs[session_key]
+
+    try:
+        tmp = _cloud_session_dirs[session_key]
+        for key in storage.list_keys(session_key + "/"):
+            filename = Path(key).name
+            storage.download_file(key, os.path.join(tmp, filename))
+    finally:
+        event.set()           # release waiters even if download failed
 
     return tmp
 

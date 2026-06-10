@@ -148,6 +148,41 @@ def test_load_folder_excludes_generated_reels(client, tmp_path, monkeypatch):
     assert "source.mp4" in data["files"]
 
 
+def test_ensure_cloud_session_caches_and_downloads(tmp_path):
+    """_ensure_cloud_session creates a temp dir, downloads files, and caches the result."""
+    import app as app_module
+    from unittest.mock import patch
+
+    app_module._cloud_session_dirs.clear()
+    app_module._cloud_session_ready.clear()
+
+    downloaded = []
+
+    def fake_download(key, local_path):
+        downloaded.append((key, local_path))
+
+    with patch("storage.is_cloud", return_value=True), \
+         patch("storage.list_keys", return_value=["sessions/x/video.mp4"]), \
+         patch("storage.download_file", side_effect=fake_download), \
+         patch("tempfile.mkdtemp", return_value=str(tmp_path)):
+        result = app_module._ensure_cloud_session("sessions/x")
+
+    assert result == str(tmp_path)
+    assert len(downloaded) == 1
+    assert downloaded[0][0] == "sessions/x/video.mp4"
+
+    # Second call must return cached path without re-downloading
+    with patch("storage.list_keys") as mock_list, \
+         patch("storage.download_file") as mock_dl:
+        result2 = app_module._ensure_cloud_session("sessions/x")
+    assert result2 == str(tmp_path)
+    mock_list.assert_not_called()
+    mock_dl.assert_not_called()
+
+    app_module._cloud_session_dirs.clear()
+    app_module._cloud_session_ready.clear()
+
+
 def test_transcripts_excludes_generated_reels(client, tmp_path, monkeypatch):
     """GET /transcripts filters out library entries so generated reels don't appear
     in the sidebar."""
