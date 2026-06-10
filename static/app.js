@@ -213,6 +213,7 @@ $('btn-not-downloaded-save').addEventListener('click', async () => {
   }
 
   const saveBtn = document.querySelector(`.reel-btn.show[data-id="${entry.id}"]`);
+  const prevBtnText = saveBtn ? saveBtn.textContent : '📂 Show';
   if (saveBtn) { saveBtn.textContent = '⬇ Saving…'; saveBtn.disabled = true; }
 
   try {
@@ -226,7 +227,7 @@ $('btn-not-downloaded-save').addEventListener('click', async () => {
       saveBtn.textContent = saved.localFolderPath ? '📂 Show' : '🌐 View';
     }
   } catch (err) {
-    if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = '📂 Show'; }
+    if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = prevBtnText; }
     alert(`Save failed: ${err.message}`);
   }
 });
@@ -1163,7 +1164,7 @@ $('btn-open-folder').addEventListener('click', async () => {
           const fh = await handle.getFileHandle(filename);
           const objUrl = URL.createObjectURL(await fh.getFile());
           window.open(objUrl, '_blank');
-          URL.revokeObjectURL(objUrl);
+          setTimeout(() => URL.revokeObjectURL(objUrl), 100);
           return;
         } catch { /* fall through */ }
       }
@@ -1352,7 +1353,7 @@ function _renderCardBody(body, card, entry, dateStr) {
               const fh = await handle.getFileHandle(info.filename);
               const objUrl = URL.createObjectURL(await fh.getFile());
               window.open(objUrl, '_blank');
-              URL.revokeObjectURL(objUrl);
+              setTimeout(() => URL.revokeObjectURL(objUrl), 100);
               return;
             } catch { /* fall through to proxy */ }
           }
