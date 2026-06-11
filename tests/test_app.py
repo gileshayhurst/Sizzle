@@ -148,6 +148,46 @@ def test_load_folder_excludes_generated_reels(client, tmp_path, monkeypatch):
     assert "source.mp4" in data["files"]
 
 
+def test_transcription_cancel_mid_video_stops_within_one_second(tmp_path, client):
+    """Cancelling during transcription must exit within ~1s, not wait for full video."""
+    import time
+    import app as app_module
+    from unittest.mock import patch
+
+    # A transcription that would block for 2 seconds without the fix
+    def slow_transcribe(path, model=None):
+        time.sleep(2)
+        return "[0:00] Speaker: hi"
+
+    (tmp_path / "a.mp4").touch()
+    (tmp_path / "b.mp4").touch()
+
+    with patch("app.transcribe_video", side_effect=slow_transcribe), \
+         patch("app._get_whisper_model", return_value=None):
+        resp = client.post("/load-folder", json={"folder": str(tmp_path)})
+        data = resp.get_json()
+        job_id = data.get("job_id")
+
+    assert job_id is not None
+
+    # Give the thread a moment to start transcribing
+    time.sleep(0.2)
+
+    # Cancel
+    client.delete(f"/jobs/{job_id}")
+
+    # Should stop well before the 2s video finishes
+    deadline = time.time() + 1.5
+    while time.time() < deadline:
+        status_resp = client.get(f"/status/{job_id}")
+        if status_resp.get_json()["status"] in ("cancelled", "done", "error"):
+            break
+        time.sleep(0.1)
+
+    final_status = client.get(f"/status/{job_id}").get_json()["status"]
+    assert final_status == "cancelled"
+
+
 def test_ensure_cloud_session_caches_and_downloads(tmp_path):
     """_ensure_cloud_session creates a temp dir, downloads files, and caches the result."""
     import app as app_module

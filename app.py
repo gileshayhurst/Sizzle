@@ -1,8 +1,10 @@
+import concurrent.futures
 import json
 import os
 import shutil
 import tempfile
 import threading
+import time
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -477,33 +479,44 @@ def create_app(testing: bool = False) -> Flask:
 
         def _transcribe():
             model = _get_whisper_model()
-            for i, vp in enumerate(needs_transcription):
-                with _jobs_lock:
-                    cancel_event = _jobs[job_id]["cancel"]
-                if cancel_event.is_set():
+            cancel_event = _jobs[job_id]["cancel"]
+            executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+            try:
+                for i, vp in enumerate(needs_transcription):
+                    if cancel_event.is_set():
+                        with _jobs_lock:
+                            _jobs[job_id]["status"] = "cancelled"
+                        return
+                    _append_log(job_id, f"⟳ {vp.name} — transcribing...")
+                    future = executor.submit(transcribe_video, str(vp), model=model)
+                    while not future.done():
+                        if cancel_event.is_set():
+                            executor.shutdown(wait=False)
+                            with _jobs_lock:
+                                _jobs[job_id]["status"] = "cancelled"
+                            _append_log(job_id, f"✗ {vp.name} — cancelled")
+                            return
+                        time.sleep(0.5)
+                    try:
+                        transcript = future.result()
+                        vp.with_suffix(".txt").write_text(transcript, encoding="utf-8")
+                        if storage.is_cloud():
+                            for sk, td in _cloud_session_dirs.items():
+                                if td == str(vp.parent):
+                                    storage.upload_file(
+                                        str(vp.with_suffix(".txt")),
+                                        f"{sk}/{vp.stem}.txt"
+                                    )
+                                    break
+                        _append_log(job_id, f"✓ {vp.name} — done")
+                    except Exception as exc:
+                        _append_log(job_id, f"✗ {vp.name} — failed: {exc}")
+                        with _jobs_lock:
+                            _jobs[job_id]["error"] = f"{vp.name}: {exc}"
                     with _jobs_lock:
-                        _jobs[job_id]["status"] = "cancelled"
-                    return
-                _append_log(job_id, f"⟳ {vp.name} — transcribing...")
-                try:
-                    transcript = transcribe_video(str(vp), model=model)
-                    vp.with_suffix(".txt").write_text(transcript, encoding="utf-8")
-                    if storage.is_cloud():
-                        # Upload transcript to S3 so the generator service can access it
-                        for sk, td in _cloud_session_dirs.items():
-                            if td == str(vp.parent):
-                                storage.upload_file(
-                                    str(vp.with_suffix(".txt")),
-                                    f"{sk}/{vp.stem}.txt"
-                                )
-                                break
-                    _append_log(job_id, f"✓ {vp.name} — done")
-                except Exception as exc:
-                    _append_log(job_id, f"✗ {vp.name} — failed: {exc}")
-                    with _jobs_lock:
-                        _jobs[job_id]["error"] = f"{vp.name}: {exc}"
-                with _jobs_lock:
-                    _jobs[job_id]["done"] = i + 1
+                        _jobs[job_id]["done"] = i + 1
+            finally:
+                executor.shutdown(wait=False)
             with _jobs_lock:
                 _jobs[job_id]["status"] = "done"
                 _jobs[job_id]["result"] = {"folder": folder, "files": filenames}
