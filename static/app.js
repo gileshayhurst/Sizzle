@@ -129,9 +129,16 @@ async function _autoSaveReelResult(jobId, filename, entryId) {
     if (result !== 'granted') return null;
   }
 
-  const resp = await fetch(`${GENERATOR_URL}/video/${jobId}`);
-  if (!resp.ok) throw new Error(`Video fetch failed: ${resp.status}`);
-  const blob = await resp.blob();
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 120_000);
+  let blob;
+  try {
+    const resp = await fetch(`${GENERATOR_URL}/video/${jobId}`, { signal: controller.signal });
+    if (!resp.ok) throw new Error(`Video fetch failed: ${resp.status}`);
+    blob = await resp.blob();
+  } finally {
+    clearTimeout(timeoutId);
+  }
 
   return _saveToOutputFolder(handle, filename, blob, entryId);
 }
@@ -413,7 +420,12 @@ function showWorkspace() {
     ...state.files.map(f => f.name.replace(/\.[^.]+$/, '').toLowerCase()),
     ...state.libraryEntries.map(e => (e.filename || '').replace(/\.[^.]+$/, '').toLowerCase()),
   ]);
-  $('output-filename').value = takenStems.has(base.toLowerCase()) ? base + '1.mp4' : base + '.mp4';
+  let suffix = '';
+  let n = 1;
+  while (takenStems.has((base + suffix).toLowerCase())) {
+    suffix = String(n++);
+  }
+  $('output-filename').value = base + suffix + '.mp4';
 
   showScreen('screen-workspace');
   $('topbar-controls').classList.remove('hidden');
