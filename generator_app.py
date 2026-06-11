@@ -767,15 +767,32 @@ def create_app(testing: bool = False) -> Flask:
         # CORS headers that flask-cors adds.  A redirect to a presigned URL would
         # send the browser directly to R2 (no CORS headers) and Chrome would
         # block the response with ERR_BLOCKED_BY_ORB.
+        # Range headers are proxied to S3 so the browser video player can seek.
         if storage.is_cloud() and entry.get("reel_s3_key"):
             try:
-                import io as _io
-                data = storage.read_file_bytes(entry["reel_s3_key"])
-                return send_file(
-                    _io.BytesIO(data),
-                    mimetype="video/mp4",
-                    conditional=True,
-                    download_name=entry.get("filename", "reel.mp4"),
+                from flask import Response
+                key = entry["reel_s3_key"]
+                get_kwargs: dict = {"Bucket": storage._bucket(), "Key": key}
+                range_header = request.headers.get("Range")
+                if range_header:
+                    get_kwargs["Range"] = range_header
+                obj = storage._s3().get_object(**get_kwargs)
+                status = 206 if range_header else 200
+                headers = {
+                    "Content-Type": "video/mp4",
+                    "Content-Length": str(obj["ContentLength"]),
+                    "Accept-Ranges": "bytes",
+                    "Content-Disposition": (
+                        f'inline; filename="{entry.get("filename", "reel.mp4")}"'
+                    ),
+                }
+                if "ContentRange" in obj:
+                    headers["Content-Range"] = obj["ContentRange"]
+                body = obj["Body"]
+                return Response(
+                    body.iter_chunks(chunk_size=65536),
+                    status=status,
+                    headers=headers,
                 )
             except Exception as exc:
                 return jsonify({"error": f"cloud fetch failed: {exc}"}), 502
