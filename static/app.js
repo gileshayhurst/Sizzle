@@ -342,8 +342,19 @@ function pollTranscription(jobId, folder) {
   let lastLogLen = 0;
 
   const interval = setInterval(async () => {
-    const resp = await fetch(`/status/${jobId}`);
-    const job = await resp.json();
+    let job;
+    try {
+      const resp = await fetch(`/status/${jobId}`);
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      job = await resp.json();
+    } catch (err) {
+      clearInterval(interval);
+      appendLog('transcribe-log', `✗ Status check failed: ${err.message}`);
+      showScreen('screen-folder-picker');
+      $('folder-error').textContent = 'Lost contact with server during transcription.';
+      $('folder-error').classList.remove('hidden');
+      return;
+    }
 
     const pct = job.total > 0 ? Math.round((job.done / job.total) * 100) : 0;
     $('transcribe-bar').style.width = pct + '%';
@@ -967,21 +978,31 @@ async function submitGenerate(mode, selections) {
   $('gen-bar').style.width = '0%';
   $('topbar-controls').classList.add('hidden');
 
-  const resp = await fetch(GENERATOR_URL + '/generate', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      folder: state.folder,
-      session_key: state.folder,   // cloud mode: folder === session key
-      mode,
-      selections,
-      prompt,
-      output_filename: outputFilename,
-    }),
-  });
-  const { job_id, error } = await resp.json();
+  let resp, jobData;
+  try {
+    resp = await fetch(GENERATOR_URL + '/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        folder: state.folder,
+        session_key: state.folder,
+        mode,
+        selections,
+        prompt,
+        output_filename: outputFilename,
+      }),
+    });
+    jobData = await resp.json();
+  } catch (err) {
+    appendLog('gen-log', `✗ Could not reach generator service: ${err.message}`);
+    $('topbar-controls').classList.remove('hidden');
+    return;
+  }
+
+  const { job_id, error } = jobData;
   if (!resp.ok) {
     appendLog('gen-log', `✗ ${error || 'Failed to start generation'}`);
+    $('topbar-controls').classList.remove('hidden');
     return;
   }
 
@@ -1183,8 +1204,16 @@ $('btn-open-folder').addEventListener('click', async () => {
 
 // ─── Library ──────────────────────────────────────────────────────────────────
 async function fetchLibrary() {
-  const resp = await fetch(GENERATOR_URL + '/library');
-  state.libraryEntries = await resp.json();
+  try {
+    const resp = await fetch(GENERATOR_URL + '/library');
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    state.libraryEntries = await resp.json();
+  } catch (err) {
+    $('library-count').textContent = 'Generated Reels';
+    const grid = $('library-grid');
+    grid.innerHTML = '<div class="library-empty">Could not load library — is the generator service running?</div>';
+    return;
+  }
   state.librarySort = $('library-sort').value;
   renderLibrary();
 }
@@ -1404,8 +1433,18 @@ function _showDeleteConfirm(body, card, entry, dateStr, actions) {
   async function doDelete(deleteFile) {
     libOnly.disabled = true;
     withFile.disabled = true;
+    cancelBtn.disabled = true;
     const url = `${GENERATOR_URL}/library/${entry.id}` + (deleteFile ? '?delete_file=true' : '');
-    await fetch(url, { method: 'DELETE' });
+    try {
+      const resp = await fetch(url, { method: 'DELETE' });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    } catch (err) {
+      libOnly.disabled = false;
+      withFile.disabled = false;
+      cancelBtn.disabled = false;
+      alert(`Delete failed: ${err.message}`);
+      return;
+    }
     card.classList.add('fading');
     setTimeout(() => {
       state.libraryEntries = state.libraryEntries.filter(e => e.id !== entry.id);
