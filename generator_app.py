@@ -244,13 +244,17 @@ def make_title_card(
     filters = []
     for i, tf_name in enumerate(text_filenames):
         if n == 1:
-            y_expr = "(h-text_h)/2"
+            # Avoid leading '(' — ffmpeg 8.x parser stops at the first balanced ')' when
+            # the value starts with '(', cutting off '/2' and producing a parse error.
+            y_expr = "h/2-text_h/2"
         else:
             y_off = i * (line_height + spacing)
-            y_expr = f"(h-{total_h})/2+{y_off}"
+            # Precompute at Python time so the value is a plain integer, not an expression
+            # starting with '(' (same ffmpeg 8.x parser bug as above).
+            y_expr = str((height - total_h) // 2 + y_off)
         filters.append(
             f"drawtext={fontfile_arg}textfile={tf_name}"
-            f":fontcolor=white:fontsize={fontsize}:x=max(20,(w-text_w)/2):y={y_expr}"
+            f":fontcolor=white:fontsize={fontsize}:x=w/2-text_w/2:y={y_expr}"
         )
 
     if fade_in_secs > 0.0:

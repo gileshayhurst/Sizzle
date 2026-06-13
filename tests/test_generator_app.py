@@ -161,8 +161,8 @@ def test_make_title_card_reduces_fontsize_for_long_line(tmp_path):
     assert int(match.group(1)) < 72, "Expected font size to be reduced below default 72"
 
 
-def test_make_title_card_x_expression_uses_max_clamp(tmp_path):
-    """The drawtext x expression must clamp to prevent text starting off-screen."""
+def test_make_title_card_x_expression_centers_text(tmp_path):
+    """The drawtext x expression must center text without commas (ffmpeg 8.x splits filter chain on commas)."""
     from generator_app import make_title_card
     out = str(tmp_path / "card.mp4")
     with patch("generator_app.subprocess.run") as mock_run, \
@@ -170,8 +170,10 @@ def test_make_title_card_x_expression_uses_max_clamp(tmp_path):
         mock_run.return_value = MagicMock(returncode=0)
         make_title_card(["Hello"], 1920, 1080, out)
     vf_value = mock_run.call_args[0][0][mock_run.call_args[0][0].index("-vf") + 1]
-    assert "max(20,(w-text_w)/2)" in vf_value, \
-        f"Expected max(20,...) clamp in x expression, got: {vf_value}"
+    assert "x=w/2-text_w/2" in vf_value, \
+        f"Expected comma-free centering expression, got: {vf_value}"
+    assert "max(20," not in vf_value, \
+        "x expression must not contain commas — ffmpeg 8.x treats them as filter separators"
 
 
 # ─── get_video_dimensions ─────────────────────────────────────────────────────
