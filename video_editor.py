@@ -92,19 +92,23 @@ def stitch_clips_to_pipe(clip_paths: list[str]) -> subprocess.Popen:
         f.write(f"file '{Path(path).as_posix()}'\n")
     f.close()
 
-    proc = subprocess.Popen(
-        [
-            "ffmpeg", "-y",
-            "-f", "concat",
-            "-safe", "0",
-            "-i", concat_list_path,
-            "-c", "copy",
-            "-movflags", "frag_keyframe+empty_moov",
-            "-f", "mp4",
-            "pipe:1",
-        ],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
+    try:
+        proc = subprocess.Popen(
+            [
+                "ffmpeg", "-y",
+                "-f", "concat",
+                "-safe", "0",
+                "-i", concat_list_path,
+                "-c", "copy",
+                "-movflags", "frag_keyframe+empty_moov",
+                "-f", "mp4",
+                "pipe:1",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+    except Exception:
+        os.unlink(concat_list_path)
+        raise
     proc._concat_list_path = concat_list_path
     return proc
