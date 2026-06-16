@@ -1,3 +1,4 @@
+import io
 import json
 import os
 import shutil
@@ -32,7 +33,7 @@ from flask_cors import CORS
 from flask_sock import Sock
 
 from loader import scan_videos
-from video_editor import check_ffmpeg, extract_clip, parse_timestamp_to_seconds, stitch_clips
+from video_editor import check_ffmpeg, extract_clip, parse_timestamp_to_seconds, stitch_clips, stitch_clips_to_pipe
 from shared import parse_transcript_lines as _parse_transcript_lines, filter_generated_reels as _filter_generated_reels
 import storage
 
@@ -509,14 +510,69 @@ def _run_generation(job_id: str, folder: str,
                 job["error"] = "No clips could be extracted"
             return
 
-        _append_log(job_id, "· Stitching reel...")
-        try:
-            stitch_clips(clip_paths, output_path)
-        except Exception as exc:
-            with _jobs_lock:
-                job["status"] = "error"
-                job["error"] = f"Stitch failed: {exc}"
-            return
+        reel_s3_key = f"{session_key}/{output_filename}" if storage.is_cloud() and session_key else None
+        reel_download_url = None
+
+        if reel_s3_key:
+            # Cloud mode: stream ffmpeg output simultaneously to local file + S3 upload.
+            _append_log(job_id, "· Stitching reel and uploading to cloud storage...")
+            proc = stitch_clips_to_pipe(clip_paths)
+
+            stderr_buf: list = []
+
+            def _drain_stderr():
+                stderr_buf.append(proc.stderr.read())
+
+            stderr_thread = threading.Thread(target=_drain_stderr, daemon=True)
+            stderr_thread.start()
+
+            upload_exc = None
+            try:
+                with open(output_path, "wb") as _local_f:
+                    class _TeeReader(io.RawIOBase):
+                        def readinto(self, b):
+                            data = proc.stdout.read(len(b))
+                            n = len(data)
+                            b[:n] = data
+                            if data:
+                                _local_f.write(data)
+                            return n
+
+                    storage.upload_stream(reel_s3_key, _TeeReader())
+            except Exception as exc:
+                upload_exc = exc
+                _append_log(job_id, f"✗ Streaming upload failed: {exc}")
+            finally:
+                try:
+                    os.unlink(proc._concat_list_path)
+                except OSError:
+                    pass
+
+            proc.wait()
+            stderr_thread.join()
+
+            if proc.returncode != 0:
+                stderr_text = (stderr_buf[0] if stderr_buf else b"").decode(errors="replace")
+                with _jobs_lock:
+                    job["status"] = "error"
+                    job["error"] = f"Stitch failed: {stderr_text[:300]}"
+                return
+
+            if upload_exc is None:
+                reel_download_url = storage.presigned_url(reel_s3_key)
+                _append_log(job_id, "✓ Reel stitched and uploaded to cloud storage")
+            else:
+                _append_log(job_id, "· Reel saved locally (cloud upload failed)")
+        else:
+            # Local mode: write to disk directly.
+            _append_log(job_id, "· Stitching reel...")
+            try:
+                stitch_clips(clip_paths, output_path)
+            except Exception as exc:
+                with _jobs_lock:
+                    job["status"] = "error"
+                    job["error"] = f"Stitch failed: {exc}"
+                return
 
     duration = int(sum(clip_durations) + title_card_count * TITLE_CARD_DURATION)
 
@@ -532,18 +588,6 @@ def _run_generation(job_id: str, folder: str,
             marker.write_text("\n".join(sorted(existing)), encoding="utf-8")
         except Exception:
             pass  # sidecar is best-effort; never fail generation over it
-
-    # In cloud mode: upload the finished reel to S3 and add a presigned download URL.
-    reel_download_url = None
-    if storage.is_cloud() and session_key:
-        reel_s3_key = f"{session_key}/{output_filename}"
-        _append_log(job_id, f"⟳ Uploading reel to cloud storage…")
-        try:
-            storage.upload_file(output_path, reel_s3_key)
-            reel_download_url = storage.presigned_url(reel_s3_key)
-            _append_log(job_id, f"✓ Reel uploaded to cloud storage")
-        except Exception as exc:
-            _append_log(job_id, f"✗ Could not upload reel to cloud storage: {exc}")
 
     result = {
         "path": output_path,

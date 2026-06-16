@@ -1,3 +1,4 @@
+import io
 import json
 import os
 import threading
@@ -1253,8 +1254,16 @@ def test_cloud_temp_dir_cleanup_scheduled(client, tmp_path):
             from pathlib import Path as _Path
             _Path(local_path).write_text(txt_content, encoding="utf-8")
 
+    mock_proc = MagicMock()
+    mock_proc.stdout = io.BytesIO(b"fake mp4 data")
+    mock_proc.stderr = io.BytesIO(b"")
+    mock_proc.returncode = 0
+    mock_proc._concat_list_path = str(tmp_path / "_concat_cleanup.txt")
+    Path(mock_proc._concat_list_path).touch()
+    mock_proc.wait.return_value = None
+
     with patch("generator_app.extract_clip"), \
-         patch("generator_app.stitch_clips"), \
+         patch("generator_app.stitch_clips_to_pipe", return_value=mock_proc), \
          patch("generator_app.check_ffmpeg"), \
          patch("generator_app.make_title_card"), \
          patch("generator_app.get_video_dimensions", return_value=(1920, 1080)), \
@@ -1265,7 +1274,7 @@ def test_cloud_temp_dir_cleanup_scheduled(client, tmp_path):
          patch("generator_app.storage.list_keys", side_effect=fake_list_keys), \
          patch("generator_app.storage.download_file", side_effect=fake_download), \
          patch("generator_app.storage.presigned_url", return_value="https://r2.example.com/vid.mp4"), \
-         patch("generator_app.storage.upload_file"), \
+         patch("generator_app.storage.upload_stream"), \
          patch("generator_app.threading.Timer", side_effect=fake_timer):
         resp = client.post("/generate", json={
             "session_key": session_key,
