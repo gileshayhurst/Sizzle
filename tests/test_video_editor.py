@@ -1,6 +1,8 @@
 import pytest
 import os
 import tempfile
+import subprocess
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 from subprocess import CalledProcessError
 from video_editor import (
@@ -202,3 +204,53 @@ def test_make_title_card_fade_in_appends_filter_and_afade():
     assert "-af" in cmd
     af_val = cmd[cmd.index("-af") + 1]
     assert "afade=t=in:st=0:d=2.0" in af_val
+
+
+def test_stitch_clips_to_pipe_returns_popen_with_pipe_stdout():
+    """stitch_clips_to_pipe must return a Popen with stdout=PIPE and the right ffmpeg flags."""
+    from video_editor import stitch_clips_to_pipe
+
+    with patch("video_editor.subprocess.Popen") as mock_popen:
+        mock_proc = MagicMock()
+        mock_popen.return_value = mock_proc
+
+        result = stitch_clips_to_pipe(["/tmp/a.mp4", "/tmp/b.mp4"])
+
+    assert result is mock_proc
+    call_args = mock_popen.call_args
+    cmd = call_args[0][0]
+    kwargs = call_args[1]
+
+    assert kwargs.get("stdout") == subprocess.PIPE
+    assert kwargs.get("stderr") == subprocess.PIPE
+    assert "pipe:1" in cmd
+    assert "-movflags" in cmd
+    movflags_val = cmd[cmd.index("-movflags") + 1]
+    assert "frag_keyframe" in movflags_val
+    assert "empty_moov" in movflags_val
+    # Must be a concat command
+    assert "concat" in cmd
+    assert "-c" in cmd and cmd[cmd.index("-c") + 1] == "copy"
+
+
+def test_stitch_clips_to_pipe_concat_list_contains_paths(tmp_path):
+    """stitch_clips_to_pipe must write clip paths into the concat list file."""
+    from video_editor import stitch_clips_to_pipe
+
+    captured_cmd = []
+
+    def fake_popen(cmd, **kwargs):
+        captured_cmd.extend(cmd)
+        m = MagicMock()
+        m._concat_list_path = cmd[cmd.index("-i") + 1]
+        return m
+
+    with patch("video_editor.subprocess.Popen", side_effect=fake_popen):
+        proc = stitch_clips_to_pipe(["/tmp/clip_0.mp4", "/tmp/clip_1.mp4"])
+
+    list_path = proc._concat_list_path
+    content = Path(list_path).read_text()
+    assert "/tmp/clip_0.mp4" in content
+    assert "/tmp/clip_1.mp4" in content
+    # Cleanup
+    Path(list_path).unlink(missing_ok=True)

@@ -75,3 +75,36 @@ def stitch_clips(clip_paths: list[str], output_path: str) -> None:
             result.check_returncode()
     finally:
         os.unlink(concat_list_path)
+
+
+def stitch_clips_to_pipe(clip_paths: list[str]) -> subprocess.Popen:
+    """Like stitch_clips but streams fragmented MP4 to stdout instead of writing a file.
+
+    Returns a Popen object. Caller must:
+    - Read proc.stdout (to consume the stream and avoid pipe buffer deadlock)
+    - Drain proc.stderr in a separate thread (to prevent ffmpeg blocking on a full pipe)
+    - Call proc.wait() after stdout is exhausted
+    - Delete proc._concat_list_path (the temp concat list file) after proc.wait()
+    """
+    f = tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False)
+    concat_list_path = f.name
+    for path in clip_paths:
+        f.write(f"file '{Path(path).as_posix()}'\n")
+    f.close()
+
+    proc = subprocess.Popen(
+        [
+            "ffmpeg", "-y",
+            "-f", "concat",
+            "-safe", "0",
+            "-i", concat_list_path,
+            "-c", "copy",
+            "-movflags", "frag_keyframe+empty_moov",
+            "-f", "mp4",
+            "pipe:1",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    proc._concat_list_path = concat_list_path
+    return proc
