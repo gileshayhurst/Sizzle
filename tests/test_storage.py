@@ -1,9 +1,11 @@
 """Tests for storage.py — exercises the local backend only (no real S3)."""
 import importlib
+import io
 import json
 import os
 import pytest
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 
 # ── helpers ────────────────────────────────────────────────────────────────────
@@ -231,3 +233,30 @@ def test_list_keys_empty_result(monkeypatch, tmp_path):
         result = s.list_keys("p/")
 
     assert result == []
+
+
+# ── upload_stream (cloud backend) ──────────────────────────────────────────────
+
+def test_upload_stream_calls_upload_fileobj_in_cloud_mode(monkeypatch):
+    """upload_stream must call boto3 upload_fileobj with the stream and correct key."""
+    monkeypatch.setenv("APP_MODE", "cloud")
+    monkeypatch.setenv("S3_BUCKET", "test-bucket")
+    monkeypatch.setenv("S3_ACCESS_KEY", "key")
+    monkeypatch.setenv("S3_SECRET_KEY", "secret")
+    monkeypatch.setenv("S3_ENDPOINT_URL", "http://localhost:9000")
+
+    import storage
+    importlib.reload(storage)
+
+    mock_s3 = MagicMock()
+    fake_stream = io.BytesIO(b"fake video bytes")
+
+    with patch("storage._s3", return_value=mock_s3), \
+         patch("storage._bucket", return_value="test-bucket"):
+        storage.upload_stream("sessions/abc/reel.mp4", fake_stream)
+
+    mock_s3.upload_fileobj.assert_called_once()
+    call_args = mock_s3.upload_fileobj.call_args
+    assert call_args[0][0] is fake_stream          # stream
+    assert call_args[0][1] == "test-bucket"        # bucket
+    assert call_args[0][2] == "sessions/abc/reel.mp4"  # key

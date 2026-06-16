@@ -191,6 +191,20 @@ def presigned_put_url(key: str, expires: int = 3600) -> str:
     )
 
 
+def upload_stream(key: str, readable) -> None:
+    """Upload a readable byte stream to S3/R2 using boto3's multipart transfer.
+
+    boto3 upload_fileobj handles multipart chunking automatically (default 8MB parts).
+    The stream must implement read(n) -> bytes; empty bytes signals EOF.
+    """
+    _s3().upload_fileobj(
+        readable,
+        _bucket(),
+        key,
+        ExtraArgs={"ContentType": "video/mp4"},
+    )
+
+
 def load_library() -> list:
     """Load the sizzle library JSON. Returns [] on missing or corrupt."""
     if is_cloud():
