@@ -322,7 +322,7 @@ def _run_generation(job_id: str, folder: str,
             continue
 
         all_lines = _parse_transcript_lines(txt_path.read_text(encoding="utf-8"))
-        ffmpeg_input = video_urls[vp.name] if video_urls else str(vp)
+        ffmpeg_input = video_urls.get(vp.name, str(vp)) if video_urls else str(vp)
         duration = get_video_duration(ffmpeg_input)
         segs = _group_lines_into_segments(all_lines, set(selected_raws), video_duration=duration)
 
