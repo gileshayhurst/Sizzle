@@ -51,18 +51,21 @@ With a selective approach:
 3. Download only the txt files whose corresponding video has selections
 4. Call `storage.presigned_url(key)` for each selected video key → build `video_urls: dict[str, str]` mapping `filename → presigned_url`
 5. Build synthetic `Path` objects: `Path(tmp_session_dir) / filename` — these point into the temp dir but the video file does not exist on disk. Only `.name` and `.with_suffix(".txt")` are used for lookups; both work correctly since txt files are downloaded.
-6. Pass `video_paths` and `video_urls` directly to `_run_generation`, bypassing the internal `scan_videos` call
+6. Pass `video_paths` (the synthetic list) and `video_urls` directly to `_run_generation`
 
 **`generator_app.py` — `_run_generation`**
 
-Add optional parameter: `video_urls: dict[str, str] | None = None`
+Add two optional parameters:
+- `video_paths: list[Path] | None = None` — when provided, used directly instead of calling `scan_videos(folder)` and `_filter_generated_reels`
+- `video_urls: dict[str, str] | None = None` — when provided, maps filename → presigned URL
 
-When `video_urls` is provided:
+When both are provided (cloud mode):
+- Skip the `scan_videos` / `_filter_generated_reels` block at the top of the function
 - In the plan phase, use `video_urls[vp.name]` as `video_path` instead of `str(vp)`
 - For `get_video_duration(...)` and `get_video_dimensions(...)`, pass the presigned URL — ffprobe accepts HTTP inputs identically to file paths
 - For `extract_clip(...)`, the `video_path` argument receives the presigned URL — ffmpeg handles it transparently
 
-When `video_urls` is `None` (local mode), all existing code paths are unchanged.
+When both are `None` (local mode), all existing code paths are unchanged.
 
 ### Presigned URL TTL
 
@@ -96,16 +99,19 @@ Phase 3 — Assemble:
 
 ### Changes
 
-**`video_editor.py` — `stitch_clips`**
+**`video_editor.py` — new function `stitch_clips_to_pipe`**
 
-Add optional `stream: bool = False` parameter.
+Add a new function alongside the existing `stitch_clips`:
 
-When `stream=False` (default, all existing callers): behaviour unchanged.
+```python
+def stitch_clips_to_pipe(clip_paths: list[str]) -> subprocess.Popen:
+```
 
-When `stream=True`:
-- Use `pipe:1` as the ffmpeg output target instead of `output_path`
-- Add `-movflags frag_keyframe+empty_moov -f mp4` to the command
-- Return the `subprocess.Popen` object (not `subprocess.run`) so the caller controls stdout reading
+- Identical ffmpeg concat command to `stitch_clips`, but:
+  - Output target is `pipe:1` (stdout) instead of a file path
+  - Adds `-movflags frag_keyframe+empty_moov -f mp4`
+  - Uses `subprocess.Popen` with `stdout=PIPE, stderr=PIPE` and returns the process
+- Existing `stitch_clips` is unchanged — no return type change, no new parameters
 
 **Why fragmented MP4:** Regular MP4 writes the `moov` atom at the end of the file, which requires seeking backwards — impossible on a pipe. `-movflags frag_keyframe+empty_moov` produces a fragmented MP4 that writes all data forward-only. Fragmented MP4 is supported by all modern browsers and plays correctly in the existing video player.
 
@@ -127,7 +133,7 @@ storage.upload_file(output_path, reel_s3_key)
 ```
 
 With:
-1. Call `stitch_clips(clip_paths, output_path, stream=True)` → returns a `Popen` object
+1. Call `stitch_clips_to_pipe(clip_paths)` → returns a `Popen` object
 2. Start a daemon thread to drain ffmpeg stderr (required — if stderr fills its pipe buffer, ffmpeg blocks and the whole process deadlocks)
 3. Open `output_path` for binary write
 4. Run tee-read loop: read 64KB chunks from `proc.stdout`, write each chunk to local file and feed to `upload_stream`
