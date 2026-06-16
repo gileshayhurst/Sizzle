@@ -55,18 +55,15 @@ def test_save_library_uses_storage_in_cloud_mode(monkeypatch):
 
 
 def test_generate_endpoint_accepts_session_key_in_cloud_mode(cloud_client, tmp_path):
-    """POST /generate in cloud mode accepts session_key and downloads files from S3."""
+    """POST /generate in cloud mode accepts session_key, downloads only txt files, and uses presigned URLs."""
     session_key = "sessions/test123"
-    mp4_bytes = b"fake mp4"
     txt_content = "[0:00] Speaker: Hello world."
 
     def fake_list_keys(prefix):
         return [f"{session_key}/video.mp4", f"{session_key}/video.txt"]
 
     def fake_download(key, local_path):
-        if key.endswith(".mp4"):
-            Path(local_path).write_bytes(mp4_bytes)
-        else:
+        if key.endswith(".txt"):
             Path(local_path).write_text(txt_content, encoding="utf-8")
 
     selections = {"video.mp4": ["[0:00] Speaker: Hello world."]}
