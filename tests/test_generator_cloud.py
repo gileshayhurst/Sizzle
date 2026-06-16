@@ -92,3 +92,59 @@ def test_generate_endpoint_accepts_session_key_in_cloud_mode(cloud_client, tmp_p
     assert resp.status_code == 200
     body = resp.get_json()
     assert "job_id" in body
+
+
+def test_run_generation_skips_scan_videos_when_paths_provided(tmp_path):
+    """When video_paths is provided, _run_generation must not call scan_videos."""
+    import importlib, generator_app
+    importlib.reload(generator_app)
+
+    (tmp_path / "video.txt").write_text("[0:00] Speaker: Hello world.", encoding="utf-8")
+    vp = tmp_path / "video.mp4"
+    job_id = generator_app._new_job("generation", 1)
+
+    with patch("generator_app.scan_videos") as mock_scan, \
+         patch("generator_app.get_video_duration", return_value=None), \
+         patch("generator_app.get_video_dimensions", return_value=(1920, 1080)), \
+         patch("generator_app.make_title_card"), \
+         patch("generator_app.extract_clip"), \
+         patch("generator_app.stitch_clips"), \
+         patch("generator_app._library_add"):
+        generator_app._run_generation(
+            job_id, str(tmp_path),
+            {"video.mp4": ["[0:00] Speaker: Hello world."]},
+            "test prompt", "out.mp4",
+            video_paths=[vp],
+            video_urls={"video.mp4": "https://r2.example.com/presigned/video.mp4"},
+        )
+
+    mock_scan.assert_not_called()
+
+
+def test_run_generation_passes_presigned_url_to_extract_clip(tmp_path):
+    """When video_urls is provided, extract_clip must receive the presigned URL."""
+    import importlib, generator_app
+    importlib.reload(generator_app)
+
+    (tmp_path / "video.txt").write_text("[0:00] Speaker: Hello world.", encoding="utf-8")
+    vp = tmp_path / "video.mp4"
+    presigned = "https://r2.example.com/presigned/video.mp4?token=abc"
+    captured = []
+
+    job_id = generator_app._new_job("generation", 1)
+
+    with patch("generator_app.get_video_duration", return_value=None), \
+         patch("generator_app.get_video_dimensions", return_value=(1920, 1080)), \
+         patch("generator_app.make_title_card"), \
+         patch("generator_app.extract_clip", side_effect=lambda vp, *a, **kw: captured.append(vp)), \
+         patch("generator_app.stitch_clips"), \
+         patch("generator_app._library_add"):
+        generator_app._run_generation(
+            job_id, str(tmp_path),
+            {"video.mp4": ["[0:00] Speaker: Hello world."]},
+            "test prompt", "out.mp4",
+            video_paths=[vp],
+            video_urls={"video.mp4": presigned},
+        )
+
+    assert captured == [presigned]

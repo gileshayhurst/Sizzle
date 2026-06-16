@@ -289,17 +289,20 @@ def make_title_card(
 
 def _run_generation(job_id: str, folder: str,
                     selections: dict, prompt: str, output_filename: str,
-                    session_key: str = None) -> None:
+                    session_key: str = None,
+                    video_paths: list = None,
+                    video_urls: dict = None) -> None:
     """Extract and stitch clips from selected transcript lines."""
     job = _jobs[job_id]
-    try:
-        video_paths = scan_videos(folder)
-    except Exception as exc:
-        with _jobs_lock:
-            job["status"] = "error"
-            job["error"] = str(exc)
-        return
-    video_paths = _filter_generated_reels(video_paths)
+    if video_paths is None:
+        try:
+            video_paths = scan_videos(folder)
+        except Exception as exc:
+            with _jobs_lock:
+                job["status"] = "error"
+                job["error"] = str(exc)
+            return
+        video_paths = _filter_generated_reels(video_paths)
 
     video_segments = []
 
@@ -319,12 +322,13 @@ def _run_generation(job_id: str, folder: str,
             continue
 
         all_lines = _parse_transcript_lines(txt_path.read_text(encoding="utf-8"))
-        duration = get_video_duration(str(vp))
+        ffmpeg_input = video_urls[vp.name] if video_urls else str(vp)
+        duration = get_video_duration(ffmpeg_input)
         segs = _group_lines_into_segments(all_lines, set(selected_raws), video_duration=duration)
 
         if segs:
             _append_log(job_id, f"✓ {vp.name} — {len(segs)} segment(s)")
-            video_segments.append((vp, segs))
+            video_segments.append((vp, segs, ffmpeg_input))
         else:
             _append_log(job_id, f"· {vp.name} — selections produced no segments")
 
@@ -338,7 +342,7 @@ def _run_generation(job_id: str, folder: str,
         return
 
     TITLE_CARD_DURATION = 5.0
-    total_segs = sum(len(segs) for _, segs in video_segments)
+    total_segs = sum(len(segs) for _, segs, _ in video_segments)
 
     _append_log(job_id, "· Extracting clips...")
     output_path = str(Path(folder) / output_filename)
@@ -349,9 +353,9 @@ def _run_generation(job_id: str, folder: str,
         item_idx = 0
         seg_num = 0
 
-        for vp, segs in video_segments:
+        for vp, segs, ffmpeg_input in video_segments:
             try:
-                width, height = get_video_dimensions(str(vp))
+                width, height = get_video_dimensions(ffmpeg_input)
             except Exception:
                 width, height = 1920, 1080
             for start_sec, end_sec in segs:
@@ -376,7 +380,7 @@ def _run_generation(job_id: str, folder: str,
                 plan.append({
                     "type": "clip",
                     "path": clip_path,
-                    "video_path": str(vp),
+                    "video_path": ffmpeg_input,
                     "start_sec": start_sec,
                     "end_sec": end_sec,
                     "ok": False,
