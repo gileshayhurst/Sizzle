@@ -192,6 +192,14 @@ def test_generate_cloud_does_not_download_video_files(cloud_client, tmp_path):
 
     selections = {"video.mp4": ["[0:00] Speaker: Hello world."]}
 
+    mock_proc = MagicMock()
+    mock_proc.stdout = io.BytesIO(b"fake mp4 data")
+    mock_proc.stderr = io.BytesIO(b"")
+    mock_proc.returncode = 0
+    mock_proc._concat_list_path = str(tmp_path / "_concat_dltest.txt")
+    Path(mock_proc._concat_list_path).touch()
+    mock_proc.wait.return_value = None
+
     with patch("generator_app.storage.list_keys", side_effect=fake_list_keys), \
          patch("generator_app.storage.download_file", side_effect=fake_download), \
          patch("generator_app.storage.presigned_url", return_value="https://r2.example.com/video.mp4"), \
@@ -200,8 +208,8 @@ def test_generate_cloud_does_not_download_video_files(cloud_client, tmp_path):
          patch("generator_app.get_video_duration", return_value=None), \
          patch("generator_app.make_title_card"), \
          patch("generator_app.extract_clip"), \
-         patch("generator_app.stitch_clips"), \
-         patch("generator_app.storage.upload_file"), \
+         patch("generator_app.stitch_clips_to_pipe", return_value=mock_proc), \
+         patch("generator_app.storage.upload_stream"), \
          patch("generator_app._library_add"):
         resp = cloud_client.post("/generate", json={
             "session_key": session_key,
@@ -239,6 +247,14 @@ def test_generate_cloud_calls_presigned_url_for_selected_video(cloud_client, tmp
 
     selections = {"video.mp4": ["[0:00] Speaker: Hello world."]}
 
+    mock_proc = MagicMock()
+    mock_proc.stdout = io.BytesIO(b"fake mp4 data")
+    mock_proc.stderr = io.BytesIO(b"")
+    mock_proc.returncode = 0
+    mock_proc._concat_list_path = str(tmp_path / "_concat_presign.txt")
+    Path(mock_proc._concat_list_path).touch()
+    mock_proc.wait.return_value = None
+
     with patch("generator_app.storage.list_keys", side_effect=fake_list_keys), \
          patch("generator_app.storage.download_file", side_effect=fake_download), \
          patch("generator_app.storage.presigned_url", side_effect=fake_presigned), \
@@ -247,8 +263,8 @@ def test_generate_cloud_calls_presigned_url_for_selected_video(cloud_client, tmp
          patch("generator_app.get_video_duration", return_value=None), \
          patch("generator_app.make_title_card"), \
          patch("generator_app.extract_clip"), \
-         patch("generator_app.stitch_clips"), \
-         patch("generator_app.storage.upload_file"), \
+         patch("generator_app.stitch_clips_to_pipe", return_value=mock_proc), \
+         patch("generator_app.storage.upload_stream"), \
          patch("generator_app._library_add"):
         resp = cloud_client.post("/generate", json={
             "session_key": session_key,

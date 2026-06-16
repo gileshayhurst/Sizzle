@@ -530,6 +530,9 @@ def _run_generation(job_id: str, folder: str,
             try:
                 with open(output_path, "wb") as _local_f:
                     class _TeeReader(io.RawIOBase):
+                        def readable(self):
+                            return True
+
                         def readinto(self, b):
                             data = proc.stdout.read(len(b))
                             n = len(data)
@@ -543,13 +546,12 @@ def _run_generation(job_id: str, folder: str,
                 upload_exc = exc
                 _append_log(job_id, f"✗ Streaming upload failed: {exc}")
             finally:
+                proc.wait()
+                stderr_thread.join()
                 try:
                     os.unlink(proc._concat_list_path)
                 except OSError:
                     pass
-
-            proc.wait()
-            stderr_thread.join()
 
             if proc.returncode != 0:
                 stderr_text = (stderr_buf[0] if stderr_buf else b"").decode(errors="replace")
