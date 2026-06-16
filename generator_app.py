@@ -546,6 +546,12 @@ def _run_generation(job_id: str, folder: str,
                 upload_exc = exc
                 _append_log(job_id, f"✗ Streaming upload failed: {exc}")
             finally:
+                # Close stdout before wait() — if upload raised mid-stream,
+                # ffmpeg may block on a full pipe buffer with nothing reading it.
+                try:
+                    proc.stdout.close()
+                except OSError:
+                    pass
                 proc.wait()
                 stderr_thread.join()
                 try:

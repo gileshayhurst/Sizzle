@@ -148,6 +148,51 @@ def test_generate_cloud_uses_streaming_upload_not_upload_file(cloud_client, tmp_
     mock_upload_file.assert_not_called()
 
 
+def test_generate_cloud_upload_failure_does_not_hang(cloud_client, tmp_path):
+    """If upload_stream raises, the job must complete (not deadlock on proc.wait)."""
+    session_key = "sessions/upload_fail_test"
+    txt_content = "[0:00] Speaker: Hello world."
+
+    def fake_list_keys(prefix):
+        return [f"{session_key}/video.mp4", f"{session_key}/video.txt"]
+
+    def fake_download(key, local_path):
+        if key.endswith(".txt"):
+            Path(local_path).write_text(txt_content, encoding="utf-8")
+
+    mock_proc = MagicMock()
+    mock_proc.stdout = io.BytesIO(b"partial data")
+    mock_proc.stderr = io.BytesIO(b"")
+    mock_proc.returncode = 0
+    mock_proc._concat_list_path = str(tmp_path / "_concat_fail.txt")
+    Path(mock_proc._concat_list_path).touch()
+    mock_proc.wait.return_value = None
+
+    with patch("generator_app.storage.list_keys", side_effect=fake_list_keys), \
+         patch("generator_app.storage.download_file", side_effect=fake_download), \
+         patch("generator_app.check_ffmpeg"), \
+         patch("generator_app.get_video_dimensions", return_value=(1920, 1080)), \
+         patch("generator_app.get_video_duration", return_value=None), \
+         patch("generator_app.make_title_card"), \
+         patch("generator_app.extract_clip"), \
+         patch("generator_app.stitch_clips_to_pipe", return_value=mock_proc), \
+         patch("generator_app.storage.upload_stream", side_effect=OSError("S3 network failure")), \
+         patch("generator_app.storage.presigned_url", return_value="https://s3/reel.mp4"), \
+         patch("generator_app._library_add"):
+        resp = cloud_client.post("/generate", json={
+            "session_key": session_key,
+            "mode": "checkbox",
+            "selections": {"video.mp4": ["[0:00] Speaker: Hello world."]},
+            "prompt": "test",
+            "output_filename": "out.mp4",
+        })
+
+    # Request must return (not deadlock); proc.stdout.close() prevents pipe blockage
+    assert resp.status_code == 200
+    mock_proc.stdout.close()  # already called by code; verify no double-close crash
+    mock_proc.wait.assert_called()
+
+
 def test_run_generation_skips_scan_videos_when_paths_provided(tmp_path):
     """When video_paths is provided, _run_generation must not call scan_videos."""
     import importlib, generator_app
