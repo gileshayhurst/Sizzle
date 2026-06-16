@@ -121,6 +121,96 @@ def test_run_generation_skips_scan_videos_when_paths_provided(tmp_path):
     mock_scan.assert_not_called()
 
 
+def test_generate_cloud_does_not_download_video_files(cloud_client, tmp_path):
+    """In cloud mode, /generate must NOT call download_file for video files."""
+    session_key = "sessions/test456"
+    txt_content = "[0:00] Speaker: Hello world."
+
+    def fake_list_keys(prefix):
+        return [f"{session_key}/video.mp4", f"{session_key}/video.txt"]
+
+    downloaded_keys = []
+
+    def fake_download(key, local_path):
+        downloaded_keys.append(key)
+        if key.endswith(".txt"):
+            Path(local_path).write_text(txt_content, encoding="utf-8")
+
+    selections = {"video.mp4": ["[0:00] Speaker: Hello world."]}
+
+    with patch("generator_app.storage.list_keys", side_effect=fake_list_keys), \
+         patch("generator_app.storage.download_file", side_effect=fake_download), \
+         patch("generator_app.storage.presigned_url", return_value="https://r2.example.com/video.mp4"), \
+         patch("generator_app.check_ffmpeg"), \
+         patch("generator_app.get_video_dimensions", return_value=(1920, 1080)), \
+         patch("generator_app.get_video_duration", return_value=None), \
+         patch("generator_app.make_title_card"), \
+         patch("generator_app.extract_clip"), \
+         patch("generator_app.stitch_clips"), \
+         patch("generator_app.storage.upload_file"), \
+         patch("generator_app._library_add"):
+        resp = cloud_client.post("/generate", json={
+            "session_key": session_key,
+            "mode": "checkbox",
+            "selections": selections,
+            "prompt": "test",
+            "output_filename": "out.mp4",
+        })
+
+    assert resp.status_code == 200
+    # No video file should have been downloaded
+    assert not any(k.endswith(".mp4") for k in downloaded_keys), \
+        f"Expected no .mp4 downloads, but got: {downloaded_keys}"
+    # The txt file for the selected video should have been downloaded
+    assert any(k.endswith(".txt") for k in downloaded_keys)
+
+
+def test_generate_cloud_calls_presigned_url_for_selected_video(cloud_client, tmp_path):
+    """In cloud mode, /generate must call storage.presigned_url for the selected video key."""
+    session_key = "sessions/test789"
+    txt_content = "[0:00] Speaker: Hello world."
+
+    def fake_list_keys(prefix):
+        return [f"{session_key}/video.mp4", f"{session_key}/video.txt"]
+
+    def fake_download(key, local_path):
+        if key.endswith(".txt"):
+            Path(local_path).write_text(txt_content, encoding="utf-8")
+
+    presigned_calls = []
+
+    def fake_presigned(key, expires=3600):
+        presigned_calls.append((key, expires))
+        return f"https://r2.example.com/{key}"
+
+    selections = {"video.mp4": ["[0:00] Speaker: Hello world."]}
+
+    with patch("generator_app.storage.list_keys", side_effect=fake_list_keys), \
+         patch("generator_app.storage.download_file", side_effect=fake_download), \
+         patch("generator_app.storage.presigned_url", side_effect=fake_presigned), \
+         patch("generator_app.check_ffmpeg"), \
+         patch("generator_app.get_video_dimensions", return_value=(1920, 1080)), \
+         patch("generator_app.get_video_duration", return_value=None), \
+         patch("generator_app.make_title_card"), \
+         patch("generator_app.extract_clip"), \
+         patch("generator_app.stitch_clips"), \
+         patch("generator_app.storage.upload_file"), \
+         patch("generator_app._library_add"):
+        resp = cloud_client.post("/generate", json={
+            "session_key": session_key,
+            "mode": "checkbox",
+            "selections": selections,
+            "prompt": "test",
+            "output_filename": "out.mp4",
+        })
+
+    assert resp.status_code == 200
+    # presigned_url must have been called for the video key with a 2hr TTL
+    video_key_calls = [c for c in presigned_calls if c[0].endswith(".mp4") and "out.mp4" not in c[0]]
+    assert len(video_key_calls) >= 1
+    assert video_key_calls[0][1] == 7200, "Video input presigned URL must use 2-hour TTL"
+
+
 def test_run_generation_passes_presigned_url_to_extract_clip(tmp_path):
     """When video_urls is provided, extract_clip must receive the presigned URL."""
     import importlib, generator_app

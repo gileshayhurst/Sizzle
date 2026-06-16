@@ -660,19 +660,40 @@ def create_app(testing: bool = False) -> Flask:
         output_filename = Path(output_filename).name
         session_key = body.get("session_key", "").strip() or None
 
+        VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
+        video_paths_for_gen = None
+        video_urls_for_gen = None
+
         if storage.is_cloud():
             if not session_key:
                 return jsonify({"error": "session_key required in cloud mode"}), 400
-            # Download all session files from S3 into a local temp dir for ffmpeg.
-            # Do NOT set _tmp_dir_to_cleanup in cloud mode — we keep the temp dir
-            # alive so /video/<job_id> and /library-video/<id> can serve the
-            # generated reel directly without relying on R2 (which may have failed
-            # to upload). The Render container restart cleans /tmp periodically.
             tmp_session_dir = tempfile.mkdtemp(prefix="sizzle_gen_")
             _tmp_dir_to_cleanup = None  # intentionally no immediate cleanup
-            for key in storage.list_keys(session_key + "/"):
-                filename = Path(key).name
-                storage.download_file(key, os.path.join(tmp_session_dir, filename))
+
+            all_keys = storage.list_keys(session_key + "/")
+            selected_filenames = set(selections.keys())
+
+            # Download only transcript files for selected videos
+            for key in all_keys:
+                p = Path(key)
+                if p.suffix.lower() == ".txt":
+                    stem = p.stem
+                    if any(Path(fn).stem == stem for fn in selected_filenames):
+                        storage.download_file(key, os.path.join(tmp_session_dir, p.name))
+
+            # Generate presigned URLs (2hr TTL) for selected video files only
+            video_urls_for_gen = {}
+            for key in all_keys:
+                p = Path(key)
+                if p.suffix.lower() in VIDEO_EXTS and p.name in selected_filenames:
+                    video_urls_for_gen[p.name] = storage.presigned_url(key, expires=7200)
+
+            # Synthetic Path objects — only .name and .with_suffix(".txt") are used
+            video_paths_for_gen = sorted(
+                [Path(tmp_session_dir) / fn for fn in video_urls_for_gen],
+                key=lambda p: p.name,
+            )
+            selected_count = len(video_paths_for_gen)
             folder = tmp_session_dir
         else:
             folder = body.get("folder", "").strip()
@@ -685,13 +706,14 @@ def create_app(testing: bool = False) -> Flask:
         except RuntimeError as exc:
             return jsonify({"error": str(exc)}), 500
 
-        try:
-            video_paths = scan_videos(folder)
-        except ValueError as exc:
-            return jsonify({"error": str(exc)}), 422
-        video_paths = _filter_generated_reels(video_paths)
+        if not storage.is_cloud():
+            try:
+                video_paths = scan_videos(folder)
+            except ValueError as exc:
+                return jsonify({"error": str(exc)}), 422
+            video_paths = _filter_generated_reels(video_paths)
+            selected_count = sum(1 for p in video_paths if selections.get(p.name))
 
-        selected_count = sum(1 for p in video_paths if selections.get(p.name))
         job_id = _new_job("generation", max(selected_count, 1))
         if app.config.get("TESTING"):
             # In test mode run synchronously so the worker finishes (and all
@@ -699,14 +721,24 @@ def create_app(testing: bool = False) -> Flask:
             # This prevents a live daemon thread from calling patched symbols
             # during a subsequent test's patch window.
             try:
-                _run_generation(job_id, folder, selections, prompt, output_filename, session_key=session_key)
+                _run_generation(
+                    job_id, folder, selections, prompt, output_filename,
+                    session_key=session_key,
+                    video_paths=video_paths_for_gen,
+                    video_urls=video_urls_for_gen,
+                )
             finally:
                 if _tmp_dir_to_cleanup:
                     shutil.rmtree(_tmp_dir_to_cleanup, ignore_errors=True)
         else:
             def _run_with_cleanup():
                 try:
-                    _run_generation(job_id, folder, selections, prompt, output_filename, session_key)
+                    _run_generation(
+                        job_id, folder, selections, prompt, output_filename,
+                        session_key=session_key,
+                        video_paths=video_paths_for_gen,
+                        video_urls=video_urls_for_gen,
+                    )
                 finally:
                     if _tmp_dir_to_cleanup:
                         shutil.rmtree(_tmp_dir_to_cleanup, ignore_errors=True)

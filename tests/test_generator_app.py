@@ -1234,8 +1234,8 @@ def test_generation_result_includes_entry_id(tmp_path, client):
 
 def test_cloud_temp_dir_cleanup_scheduled(client, tmp_path):
     """In cloud mode, a deferred cleanup timer must be started after generation."""
-    (tmp_path / "vid.mp4").touch()
-    (tmp_path / "vid.txt").write_text("[0:05] Speaker: Hi.", encoding="utf-8")
+    session_key = "sessions/test"
+    txt_content = "[0:05] Speaker: Hi."
 
     timers_started = []
     real_timer = __import__("threading").Timer
@@ -1245,20 +1245,30 @@ def test_cloud_temp_dir_cleanup_scheduled(client, tmp_path):
         t = real_timer(0.001, lambda: None)  # fires immediately but harmlessly
         return t
 
+    def fake_list_keys(prefix):
+        return [f"{session_key}/vid.mp4", f"{session_key}/vid.txt"]
+
+    def fake_download(key, local_path):
+        if key.endswith(".txt"):
+            from pathlib import Path as _Path
+            _Path(local_path).write_text(txt_content, encoding="utf-8")
+
     with patch("generator_app.extract_clip"), \
          patch("generator_app.stitch_clips"), \
          patch("generator_app.check_ffmpeg"), \
          patch("generator_app.make_title_card"), \
          patch("generator_app.get_video_dimensions", return_value=(1920, 1080)), \
+         patch("generator_app.get_video_duration", return_value=None), \
          patch("generator_app._library_add"), \
-         patch("generator_app.scan_videos", return_value=[tmp_path / "vid.mp4"]), \
          patch("storage.is_cloud", return_value=True), \
          patch("generator_app.storage.is_cloud", return_value=True), \
-         patch("storage.list_keys", return_value=[]), \
+         patch("generator_app.storage.list_keys", side_effect=fake_list_keys), \
+         patch("generator_app.storage.download_file", side_effect=fake_download), \
+         patch("generator_app.storage.presigned_url", return_value="https://r2.example.com/vid.mp4"), \
+         patch("generator_app.storage.upload_file"), \
          patch("generator_app.threading.Timer", side_effect=fake_timer):
         resp = client.post("/generate", json={
-            "folder": str(tmp_path),
-            "session_key": "sessions/test",
+            "session_key": session_key,
             "mode": "highlight",
             "selections": {"vid.mp4": ["[0:05] Speaker: Hi."]},
             "output_filename": "out.mp4",
