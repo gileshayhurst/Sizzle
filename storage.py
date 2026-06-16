@@ -196,7 +196,10 @@ def upload_stream(key: str, readable) -> None:
 
     boto3 upload_fileobj handles multipart chunking automatically (default 8MB parts).
     The stream must implement read(n) -> bytes; empty bytes signals EOF.
+    Raises RuntimeError when called in local mode — requires S3.
     """
+    if not is_cloud():
+        raise RuntimeError("upload_stream is only available in cloud mode (APP_MODE=cloud)")
     _s3().upload_fileobj(
         readable,
         _bucket(),
