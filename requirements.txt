@@ -4,3 +4,4 @@ flask>=2.0
 flask-cors
 flask-sock
 boto3
+faster-whisper
