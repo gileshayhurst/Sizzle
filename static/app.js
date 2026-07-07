@@ -776,6 +776,13 @@ function renderCheckboxMode(fileObj) {
       const text = document.createElement('div');
       text.className = 'line-text-cb';
       text.textContent = line.text;
+      if (line.is_interviewer) {
+        lineEl.classList.add('interviewer');
+        const tag = document.createElement('span');
+        tag.className = 'speaker-tag';
+        tag.textContent = 'Interviewer';
+        text.insertBefore(tag, text.firstChild);
+      }
 
       lineEl.appendChild(lineCb);
       lineEl.appendChild(ts);
@@ -869,6 +876,13 @@ function renderHighlightMode(fileObj) {
     const text = document.createElement('div');
     text.className = 'line-text-hl';
     text.textContent = line.text;
+    if (line.is_interviewer) {
+      lineEl.classList.add('interviewer');
+      const tag = document.createElement('span');
+      tag.className = 'speaker-tag';
+      tag.textContent = 'Interviewer';
+      text.insertBefore(tag, text.firstChild);
+    }
 
     lineEl.appendChild(bar);
     lineEl.appendChild(ts);
@@ -975,7 +989,15 @@ function renderRecentFolders(entries) {
     const count = entry.video_count;
     const nameSpan = document.createElement('span');
     nameSpan.className = 'recent-folder-name';
-    nameSpan.textContent = `📁 ${name}/`;
+    const icon = document.createElement('span');
+    icon.className = 'recent-folder-icon';
+    icon.setAttribute('aria-hidden', 'true');
+    icon.innerHTML = '<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M3 6.5A1.5 1.5 0 0 1 4.5 5h4l2 2.2H19.5A1.5 1.5 0 0 1 21 8.7v9.3a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18V6.5Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>';
+    const label = document.createElement('span');
+    label.className = 'recent-folder-label';
+    label.textContent = `${name}/`;
+    nameSpan.appendChild(icon);
+    nameSpan.appendChild(label);
     const metaSpan = document.createElement('span');
     metaSpan.className = 'recent-folder-meta';
     metaSpan.textContent = `${count} video${count !== 1 ? 's' : ''} · ${relativeTime(entry.last_opened)}`;
