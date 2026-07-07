@@ -49,8 +49,11 @@ _jobs: dict = {}
 _jobs_lock = threading.Lock()
 _recent_folders_lock = threading.Lock()
 _prompt_history_lock = threading.Lock()
-_whisper_model = None
+_whisper_models: dict = {}
 _model_lock = threading.Lock()
+_WHISPER_CACHE_DIR = os.environ.get(
+    "WHISPER_CACHE_DIR", str(Path(__file__).parent / ".whisper_cache")
+)
 
 
 def _compute_transcription_parallelism(cpu_count: int, num_videos: int) -> tuple[int, int]:
@@ -68,14 +71,29 @@ def _compute_transcription_parallelism(cpu_count: int, num_videos: int) -> tuple
     return workers, cpu_threads
 
 
-def _get_whisper_model():
-    global _whisper_model
-    if _whisper_model is None:
+def _get_whisper_model(cpu_threads: int = 0, num_workers: int = 1):
+    """Return a cached faster-whisper base model configured for the given thread layout.
+
+    Cached by (cpu_threads, num_workers) so warm jobs reuse the model. compute_type
+    int8 gives the CPU speedup; download_root pins weights so cold boots don't re-fetch.
+    """
+    key = (cpu_threads, num_workers)
+    model = _whisper_models.get(key)
+    if model is None:
         with _model_lock:
-            if _whisper_model is None:
-                import whisper as _whisper
-                _whisper_model = _whisper.load_model("base")
-    return _whisper_model
+            model = _whisper_models.get(key)
+            if model is None:
+                from faster_whisper import WhisperModel
+                model = WhisperModel(
+                    "base",
+                    device="cpu",
+                    compute_type="int8",
+                    cpu_threads=cpu_threads,
+                    num_workers=num_workers,
+                    download_root=_WHISPER_CACHE_DIR,
+                )
+                _whisper_models[key] = model
+    return model
 
 
 def _new_job(job_type: str, total: int) -> str:
