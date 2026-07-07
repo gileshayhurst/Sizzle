@@ -4,7 +4,21 @@ import storage as _storage
 from pathlib import Path as _Path
 from video_editor import parse_timestamp_to_seconds
 
-_LINE_RE = _re.compile(r'^\[(\d+:\d{2})\]\s+\w+:\s*(.*)')
+_LINE_RE = _re.compile(r'^\[(\d+:\d{2})\]\s+(\w[\w ]*?):\s*(.*)')
+
+# Speaker labels that identify the AI interview agent (case-insensitive,
+# whitespace-normalized). Anything NOT in this set is treated as the
+# respondent, so detection fails safe toward keeping content.
+INTERVIEWER_LABELS = {
+    "interviewer", "ai", "ai agent", "ai interviewer",
+    "agent", "moderator", "bot", "assistant", "host",
+}
+
+
+def is_interviewer_label(speaker: str) -> bool:
+    """True if the speaker label denotes the AI interviewer/agent."""
+    normalized = " ".join(speaker.split()).lower()
+    return normalized in INTERVIEWER_LABELS
 
 
 def parse_transcript_lines(raw_text: str) -> list[dict]:
@@ -21,11 +35,13 @@ def parse_transcript_lines(raw_text: str) -> list[dict]:
         m = _LINE_RE.match(raw)
         if not m:
             continue
-        ts, text = m.group(1), m.group(2)
+        ts, speaker, text = m.group(1), m.group(2).strip(), m.group(3)
         seconds = parse_timestamp_to_seconds(ts)
         lines.append({
             "raw": raw,
             "timestamp": ts,
+            "speaker": speaker,
+            "is_interviewer": is_interviewer_label(speaker),
             "text": text,
             "seconds": seconds,
             "minute_bucket": int(seconds) // 60,

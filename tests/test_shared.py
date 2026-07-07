@@ -75,3 +75,40 @@ def test_filter_returns_all_when_library_empty():
     with patch("storage.is_cloud", return_value=False):
         result = filter_generated_reels(paths, library=[])
     assert result == paths
+
+
+def test_parse_captures_speaker_and_is_interviewer_flags():
+    raw = (
+        "[0:10] Interviewer: Have you heard of Freshpet?\n"
+        "[0:14] Participant: Yes I love it.\n"
+    )
+    result = parse_transcript_lines(raw)
+    assert result[0]["speaker"] == "Interviewer"
+    assert result[0]["is_interviewer"] is True
+    assert result[0]["text"] == "Have you heard of Freshpet?"
+    assert result[1]["speaker"] == "Participant"
+    assert result[1]["is_interviewer"] is False
+    assert result[1]["text"] == "Yes I love it."
+
+
+def test_parse_captures_multiword_speaker_label():
+    result = parse_transcript_lines("[0:03] AI Agent: Shall we begin?")
+    assert result[0]["speaker"] == "AI Agent"
+    assert result[0]["is_interviewer"] is True
+    assert result[0]["text"] == "Shall we begin?"
+
+
+def test_parse_unlabeled_speaker_is_not_interviewer():
+    # Whisper fallback emits "Speaker:" — must stay selectable content.
+    result = parse_transcript_lines("[0:05] Speaker: Hello world.")
+    assert result[0]["speaker"] == "Speaker"
+    assert result[0]["is_interviewer"] is False
+
+
+def test_is_interviewer_label_is_case_insensitive_over_synonyms():
+    from shared import is_interviewer_label
+    for label in ["interviewer", "INTERVIEWER", "Ai", "AI Agent",
+                  "moderator", "Bot", "assistant", "Host", "agent"]:
+        assert is_interviewer_label(label) is True
+    for label in ["Participant", "Respondent", "Speaker", "Interviewee", "Guest"]:
+        assert is_interviewer_label(label) is False
