@@ -242,14 +242,14 @@ def test_ensure_cloud_session_caches_and_downloads(tmp_path):
         downloaded.append((key, local_path))
 
     with patch("storage.is_cloud", return_value=True), \
-         patch("storage.list_keys", return_value=["sessions/x/video.mp4"]), \
+         patch("storage.list_keys", return_value=["sessions/x/video.txt"]), \
          patch("storage.download_file", side_effect=fake_download), \
          patch("tempfile.mkdtemp", return_value=str(tmp_path)):
         result = app_module._ensure_cloud_session("sessions/x")
 
     assert result == str(tmp_path)
     assert len(downloaded) == 1
-    assert downloaded[0][0] == "sessions/x/video.mp4"
+    assert downloaded[0][0] == "sessions/x/video.txt"
 
     # Second call must return cached path without re-downloading
     with patch("storage.list_keys") as mock_list, \
@@ -258,6 +258,52 @@ def test_ensure_cloud_session_caches_and_downloads(tmp_path):
     assert result2 == str(tmp_path)
     mock_list.assert_not_called()
     mock_dl.assert_not_called()
+
+    app_module._cloud_session_dirs.clear()
+    app_module._cloud_session_ready.clear()
+
+
+def test_ensure_cloud_session_downloads_only_transcripts(tmp_path):
+    """_ensure_cloud_session must NOT download video bytes — the main app only ever
+    reads .txt sidecars, and pulling every video into Render's /tmp blows the 2GB
+    ephemeral disk limit. Videos get 0-byte placeholders so scan_videos still lists
+    them; only .txt files are actually downloaded."""
+    import app as app_module
+    from unittest.mock import patch
+
+    app_module._cloud_session_dirs.clear()
+    app_module._cloud_session_ready.clear()
+
+    downloaded = []
+
+    def fake_download(key, local_path):
+        downloaded.append(key)
+        Path(local_path).write_text("transcript body", encoding="utf-8")
+
+    with patch("storage.is_cloud", return_value=True), \
+         patch("storage.list_keys", return_value=[
+             "sessions/y/clip.mp4",
+             "sessions/y/clip.txt",
+             "sessions/y/other.mov",
+             "sessions/y/other.txt",
+         ]), \
+         patch("storage.download_file", side_effect=fake_download), \
+         patch("tempfile.mkdtemp", return_value=str(tmp_path)):
+        result = app_module._ensure_cloud_session("sessions/y")
+
+    assert result == str(tmp_path)
+
+    # Only the transcripts are downloaded — never the video bytes.
+    assert set(downloaded) == {"sessions/y/clip.txt", "sessions/y/other.txt"}
+
+    # Videos still exist locally (as 0-byte placeholders) so scan_videos lists them.
+    assert (tmp_path / "clip.mp4").exists()
+    assert (tmp_path / "other.mov").exists()
+    assert (tmp_path / "clip.mp4").stat().st_size == 0
+    assert (tmp_path / "other.mov").stat().st_size == 0
+
+    # Transcripts have real content.
+    assert (tmp_path / "clip.txt").read_text(encoding="utf-8") == "transcript body"
 
     app_module._cloud_session_dirs.clear()
     app_module._cloud_session_ready.clear()

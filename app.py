@@ -294,9 +294,18 @@ def _ensure_cloud_session(session_key: str) -> str:
 
     try:
         tmp = _cloud_session_dirs[session_key]
+        # The main app only ever reads .txt sidecars (scan_videos merely enumerates
+        # filenames; analyze/transcripts read transcripts). Downloading the video
+        # bytes would pile hundreds of MB per session into Render's /tmp and blow the
+        # 2GB ephemeral-disk limit. So download only transcripts; give each video a
+        # 0-byte placeholder so scan_videos still lists it.
         for key in storage.list_keys(session_key + "/"):
             filename = Path(key).name
-            storage.download_file(key, os.path.join(tmp, filename))
+            dest = os.path.join(tmp, filename)
+            if Path(filename).suffix.lower() == ".txt":
+                storage.download_file(key, dest)
+            else:
+                Path(dest).touch()
     finally:
         event.set()           # release waiters even if download failed
 
