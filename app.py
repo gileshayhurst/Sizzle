@@ -53,6 +53,21 @@ _whisper_model = None
 _model_lock = threading.Lock()
 
 
+def _compute_transcription_parallelism(cpu_count: int, num_videos: int) -> tuple[int, int]:
+    """Return (workers, cpu_threads) for parallel transcription.
+
+    - workers: how many videos to transcribe concurrently. Capped at the video
+      count and at half the cores, leaving room for each job's internal threads.
+    - cpu_threads: CTranslate2 threads per job, dividing cores evenly across workers.
+
+    Invariant: workers * cpu_threads <= cpu_count.
+    """
+    cpu_count = max(1, cpu_count)
+    workers = min(num_videos, max(1, cpu_count // 2))
+    cpu_threads = max(1, cpu_count // workers)
+    return workers, cpu_threads
+
+
 def _get_whisper_model():
     global _whisper_model
     if _whisper_model is None:

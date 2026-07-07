@@ -7,6 +7,36 @@ import pytest
 from app import create_app
 
 
+@pytest.mark.parametrize("cpu_count,num_videos", [
+    (1, 1), (1, 3), (2, 1), (2, 3), (4, 1), (4, 2), (4, 3),
+    (8, 1), (8, 5), (8, 20), (16, 3), (3, 3), (6, 4),
+])
+def test_compute_transcription_parallelism_invariants(cpu_count, num_videos):
+    from app import _compute_transcription_parallelism
+    workers, cpu_threads = _compute_transcription_parallelism(cpu_count, num_videos)
+    assert workers >= 1
+    assert cpu_threads >= 1
+    assert workers <= num_videos
+    assert workers * cpu_threads <= cpu_count
+
+
+def test_compute_transcription_parallelism_single_core():
+    from app import _compute_transcription_parallelism
+    assert _compute_transcription_parallelism(1, 5) == (1, 1)
+
+
+def test_compute_transcription_parallelism_uses_half_cores_as_worker_ceiling():
+    from app import _compute_transcription_parallelism
+    # 8 cores, plenty of videos -> ceiling of 4 workers, 2 threads each
+    assert _compute_transcription_parallelism(8, 10) == (4, 2)
+
+
+def test_compute_transcription_parallelism_caps_workers_at_video_count():
+    from app import _compute_transcription_parallelism
+    # 8 cores but only 2 videos -> 2 workers, 4 threads each
+    assert _compute_transcription_parallelism(8, 2) == (2, 4)
+
+
 @pytest.fixture
 def client():
     app = create_app(testing=True)
