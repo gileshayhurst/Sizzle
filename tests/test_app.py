@@ -464,3 +464,23 @@ def test_recent_folders_capped_at_five(client, tmp_path, monkeypatch):
     assert len(recent) == 5
 
 
+def test_run_analyze_excludes_interviewer_lines(tmp_path):
+    from app import _run_analyze
+    video = tmp_path / "v.mp4"
+    video.write_bytes(b"")
+    txt = tmp_path / "v.txt"
+    txt.write_text(
+        "[0:10] Interviewer: Have you heard of Freshpet?\n"
+        "[0:14] Participant: Yes I love Freshpet.\n",
+        encoding="utf-8",
+    )
+    with patch("app.scan_videos", return_value=[video]), \
+         patch("app._filter_generated_reels", side_effect=lambda paths: paths), \
+         patch("app.query_claude", return_value="0:10-0:14"):
+        result = _run_analyze(str(tmp_path), "Freshpet")
+
+    matched = result["highlights"]["v.mp4"]
+    assert "[0:14] Participant: Yes I love Freshpet." in matched
+    assert all("Interviewer" not in line for line in matched)
+
+

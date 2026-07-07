@@ -244,6 +244,8 @@ def _run_analyze(folder: str, prompt: str) -> dict:
             start_sec = parse_timestamp_to_seconds(start_str)
             end_sec = parse_timestamp_to_seconds(end_str)
             for line in all_lines:
+                if line.get("is_interviewer"):
+                    continue  # analyze never auto-selects the interviewer
                 if start_sec - 0.5 <= line["seconds"] <= end_sec + 0.5:
                     if line["raw"] not in matched:
                         matched.append(line["raw"])
