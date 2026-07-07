@@ -2,5 +2,33 @@
 sizzle_library.json
 recent_folders.json
 .whisper_cache/
-.env
 prompt_history.json
+
+# Secrets / env (keep the tracked template)
+.env
+.env.*
+!.env.example
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+
+# Video assets (never belong in git; exceed GitHub's 100MB limit)
+*.mp4
+*.webm
+*.mov
+*.avi
+*.mkv
+
+# Local agent/tooling dirs
+.claude/
+.superpowers/
+.impeccable/*
+!.impeccable/design.json
+
+# Scratch / run logs
+app_err.txt
+app_out.txt
+gen_err.txt
+gen_out.txt
+pytest_output.txt
