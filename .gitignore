@@ -2,3 +2,5 @@
 sizzle_library.json
 recent_folders.json
 .whisper_cache/
+.env
+prompt_history.json
