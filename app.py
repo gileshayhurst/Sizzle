@@ -511,43 +511,63 @@ def create_app(testing: bool = False) -> Flask:
         job_id = _new_job("transcription", len(needs_transcription))
 
         def _transcribe():
-            model = _get_whisper_model()
             cancel_event = _jobs[job_id]["cancel"]
-            executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+            cpu_count = os.cpu_count() or 1
+            workers, cpu_threads = _compute_transcription_parallelism(
+                cpu_count, len(needs_transcription)
+            )
+            model = _get_whisper_model(cpu_threads, workers)
+            _append_log(
+                job_id,
+                f"⟳ transcribing {len(needs_transcription)} video(s) "
+                f"({workers} at a time)...",
+            )
+
+            def _do_one(vp):
+                transcript = transcribe_video(str(vp), model=model)
+                # A cancel may have fired while this video was transcribing; skip
+                # the write/upload so no transcript appears after status=cancelled.
+                if cancel_event.is_set():
+                    return
+                vp.with_suffix(".txt").write_text(transcript, encoding="utf-8")
+                if storage.is_cloud():
+                    for sk, td in _cloud_session_dirs.items():
+                        if td == str(vp.parent):
+                            storage.upload_file(
+                                str(vp.with_suffix(".txt")),
+                                f"{sk}/{vp.stem}.txt",
+                            )
+                            break
+
+            executor = concurrent.futures.ThreadPoolExecutor(max_workers=workers)
+            futures = {executor.submit(_do_one, vp): vp for vp in needs_transcription}
+            pending = set(futures)
+            done_count = 0
             try:
-                for i, vp in enumerate(needs_transcription):
+                while pending:
                     if cancel_event.is_set():
+                        executor.shutdown(wait=False, cancel_futures=True)
                         with _jobs_lock:
                             _jobs[job_id]["status"] = "cancelled"
+                        _append_log(job_id, "✗ transcription cancelled")
                         return
-                    _append_log(job_id, f"⟳ {vp.name} — transcribing...")
-                    future = executor.submit(transcribe_video, str(vp), model=model)
-                    while not future.done():
-                        if cancel_event.is_set():
-                            executor.shutdown(wait=False)
+                    just_done, pending = concurrent.futures.wait(
+                        pending,
+                        timeout=0.5,
+                        return_when=concurrent.futures.FIRST_COMPLETED,
+                    )
+                    for future in just_done:
+                        vp = futures[future]
+                        try:
+                            future.result()
+                            _append_log(job_id, f"✓ {vp.name} — done")
+                        except Exception as exc:
+                            _append_log(job_id, f"✗ {vp.name} — failed: {exc}")
                             with _jobs_lock:
-                                _jobs[job_id]["status"] = "cancelled"
-                            _append_log(job_id, f"✗ {vp.name} — cancelled")
-                            return
-                        time.sleep(0.5)
-                    try:
-                        transcript = future.result()
-                        vp.with_suffix(".txt").write_text(transcript, encoding="utf-8")
-                        if storage.is_cloud():
-                            for sk, td in _cloud_session_dirs.items():
-                                if td == str(vp.parent):
-                                    storage.upload_file(
-                                        str(vp.with_suffix(".txt")),
-                                        f"{sk}/{vp.stem}.txt"
-                                    )
-                                    break
-                        _append_log(job_id, f"✓ {vp.name} — done")
-                    except Exception as exc:
-                        _append_log(job_id, f"✗ {vp.name} — failed: {exc}")
+                                _jobs[job_id]["error"] = f"{vp.name}: {exc}"
+                        done_count += 1
                         with _jobs_lock:
-                            _jobs[job_id]["error"] = f"{vp.name}: {exc}"
-                    with _jobs_lock:
-                        _jobs[job_id]["done"] = i + 1
+                            _jobs[job_id]["done"] = done_count
             finally:
                 executor.shutdown(wait=False)
             with _jobs_lock:
