@@ -323,6 +323,41 @@ def test_analyze_no_matches_returns_empty_list(client, tmp_path):
     assert resp.get_json()["highlights"]["vid.mp4"] == []
 
 
+def test_analyze_runs_claude_calls_concurrently(client, tmp_path):
+    """Per-video Claude calls must run in parallel, or a folder of many long
+    videos serialises into a request long enough for the hosting proxy to time
+    out (returning HTML that the frontend can't parse as JSON)."""
+    import time
+
+    n = 6
+    for i in range(n):
+        (tmp_path / f"vid{i}.mp4").touch()
+        (tmp_path / f"vid{i}.txt").write_text(
+            f"[0:05] Speaker: Segment {i}.", encoding="utf-8"
+        )
+
+    per_call = 0.3
+
+    def slow_claude(transcript, prompt):
+        time.sleep(per_call)
+        return "0:05-0:10"
+
+    with patch("app.query_claude", side_effect=slow_claude):
+        start = time.perf_counter()
+        resp = client.post("/analyze", json={"folder": str(tmp_path), "prompt": "food"})
+        elapsed = time.perf_counter() - start
+
+    assert resp.status_code == 200
+    highlights = resp.get_json()["highlights"]
+    # correctness preserved: every video mapped to its matched line
+    assert len(highlights) == n
+    assert all(len(v) == 1 for v in highlights.values())
+    # concurrency: wall time must be far below the sequential sum (n * per_call)
+    assert elapsed < (n * per_call) / 2, (
+        f"analyze took {elapsed:.2f}s for {n} videos; expected concurrent execution"
+    )
+
+
 def test_recent_folders_starts_empty(client, tmp_path, monkeypatch):
     import app as app_module
     monkeypatch.setattr(app_module, "RECENT_FOLDERS_PATH", tmp_path / "recent.json")

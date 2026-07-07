@@ -217,14 +217,17 @@ def _run_analyze(folder: str, prompt: str) -> dict:
         return {"error": str(exc)}
     video_paths = _filter_generated_reels(video_paths)
 
-    highlights: dict[str, list[str]] = {}
-    errors: list[str] = []
+    def _analyze_one(vp: Path) -> tuple[str, list[str], str | None]:
+        """Analyze a single video. Returns (name, matched_lines, error).
 
-    for vp in video_paths:
+        Runs the (slow) Claude call plus timestamp matching for one video so the
+        whole folder can be processed concurrently — a folder of many long videos
+        analyzed serially takes long enough for the hosting proxy to time out and
+        return an HTML error page the frontend can't parse as JSON.
+        """
         txt_path = vp.with_suffix(".txt")
         if not txt_path.exists() or txt_path.stat().st_size == 0:
-            highlights[vp.name] = []
-            continue
+            return vp.name, [], None
 
         transcript = txt_path.read_text(encoding="utf-8")
         all_lines = _parse_transcript_lines(transcript)
@@ -233,9 +236,7 @@ def _run_analyze(folder: str, prompt: str) -> dict:
             response = query_claude(transcript, prompt)
             ranges = parse_timestamps(response) or []
         except Exception as exc:
-            errors.append(f"{vp.name}: {exc}")
-            highlights[vp.name] = []
-            continue
+            return vp.name, [], f"{vp.name}: {exc}"
 
         matched: list[str] = []
         for seg in ranges:
@@ -247,7 +248,22 @@ def _run_analyze(folder: str, prompt: str) -> dict:
                     if line["raw"] not in matched:
                         matched.append(line["raw"])
 
-        highlights[vp.name] = matched
+        return vp.name, matched, None
+
+    highlights: dict[str, list[str]] = {}
+    errors: list[str] = []
+
+    # Run the per-video Claude calls concurrently. Wall time collapses from the
+    # sum of every call to roughly the slowest single call, keeping the request
+    # under the hosting proxy's timeout.
+    max_workers = min(8, len(video_paths)) or 1
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        results = list(executor.map(_analyze_one, video_paths))
+
+    for name, matched, error in results:
+        highlights[name] = matched
+        if error:
+            errors.append(error)
 
     if len(errors) == len(video_paths) and not any(highlights.values()):
         return {"error": "; ".join(errors)}
