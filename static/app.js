@@ -1914,8 +1914,13 @@ $('folder-badge').addEventListener('click', async (e) => {
 
   function _saveRecentSession(name, videoCount, folder) {
     const key = 'sizzleRecentSessions';
+    // Dedupe by folder NAME, not the session key. Every upload mints a fresh
+    // session_key (sessions/<uuid>), so deduping by that would never match and
+    // re-uploads of the same folder would stack up as duplicates pointing at
+    // stale sessions. Keying on the name collapses re-uploads onto one entry
+    // that always carries the newest session_key, video count, and timestamp.
     const sessions = JSON.parse(localStorage.getItem(key) || '[]')
-      .filter(s => s.folder !== folder);
+      .filter(s => s.name !== name);
     sessions.unshift({ name, video_count: videoCount, folder, last_opened: new Date().toISOString() });
     localStorage.setItem(key, JSON.stringify(sessions.slice(0, 5)));
     _renderRecentSessions();
