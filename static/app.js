@@ -484,6 +484,35 @@ $('analyze-add-input').addEventListener('keydown', e => {
   if (e.key === 'Enter' && !e.shiftKey) runAddAnalyze();
 });
 
+// POST to /analyze and parse the JSON body. If the server responds with a
+// non-JSON body — almost always an HTML error page from a proxy/gateway when a
+// long analyze run times out — throw a legible error instead of letting
+// resp.json() surface a cryptic "Unexpected token '<'".
+async function _postAnalyze(prompt) {
+  const resp = await fetch('/analyze', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ folder: state.folder, prompt }),
+  });
+  const text = await resp.text();
+  try {
+    return { resp, data: JSON.parse(text) };
+  } catch {
+    if ([502, 503, 504].includes(resp.status) || /<!DOCTYPE|<html/i.test(text)) {
+      throw new Error('The server took too long and timed out. Try analyzing fewer or shorter videos at once.');
+    }
+    throw new Error(`The server returned an unexpected response (HTTP ${resp.status}). Please try again.`);
+  }
+}
+
+// Turn an error from the analyze flow into a user-facing message.
+function _analyzeErrorMessage(err) {
+  if (err.message === 'Failed to fetch') {
+    return 'Could not reach the server. Check your connection and try again.';
+  }
+  return err.message;
+}
+
 async function runAnalyze() {
   const prompt = $('analyze-input').value.trim();
   if (!prompt) return;
@@ -500,12 +529,7 @@ async function runAnalyze() {
   $('analyze-error').classList.add('hidden');
 
   try {
-    const resp = await fetch('/analyze', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ folder: state.folder, prompt }),
-    });
-    const data = await resp.json();
+    const { resp, data } = await _postAnalyze(prompt);
 
     if (!resp.ok) {
       $('analyze-error').textContent = data.error || 'Analyze failed';
@@ -529,7 +553,7 @@ async function runAnalyze() {
     $('analyze-add-row').classList.remove('hidden');
 
   } catch (err) {
-    $('analyze-error').textContent = 'Network error: ' + err.message;
+    $('analyze-error').textContent = _analyzeErrorMessage(err);
     $('analyze-error').classList.remove('hidden');
   } finally {
     $('btn-analyze').textContent = 'Analyze';
@@ -548,12 +572,7 @@ async function runAddAnalyze() {
   $('analyze-error').classList.add('hidden');
 
   try {
-    const resp = await fetch('/analyze', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ folder: state.folder, prompt }),
-    });
-    const data = await resp.json();
+    const { resp, data } = await _postAnalyze(prompt);
 
     if (!resp.ok) {
       $('analyze-error').textContent = data.error || 'Analyze failed';
@@ -576,7 +595,7 @@ async function runAddAnalyze() {
     _saveSelections();
 
   } catch (err) {
-    $('analyze-error').textContent = 'Network error: ' + err.message;
+    $('analyze-error').textContent = _analyzeErrorMessage(err);
     $('analyze-error').classList.remove('hidden');
   } finally {
     $('btn-analyze-add').textContent = '+ Add to selection';
