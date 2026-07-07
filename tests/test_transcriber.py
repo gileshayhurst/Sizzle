@@ -1,5 +1,6 @@
 from unittest.mock import MagicMock, patch
 from transcriber import transcribe_video, _seconds_to_timestamp, _split_into_sentences
+from types import SimpleNamespace
 
 
 def test_seconds_to_timestamp_zero():
@@ -22,42 +23,76 @@ def test_seconds_to_timestamp_truncates_fractional_seconds():
     assert _seconds_to_timestamp(65.9) == "1:05"
 
 
+def _word(word: str, start: float, end: float):
+    return SimpleNamespace(word=word, start=start, end=end)
+
+
+def _segment(start: float, text: str, words=None):
+    return SimpleNamespace(start=start, end=start + 1.0, text=text, words=words)
+
+
 def _make_mock_model(segments):
+    """Mock a faster-whisper WhisperModel: .transcribe() returns (segments_gen, info)."""
     mock_model = MagicMock()
-    mock_model.transcribe.return_value = {"segments": segments}
+    mock_model.transcribe.return_value = (iter(segments), SimpleNamespace(language="en"))
     return mock_model
 
 
 def test_formats_single_segment():
-    with patch("whisper.load_model") as mock_load:
-        mock_load.return_value = _make_mock_model([{"start": 5.0, "text": "Hello there"}])
-        result = transcribe_video("video.mp4")
+    model = _make_mock_model([_segment(5.0, "Hello there")])
+    result = transcribe_video("video.mp4", model=model)
     assert result == "[0:05] Speaker: Hello there"
 
 
 def test_formats_multiple_segments():
-    segments = [
-        {"start": 5.0, "text": "Hello there"},
-        {"start": 65.0, "text": "And then she said"},
-    ]
-    with patch("whisper.load_model") as mock_load:
-        mock_load.return_value = _make_mock_model(segments)
-        result = transcribe_video("video.mp4")
+    model = _make_mock_model([
+        _segment(5.0, "Hello there"),
+        _segment(65.0, "And then she said"),
+    ])
+    result = transcribe_video("video.mp4", model=model)
     assert result == "[0:05] Speaker: Hello there\n[1:05] Speaker: And then she said"
 
 
 def test_strips_whitespace_from_segment_text():
-    with patch("whisper.load_model") as mock_load:
-        mock_load.return_value = _make_mock_model([{"start": 0.0, "text": "  padded  "}])
-        result = transcribe_video("video.mp4")
+    model = _make_mock_model([_segment(0.0, "  padded  ")])
+    result = transcribe_video("video.mp4", model=model)
     assert result == "[0:00] Speaker: padded"
 
 
-def test_loads_base_model():
-    with patch("whisper.load_model") as mock_load:
-        mock_load.return_value = _make_mock_model([{"start": 0.0, "text": "Test"}])
+def test_requests_word_timestamps():
+    model = _make_mock_model([_segment(0.0, "Test")])
+    transcribe_video("video.mp4", model=model)
+    _, kwargs = model.transcribe.call_args
+    assert kwargs.get("word_timestamps") is True
+
+
+def test_builds_base_model_when_none_provided():
+    fake_model = _make_mock_model([_segment(0.0, "Test")])
+    with patch("faster_whisper.WhisperModel", return_value=fake_model) as mock_ctor:
         transcribe_video("video.mp4")
-    mock_load.assert_called_once_with("base")
+    mock_ctor.assert_called_once()
+    assert mock_ctor.call_args[0][0] == "base"
+
+
+def test_segment_to_dict_maps_word_objects():
+    from transcriber import _segment_to_dict
+    seg = _segment(2.0, "Hi there.", words=[_word("Hi", 2.0, 2.3), _word(" there.", 2.3, 2.9)])
+    d = _segment_to_dict(seg)
+    assert d == {
+        "start": 2.0,
+        "text": "Hi there.",
+        "words": [
+            {"word": "Hi", "start": 2.0, "end": 2.3},
+            {"word": " there.", "start": 2.3, "end": 2.9},
+        ],
+    }
+
+
+def test_segment_to_dict_handles_no_words():
+    from transcriber import _segment_to_dict
+    seg = _segment(1.0, "No words", words=None)
+    d = _segment_to_dict(seg)
+    assert d == {"start": 1.0, "text": "No words", "words": []}
 
 
 # --- _split_into_sentences ---
@@ -129,22 +164,17 @@ def test_split_exclamation_mark_ends_sentence():
 
 def test_transcribe_video_uses_word_timestamps_for_sentence_splitting():
     """Integration: multi-sentence segment produces separate transcript lines with distinct timestamps."""
-    segment = {
-        "start": 10.0,
-        "text": "The miso soup was great. Now for the yellowtail.",
-        "words": [
-            _make_word("The", 10.0, 10.2),
-            _make_word(" miso", 10.2, 10.5),
-            _make_word(" soup", 10.5, 10.7),
-            _make_word(" was", 10.7, 10.9),
-            _make_word(" great.", 10.9, 11.3),
-            _make_word(" Now", 12.0, 12.2),
-            _make_word(" for", 12.2, 12.4),
-            _make_word(" the", 12.4, 12.5),
-            _make_word(" yellowtail.", 12.5, 13.0),
-        ],
-    }
-    with patch("whisper.load_model") as mock_load:
-        mock_load.return_value = _make_mock_model([segment])
-        result = transcribe_video("video.mp4")
+    seg = _segment(10.0, "The miso soup was great. Now for the yellowtail.", words=[
+        _word("The", 10.0, 10.2),
+        _word(" miso", 10.2, 10.5),
+        _word(" soup", 10.5, 10.7),
+        _word(" was", 10.7, 10.9),
+        _word(" great.", 10.9, 11.3),
+        _word(" Now", 12.0, 12.2),
+        _word(" for", 12.2, 12.4),
+        _word(" the", 12.4, 12.5),
+        _word(" yellowtail.", 12.5, 13.0),
+    ])
+    model = _make_mock_model([seg])
+    result = transcribe_video("video.mp4", model=model)
     assert result == "[0:10] Speaker: The miso soup was great.\n[0:12] Speaker: Now for the yellowtail."

@@ -39,14 +39,23 @@ def _split_into_sentences(segment: dict) -> list[tuple[float, str]]:
     return sentences
 
 
+def _segment_to_dict(segment) -> dict:
+    """Adapt a faster-whisper Segment object to the dict shape _split_into_sentences expects."""
+    words = []
+    if segment.words:
+        words = [{"word": w.word, "start": w.start, "end": w.end} for w in segment.words]
+    return {"start": segment.start, "text": segment.text, "words": words}
+
+
 def transcribe_video(video_path: str, model=None) -> str:
     if model is None:
-        import whisper
-        model = whisper.load_model("base")
-    result = model.transcribe(video_path, word_timestamps=True)
+        from faster_whisper import WhisperModel
+        model = WhisperModel("base", device="cpu", compute_type="int8")
+    segments, _info = model.transcribe(video_path, word_timestamps=True)
     lines = []
-    for segment in result["segments"]:
-        for start, text in _split_into_sentences(segment):
+    for segment in segments:
+        seg_dict = _segment_to_dict(segment)
+        for start, text in _split_into_sentences(seg_dict):
             ts = _seconds_to_timestamp(start)
             lines.append(f"[{ts}] Speaker: {text}")
     return "\n".join(lines)
