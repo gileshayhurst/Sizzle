@@ -4,7 +4,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-import whisper
+from faster_whisper import WhisperModel
 
 from claude_client import query_claude
 from loader import scan_videos
@@ -42,7 +42,13 @@ def main():
         args.output = Path(args.folder).name + video_paths[0].suffix
 
     print("Loading Whisper model...", file=sys.stderr)
-    whisper_model = whisper.load_model("base")
+    whisper_model = WhisperModel(
+        "base",
+        device="cpu",
+        compute_type="int8",
+        cpu_threads=os.cpu_count() or 1,
+        num_workers=1,
+    )
 
     video_segments: list[tuple[Path, list[str]]] = []
 
