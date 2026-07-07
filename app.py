@@ -4,7 +4,6 @@ import os
 import shutil
 import tempfile
 import threading
-import time
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -66,6 +65,7 @@ def _compute_transcription_parallelism(cpu_count: int, num_videos: int) -> tuple
     Invariant: workers * cpu_threads <= cpu_count.
     """
     cpu_count = max(1, cpu_count)
+    num_videos = max(1, num_videos)
     workers = min(num_videos, max(1, cpu_count // 2))
     cpu_threads = max(1, cpu_count // workers)
     return workers, cpu_threads

@@ -37,6 +37,14 @@ def test_compute_transcription_parallelism_caps_workers_at_video_count():
     assert _compute_transcription_parallelism(8, 2) == (2, 4)
 
 
+def test_compute_transcription_parallelism_zero_videos_is_safe():
+    from app import _compute_transcription_parallelism
+    workers, cpu_threads = _compute_transcription_parallelism(4, 0)
+    assert workers >= 1
+    assert cpu_threads >= 1
+    assert workers * cpu_threads <= 4
+
+
 @pytest.fixture
 def client():
     app = create_app(testing=True)
@@ -58,7 +66,9 @@ def test_load_folder_returns_video_list(client, tmp_path):
     (tmp_path / "video1.mp4").touch()
     (tmp_path / "video2.mp4").touch()
     (tmp_path / "notes.txt").write_text("[0:01] Speaker: hi", encoding="utf-8")
-    resp = client.post("/load-folder", json={"folder": str(tmp_path)})
+    with patch("app._get_whisper_model", return_value=None), \
+         patch("app.transcribe_video", return_value="[0:00] Speaker: hi"):
+        resp = client.post("/load-folder", json={"folder": str(tmp_path)})
     assert resp.status_code == 200
     data = resp.get_json()
     assert "job_id" in data
