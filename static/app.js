@@ -143,7 +143,9 @@ async function _autoSaveReelResult(jobId, filename, entryId) {
   return _saveToOutputFolder(handle, filename, blob, entryId);
 }
 
-let _genWs = null;  // active generation WebSocket
+let _genWs = null;         // active generation WebSocket
+let _genPollTimer = null;  // fallback HTTP polling timer for generation status
+let _genTerminated = false; // guards against handling a job's end twice
 
 function _saveSelections() {
   if (!state.folder) return;
@@ -445,6 +447,17 @@ function appendLog(boxId, msg) {
   div.textContent = msg;
   box.appendChild(div);
   box.scrollTop = box.scrollHeight;
+}
+
+// Parse a fetch Response as JSON without ever throwing "unexpected end of JSON
+// input" — a host/platform error page (413/502/504) or an empty body yields {}
+// instead of a crash, so callers can fall back to the HTTP status.
+async function _safeJson(resp) {
+  try {
+    return await resp.json();
+  } catch {
+    return {};
+  }
 }
 
 // ─── Mode toggle ──────────────────────────────────────────────────────────────
@@ -1024,6 +1037,7 @@ async function submitGenerate(mode, selections) {
 
 function watchGeneration(jobId) {
   const wsUrl = GENERATOR_URL.replace(/^http/, 'ws') + `/ws/job/${jobId}`;
+  _genTerminated = false;
   _genWs = new WebSocket(wsUrl);
 
   _genWs.onmessage = (e) => {
@@ -1040,56 +1054,30 @@ function watchGeneration(jobId) {
       $('gen-bar').style.width = Math.max(pct, 5) + '%';
     } else if (msg.type === 'done') {
       _genWs = null;
-      if (msg.status === 'done') {
-        $('gen-bar').style.width = '100%';
-        state.resultJobId = jobId;
-        _clearSelections();
-        showResult(msg.result);
-          if (APP_MODE === 'cloud' && msg.result.entry_id) {
-            const openBtn = $('btn-open-folder');
-            openBtn.textContent = '⬇ Saving…';
-            openBtn.disabled = true;
-            _autoSaveReelResult(jobId, msg.result.filename, msg.result.entry_id)
-              .then(saved => {
-                openBtn.disabled = false;
-                if (saved) {
-                  openBtn.textContent = `✓ Saved to ${saved.folderName}`;
-                  openBtn.dataset.savedPath = saved.localFolderPath || '';
-                  openBtn.dataset.savedFilename = msg.result.filename;
-                } else {
-                  openBtn.textContent = '⬇ Download';
-                }
-              })
-              .catch(() => {
-                openBtn.disabled = false;
-                openBtn.textContent = '⬇ Download';
-              });
-          }
-      } else if (msg.status === 'error') {
-        appendLog('gen-log', `✗ Error: ${msg.error}`);
-        $('topbar-controls').classList.remove('hidden');
-      } else if (msg.status === 'cancelled') {
-        showScreen('screen-workspace');
-        $('topbar-controls').classList.remove('hidden');
-      }
+      _handleGenerationTerminal(jobId, msg.status, msg.result, msg.error);
     }
   };
 
+  // If the socket drops before the job reaches a terminal state — which is
+  // exactly what happens when a long, silent stitch+upload phase lets the host
+  // idle-close the connection — fall back to HTTP polling instead of giving up.
+  // Without this the progress bar freezes at "finalizing" forever even though
+  // the job may still finish (or already have finished) server-side.
   _genWs.onerror = () => {
     _genWs = null;
-    appendLog('gen-log', '✗ Connection error — generation may still be running');
-    $('topbar-controls').classList.remove('hidden');
+    if (!_genTerminated) _startGenerationPolling(jobId);
   };
 
   _genWs.onclose = () => {
     if (_genWs !== null) {
       _genWs = null;
-      appendLog('gen-log', '✗ Connection closed unexpectedly — generation may still be running');
-      $('topbar-controls').classList.remove('hidden');
+      if (!_genTerminated) _startGenerationPolling(jobId);
     }
   };
 
   $('btn-cancel-gen').onclick = async () => {
+    _genTerminated = true;
+    _stopGenerationPolling();
     await fetch(`${GENERATOR_URL}/jobs/${jobId}`, { method: 'DELETE' });
     if (_genWs) {
       _genWs.close();
@@ -1098,6 +1086,104 @@ function watchGeneration(jobId) {
     showScreen('screen-workspace');
     $('topbar-controls').classList.remove('hidden');
   };
+}
+
+// Terminal handling for a generation job — shared by the WebSocket 'done' frame
+// and the HTTP polling fallback so both paths reach an identical end state.
+// Idempotent: only the first caller for a given job wins.
+function _handleGenerationTerminal(jobId, status, result, error) {
+  if (_genTerminated) return;
+  _genTerminated = true;
+  _stopGenerationPolling();
+
+  if (status === 'done') {
+    $('gen-bar').style.width = '100%';
+    state.resultJobId = jobId;
+    _clearSelections();
+    showResult(result);
+    if (APP_MODE === 'cloud' && result && result.entry_id) {
+      const openBtn = $('btn-open-folder');
+      openBtn.textContent = '⬇ Saving…';
+      openBtn.disabled = true;
+      _autoSaveReelResult(jobId, result.filename, result.entry_id)
+        .then(saved => {
+          openBtn.disabled = false;
+          if (saved) {
+            openBtn.textContent = `✓ Saved to ${saved.folderName}`;
+            openBtn.dataset.savedPath = saved.localFolderPath || '';
+            openBtn.dataset.savedFilename = result.filename;
+          } else {
+            openBtn.textContent = '⬇ Download';
+          }
+        })
+        .catch(() => {
+          openBtn.disabled = false;
+          openBtn.textContent = '⬇ Download';
+        });
+    }
+  } else if (status === 'error') {
+    appendLog('gen-log', `✗ Error: ${error}`);
+    $('topbar-controls').classList.remove('hidden');
+  } else if (status === 'cancelled') {
+    showScreen('screen-workspace');
+    $('topbar-controls').classList.remove('hidden');
+  }
+}
+
+function _stopGenerationPolling() {
+  if (_genPollTimer !== null) {
+    clearInterval(_genPollTimer);
+    _genPollTimer = null;
+  }
+}
+
+// Poll GET /status/<job_id> until the job reaches a terminal state. Used only
+// as a fallback when the progress WebSocket drops mid-job.
+function _startGenerationPolling(jobId) {
+  _stopGenerationPolling();
+  appendLog('gen-log', '⟳ Live connection dropped — checking progress…');
+  let shownLogLen = null; // seeded on first poll so we don't re-print WS logs
+  let missCount = 0;      // consecutive network/HTTP failures
+
+  _genPollTimer = setInterval(async () => {
+    if (_genTerminated) { _stopGenerationPolling(); return; }
+    let resp;
+    try {
+      resp = await fetch(`${GENERATOR_URL}/status/${jobId}`);
+    } catch {
+      if (++missCount >= 5) {
+        _stopGenerationPolling();
+        appendLog('gen-log', '✗ Lost contact with the generator service. It may still be finishing — check the Library shortly.');
+        $('topbar-controls').classList.remove('hidden');
+      }
+      return;
+    }
+    if (resp.status === 404) {
+      _stopGenerationPolling();
+      appendLog('gen-log', '✗ Generation job is no longer available on the server.');
+      $('topbar-controls').classList.remove('hidden');
+      return;
+    }
+    if (!resp.ok) { missCount++; return; }
+    missCount = 0;
+
+    const data = await _safeJson(resp);
+    const log = data.log || [];
+    if (shownLogLen === null) {
+      shownLogLen = log.length; // assume the WS already printed these
+    } else if (log.length > shownLogLen) {
+      log.slice(shownLogLen).forEach(line => appendLog('gen-log', line));
+      shownLogLen = log.length;
+    }
+    if (data.total > 0) {
+      const pct = Math.round((data.done / data.total) * 100);
+      $('gen-bar').style.width = Math.max(pct, 5) + '%';
+    }
+
+    if (data.status === 'done' || data.status === 'error' || data.status === 'cancelled') {
+      _handleGenerationTerminal(jobId, data.status, data.result, data.error);
+    }
+  }, 2500);
 }
 
 function showResult(result) {
@@ -1750,24 +1836,26 @@ $('folder-badge').addEventListener('click', async (e) => {
     btnLoad.disabled = true;
 
     try {
-      // Step 1: validate filenames and create a session key on the server
+      // Step 1: validate filenames and get one presigned PUT URL per file.
       btnLoad.textContent = 'Preparing upload…';
       const prepResp = await fetch('/upload/prepare', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ files: selectedFiles.map(f => f.name) }),
       });
-      const prepData = await prepResp.json();
+      const prepData = await _safeJson(prepResp);
       if (!prepResp.ok) {
-        folderErr.textContent = prepData.error || 'Upload preparation failed';
+        folderErr.textContent = prepData.error || `Upload preparation failed (${prepResp.status})`;
         folderErr.classList.remove('hidden');
         return;
       }
 
       const session_key = prepData.session_key;
+      const uploads = prepData.uploads || {};
 
-      // Step 2: upload each file to the server — server proxies bytes to R2.
-      // No CORS needed: the browser posts to the same origin (this Flask server).
+      // Step 2: upload each file DIRECTLY to R2 via its presigned PUT URL.
+      // Bytes go browser → R2 and never transit this host, so large videos
+      // can't hit the host's request body-size limit or its metered bandwidth.
       $('transcribe-subtitle').textContent = `Uploading ${selectedFiles.length} files…`;
       $('transcribe-bar').style.width = '0%';
       $('transcribe-log').textContent = '';
@@ -1776,13 +1864,13 @@ $('folder-badge').addEventListener('click', async (e) => {
       for (let i = 0; i < selectedFiles.length; i++) {
         const file = selectedFiles[i];
         $('transcribe-log').textContent = `⟳ ${file.name} (${i + 1} / ${selectedFiles.length})`;
-        const fd = new FormData();
-        fd.append('file', file);
-        fd.append('session_key', session_key);
-        const resp = await fetch('/upload/file', { method: 'POST', body: fd });
+        const putUrl = uploads[file.name];
+        if (!putUrl) {
+          throw new Error(`No upload URL was issued for ${file.name}`);
+        }
+        const resp = await fetch(putUrl, { method: 'PUT', body: file });
         if (!resp.ok) {
-          const errData = await resp.json().catch(() => ({}));
-          throw new Error(`Failed to upload ${file.name}: ${errData.error || resp.status}`);
+          throw new Error(`Failed to upload ${file.name}: ${resp.status}`);
         }
         const pct = Math.round(((i + 1) / selectedFiles.length) * 100);
         $('transcribe-bar').style.width = pct + '%';
@@ -1796,10 +1884,10 @@ $('folder-badge').addEventListener('click', async (e) => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ session_key, files: selectedFiles.map(f => f.name) }),
       });
-      const commitData = await commitResp.json();
+      const commitData = await _safeJson(commitResp);
       if (!commitResp.ok) {
         showScreen('screen-folder-picker');
-        folderErr.textContent = commitData.error || 'Upload commit failed';
+        folderErr.textContent = commitData.error || `Upload commit failed (${commitResp.status})`;
         folderErr.classList.remove('hidden');
         return;
       }

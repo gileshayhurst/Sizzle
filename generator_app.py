@@ -293,6 +293,40 @@ def _run_generation(job_id: str, folder: str,
                     session_key: str = None,
                     video_paths: list = None,
                     video_urls: dict = None) -> None:
+    """Run a generation job, guaranteeing it always reaches a terminal state.
+
+    The pipeline runs on a daemon thread whose only wrapper is a `finally` for
+    temp-dir cleanup — so any unhandled exception would kill the thread and
+    leave the job stuck at 'running'. The progress WebSocket streams a frame
+    every 200ms regardless, so a stuck 'running' job strands the UI on the
+    'finalizing' screen forever. This guard converts any escape into a terminal
+    'error' so the stream always delivers a final 'done' frame.
+    """
+    try:
+        _run_generation_impl(
+            job_id, folder, selections, prompt, output_filename,
+            session_key=session_key,
+            video_paths=video_paths,
+            video_urls=video_urls,
+        )
+    except Exception as exc:
+        job = _jobs.get(job_id)
+        if job is not None:
+            with _jobs_lock:
+                if job.get("status") not in ("done", "error", "cancelled"):
+                    job["status"] = "error"
+                    job["error"] = f"Generation failed unexpectedly: {exc}"
+            try:
+                _append_log(job_id, f"✗ Generation failed unexpectedly: {exc}")
+            except Exception:
+                pass
+
+
+def _run_generation_impl(job_id: str, folder: str,
+                    selections: dict, prompt: str, output_filename: str,
+                    session_key: str = None,
+                    video_paths: list = None,
+                    video_urls: dict = None) -> None:
     """Extract and stitch clips from selected transcript lines."""
     job = _jobs[job_id]
     if video_paths is None:
@@ -855,37 +889,24 @@ def create_app(testing: bool = False) -> Flask:
         path = Path(entry["path"])
         if path.is_file():
             return send_file(str(path), conditional=True)
-        # Fallback: stream from R2 *through* Flask so the response carries the
-        # CORS headers that flask-cors adds.  A redirect to a presigned URL would
-        # send the browser directly to R2 (no CORS headers) and Chrome would
-        # block the response with ERR_BLOCKED_BY_ORB.
-        # Range headers are proxied to S3 so the browser video player can seek.
+        # Fallback: redirect the browser straight to a presigned R2 URL instead of
+        # proxying every byte through this host (proxying costs host bandwidth on
+        # every view — the dominant ongoing bandwidth drain on a metered plan).
+        #
+        # The presigned URL forces Content-Type=video/mp4 via a response-override
+        # param; that (together with R2 CORS now allowing GET — see set_cors.py)
+        # satisfies Chrome's ORB, which is what previously blocked a bare redirect.
+        # The browser handles Range/seeking against R2 directly.
         if storage.is_cloud() and entry.get("reel_s3_key"):
             try:
-                from flask import Response
-                key = entry["reel_s3_key"]
-                get_kwargs: dict = {"Bucket": storage._bucket(), "Key": key}
-                range_header = request.headers.get("Range")
-                if range_header:
-                    get_kwargs["Range"] = range_header
-                obj = storage._s3().get_object(**get_kwargs)
-                status = 206 if range_header else 200
-                headers = {
-                    "Content-Type": "video/mp4",
-                    "Content-Length": str(obj["ContentLength"]),
-                    "Accept-Ranges": "bytes",
-                    "Content-Disposition": (
+                url = storage.presigned_url(
+                    entry["reel_s3_key"],
+                    content_type="video/mp4",
+                    content_disposition=(
                         f'inline; filename="{entry.get("filename", "reel.mp4")}"'
                     ),
-                }
-                if "ContentRange" in obj:
-                    headers["Content-Range"] = obj["ContentRange"]
-                body = obj["Body"]
-                return Response(
-                    body.iter_chunks(chunk_size=65536),
-                    status=status,
-                    headers=headers,
                 )
+                return redirect(url)
             except Exception as exc:
                 return jsonify({"error": f"cloud fetch failed: {exc}"}), 502
         return jsonify({"error": "file not found on disk"}), 404
@@ -893,11 +914,10 @@ def create_app(testing: bool = False) -> Flask:
     @app.get("/library")
     def get_library():
         entries = _load_library()
-        # Note: we deliberately do NOT inject presigned R2 URLs here.
-        # Chrome's ORB (Opaque Response Blocking) rejects cross-origin media
-        # responses that don't pass through a CORS-aware server.  All video
-        # playback is routed through /library-video/<id> which proxies R2
-        # content via Flask (flask-cors adds the required headers).
+        # Playback is routed through /library-video/<id>, which serves the local
+        # file when present and otherwise redirects to a presigned R2 URL (with a
+        # forced video/mp4 Content-Type so Chrome's ORB permits the load). Keeping
+        # the indirection means the client never needs a presigned URL injected here.
         return jsonify(entries)
 
     @app.delete("/library/<entry_id>")

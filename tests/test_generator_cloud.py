@@ -220,6 +220,54 @@ def test_run_generation_skips_scan_videos_when_paths_provided(tmp_path):
     mock_scan.assert_not_called()
 
 
+def test_library_video_redirects_to_presigned_url_in_cloud(cloud_client, tmp_path):
+    """When the local reel file is gone, /library-video redirects to a presigned
+    R2 GET URL with a forced media Content-Type instead of proxying the bytes
+    through the host — proxying burns host bandwidth on every single view."""
+    entry = {
+        "id": "abc123",
+        "filename": "my reel.mp4",
+        "path": str(tmp_path / "gone.mp4"),   # does not exist → cloud fallback
+        "reel_s3_key": "sessions/x/reel.mp4",
+    }
+    with patch("generator_app._load_library", return_value=[entry]), \
+         patch("generator_app.storage.presigned_url",
+               return_value="https://r2.example/reel.mp4?sig=1") as mock_ps:
+        resp = cloud_client.get("/library-video/abc123", follow_redirects=False)
+
+    assert resp.status_code in (302, 307)
+    assert resp.headers["Location"] == "https://r2.example/reel.mp4?sig=1"
+    # Must force a media Content-Type so Chrome's ORB permits the cross-origin load.
+    _, kwargs = mock_ps.call_args
+    assert kwargs.get("content_type") == "video/mp4"
+
+
+def test_run_generation_marks_job_error_on_unexpected_exception(tmp_path):
+    """Any unexpected exception mid-generation must drive the job to a terminal
+    'error' state. If it were left 'running', the progress WebSocket would keep
+    streaming frozen progress and the UI would sit at 'finalizing' forever."""
+    import importlib, generator_app
+    importlib.reload(generator_app)
+
+    (tmp_path / "video.txt").write_text("[0:00] Speaker: Hello world.", encoding="utf-8")
+    vp = tmp_path / "video.mp4"
+    job_id = generator_app._new_job("generation", 1)
+
+    # get_video_duration is called with no surrounding try/except; make it blow up.
+    with patch("generator_app.get_video_duration", side_effect=RuntimeError("boom")):
+        generator_app._run_generation(
+            job_id, str(tmp_path),
+            {"video.mp4": ["[0:00] Speaker: Hello world."]},
+            "test prompt", "out.mp4",
+            video_paths=[vp],
+            video_urls={"video.mp4": "https://r2.example.com/presigned/video.mp4"},
+        )
+
+    job = generator_app._jobs[job_id]
+    assert job["status"] == "error"
+    assert "boom" in (job["error"] or "")
+
+
 def test_generate_cloud_does_not_download_video_files(cloud_client, tmp_path):
     """In cloud mode, /generate must NOT call download_file for video files."""
     session_key = "sessions/test456"

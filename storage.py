@@ -163,16 +163,28 @@ def read_file_bytes(key: str) -> bytes:
         return (_data_root() / key).read_bytes()
 
 
-def presigned_url(key: str, expires: int = 3600) -> str:
+def presigned_url(key: str, expires: int = 3600,
+                  content_type: str = None,
+                  content_disposition: str = None) -> str:
     """Generate a presigned download URL for a cloud-stored file.
+
+    content_type / content_disposition set the S3 response-override params so the
+    URL forces those headers regardless of how the object was stored. Forcing
+    Content-Type=video/mp4 is what lets a <video> element load the URL directly
+    without Chrome's ORB blocking it (older objects may lack a stored type).
 
     Raises RuntimeError when called in local mode — presigned URLs require S3.
     """
     if not is_cloud():
         raise RuntimeError("presigned_url is only available in cloud mode (APP_MODE=cloud)")
+    params = {"Bucket": _bucket(), "Key": key}
+    if content_type:
+        params["ResponseContentType"] = content_type
+    if content_disposition:
+        params["ResponseContentDisposition"] = content_disposition
     return _s3().generate_presigned_url(
         "get_object",
-        Params={"Bucket": _bucket(), "Key": key},
+        Params=params,
         ExpiresIn=expires,
     )
 

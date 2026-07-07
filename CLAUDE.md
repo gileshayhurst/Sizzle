@@ -88,7 +88,7 @@ Flask factory pattern: `create_app(testing=False)`. Uses `flask-cors` and `flask
 - **`DELETE /jobs/<job_id>`** — sets the cancel `threading.Event`; the generation thread checks it between phases.
 - **`GET /video/<job_id>`** — serves the generated reel from disk (local temp file first, R2 redirect as fallback).
 - **`GET /library`** — returns library entries. Does NOT inject presigned URLs — all video playback goes through `/library-video/<id>`.
-- **`GET /library-video/<id>`** — proxies video content through Flask (not a redirect). This is critical: Chrome's ORB blocks cross-origin media responses that don't carry CORS headers, so redirecting directly to a presigned R2 URL causes `ERR_BLOCKED_BY_ORB`. Proxying through Flask (with flask-cors) fixes this.
+- **`GET /library-video/<id>`** — serves the local temp file when present, else **redirects** to a presigned R2 GET URL that forces `Content-Type: video/mp4` (via S3 `ResponseContentType`). That forced media type, plus R2 CORS now allowing `GET` (see `set_cors.py`), satisfies Chrome's ORB. This replaced an earlier Flask byte-proxy that dodged `ERR_BLOCKED_BY_ORB` but streamed every playback through the host, burning metered bandwidth per view. If ORB ever regresses, revert this endpoint to the proxy.
 - **`DELETE /library/<id>`** — removes library entry; `?delete_file=true` also deletes the file from disk.
 - **`PATCH /library/<id>`** — edits `title` and `notes` fields on a library entry.
 - **`POST /open-folder`** — launches Windows Explorer to a folder (no-op on Linux).
@@ -111,7 +111,7 @@ Switches between local filesystem and S3/R2 based on `APP_MODE` env var. Both ba
 - `download_file(key, local_path)` — retrieves file from storage
 - `read_json(key)` / `write_json(key, data)` — read/write JSON
 - `list_keys(prefix)` — list all keys under a prefix
-- `read_file_bytes(key)` — read raw bytes (used by `/library-video` proxy)
+- `read_file_bytes(key)` — read raw bytes (general-purpose primitive; no current caller since `/library-video` switched from proxying to redirecting)
 - `presigned_url(key)` / `presigned_put_url(key)` — generate presigned S3 URLs (cloud only)
 - `new_session_key()` — returns `sessions/<uuid>` prefix for upload sessions
 - `library_key()` — returns `library/sizzle_library.json`
@@ -142,5 +142,5 @@ Orchestrates the same lower-level modules directly without Flask. Loads Whisper 
 - **Whisper is lazy-loaded** in the web app (`_get_whisper_model()` with a double-checked lock) so the first `/load-folder` that needs transcription triggers the load.
 - **ffmpeg re-encoding** in `extract_clip` uses `-c:v libx264 -preset fast -c:a aac`. Do not switch to `-c copy` for clip extraction — it produces clips that start mid-GOP, causing visible freezes at every transition.
 - **Title card ffmpeg quirk:** The `drawtext` filter uses `textfile=` (content written to side-car `.txt` files) and a relative `fontfile=` path with `cwd=tmp_dir`. This avoids Windows drive-letter colons inside filter option strings (ffmpeg 8.x on Windows treats `:` as an option separator even inside quoted values).
-- **Library video proxy:** `/library-video/<id>` must proxy video bytes through Flask, not redirect to presigned R2 URLs. Chrome's ORB blocks cross-origin media responses without CORS headers; flask-cors only applies to responses served through Flask itself.
+- **Library video playback:** `/library-video/<id>` redirects to a presigned R2 URL with a forced `video/mp4` Content-Type (not a Flask byte-proxy) to keep playback off the host's metered bandwidth. This relies on R2 CORS allowing `GET` (`set_cors.py`) and the forced media type to satisfy Chrome's ORB. If playback breaks with `ERR_BLOCKED_BY_ORB`, the safe rollback is to proxy the bytes through Flask again.
 - **Test suite runs in `testing=True` mode** which executes generation synchronously so mock patches don't leak across tests.

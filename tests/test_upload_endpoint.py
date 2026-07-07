@@ -130,10 +130,13 @@ def test_upload_cloud_mode_calls_storage_upload(tmp_path, monkeypatch):
 
 # ── /upload/prepare ──────────────────────────────────────────────────────────
 
-def test_upload_prepare_returns_session_key(client, monkeypatch):
-    """prepare creates a session key; no presigned URLs (browser uploads via /upload/file)."""
+def test_upload_prepare_returns_presigned_put_urls(client, monkeypatch):
+    """prepare creates a session key and returns one presigned PUT URL per file so
+    the browser uploads each file straight to R2, bypassing the host (no proxy)."""
     monkeypatch.setenv("APP_MODE", "cloud")
-    with patch("storage.new_session_key", return_value="sessions/testsession"):
+    with patch("storage.new_session_key", return_value="sessions/testsession"), \
+         patch("storage.presigned_put_url",
+               side_effect=lambda key, **kw: f"https://r2.example/{key}?sig=abc"):
         resp = client.post("/upload/prepare", json={
             "files": ["clip1.mp4", "clip1.txt", "clip2.mov"]
         })
@@ -141,8 +144,11 @@ def test_upload_prepare_returns_session_key(client, monkeypatch):
     data = resp.get_json()
     assert data["session_key"] == "sessions/testsession"
     assert data["folder"] == "sessions/testsession"
-    # No presigned upload URLs — files are posted to /upload/file instead
-    assert "uploads" not in data
+    # One presigned PUT URL per file, keyed under the session prefix
+    uploads = data["uploads"]
+    assert set(uploads.keys()) == {"clip1.mp4", "clip1.txt", "clip2.mov"}
+    assert uploads["clip1.mp4"] == \
+        "https://r2.example/sessions/testsession/clip1.mp4?sig=abc"
 
 
 def test_upload_prepare_rejects_unsupported_extension(client, monkeypatch):
