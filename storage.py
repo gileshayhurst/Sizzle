@@ -34,11 +34,17 @@ def _s3():
     global _s3_client
     if _s3_client is None:
         import boto3
+        from botocore.config import Config
         _s3_client = boto3.client(
             "s3",
             endpoint_url=os.environ.get("S3_ENDPOINT_URL") or None,
             aws_access_key_id=os.environ["S3_ACCESS_KEY"],
             aws_secret_access_key=os.environ["S3_SECRET_KEY"],
+            # R2 only accepts SigV4 — without this pin botocore falls back to
+            # SigV2 for presigned URLs, which R2 rejects with 401
+            # "SigV2 authorization is not supported".
+            region_name="auto",
+            config=Config(signature_version="s3v4"),
         )
     return _s3_client
 

@@ -163,6 +163,33 @@ def test_presigned_put_url_calls_s3_in_cloud_mode(monkeypatch, tmp_path):
     assert url == "https://r2.example.com/put-url"
 
 
+def _cloud_storage_with_fake_creds(monkeypatch, tmp_path):
+    """Reload storage in cloud mode with fake R2 creds; real boto3 client, no network."""
+    s = reload_storage(monkeypatch, tmp_path, mode="cloud")
+    monkeypatch.setenv("S3_ENDPOINT_URL", "https://fake-account.r2.cloudflarestorage.com")
+    monkeypatch.setenv("S3_BUCKET", "test-bucket")
+    monkeypatch.setenv("S3_ACCESS_KEY", "0" * 32)
+    monkeypatch.setenv("S3_SECRET_KEY", "0" * 64)
+    return s
+
+
+def test_presigned_put_url_uses_sigv4(monkeypatch, tmp_path):
+    """R2 rejects SigV2 ('SigV2 authorization is not supported') — presigned PUT
+    URLs must carry SigV4 query params or every direct browser upload 401s."""
+    s = _cloud_storage_with_fake_creds(monkeypatch, tmp_path)
+    url = s.presigned_put_url("sessions/abc/video.mp4", expires=300)
+    assert "X-Amz-Algorithm=AWS4-HMAC-SHA256" in url
+    assert "AWSAccessKeyId=" not in url  # SigV2 marker
+
+
+def test_presigned_get_url_uses_sigv4(monkeypatch, tmp_path):
+    """Library playback redirects to presigned GET URLs — same SigV4 requirement."""
+    s = _cloud_storage_with_fake_creds(monkeypatch, tmp_path)
+    url = s.presigned_url("library/reel.mp4", content_type="video/mp4")
+    assert "X-Amz-Algorithm=AWS4-HMAC-SHA256" in url
+    assert "AWSAccessKeyId=" not in url  # SigV2 marker
+
+
 # ── list_keys pagination (cloud backend) ───────────────────────────────────────
 
 def test_list_keys_follows_pagination(monkeypatch, tmp_path):
