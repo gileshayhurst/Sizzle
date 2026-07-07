@@ -266,6 +266,28 @@ def test_group_lines_into_segments_falls_back_to_plus_ten_without_duration():
     assert result == [(5.0, 20.0)]
 
 
+def test_group_lines_into_segments_extends_short_segment_to_minimum():
+    from generator_app import _group_lines_into_segments, MIN_CLIP_SECONDS
+    lines = [
+        {"raw": "a", "seconds": 10.0},
+        {"raw": "b", "seconds": 10.0},  # same-timestamp boundary -> ~0s segment
+    ]
+    result = _group_lines_into_segments(lines, {"a"})
+    assert result == [(10.0, 10.0 + MIN_CLIP_SECONDS)]
+
+
+def test_group_lines_into_segments_drops_segment_that_cannot_reach_minimum():
+    from generator_app import _group_lines_into_segments
+    lines = [
+        {"raw": "a", "seconds": 29.5},
+        {"raw": "b", "seconds": 30.0},
+    ]
+    # 'a' is the trailing selected run; video ends at 30.0 so the widest
+    # possible clip is 0.5s < MIN_CLIP_SECONDS -> drop it entirely (no title card).
+    result = _group_lines_into_segments(lines, {"a"}, video_duration=30.0)
+    assert result == []
+
+
 def test_get_video_duration_returns_seconds():
     from generator_app import get_video_duration
     from unittest.mock import patch, MagicMock

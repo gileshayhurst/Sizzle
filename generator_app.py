@@ -91,10 +91,31 @@ def _library_add(entry: dict) -> None:
 
 
 
+# A clip shorter than this is imperceptible and produces a title-card->title-card
+# artifact with no visible video between. Segments are extended to this floor, or
+# dropped (title card included) when the source can't provide it.
+MIN_CLIP_SECONDS = 1.5
+
+
 def _group_lines_into_segments(
     all_lines: list, selected_raws: set, video_duration: float | None = None
 ) -> list:
-    """Convert selected transcript lines into (start_sec, end_sec) clip ranges."""
+    """Convert selected transcript lines into (start_sec, end_sec) clip ranges.
+
+    Segments shorter than MIN_CLIP_SECONDS are extended to that floor (clamped to
+    the video duration when known), or dropped entirely if the source can't reach
+    it — so a lone title card with no clip is never emitted.
+    """
+    def _finalize(start: float, end: float):
+        if end - start < MIN_CLIP_SECONDS:
+            extended = start + MIN_CLIP_SECONDS
+            if video_duration is not None:
+                extended = min(extended, video_duration)
+            end = extended
+        if end - start < MIN_CLIP_SECONDS:
+            return None  # can't reach the floor (hit video end) -> drop
+        return (start, end)
+
     segments = []
     current = []
 
@@ -103,12 +124,16 @@ def _group_lines_into_segments(
             current.append(line)
         else:
             if current:
-                segments.append((current[0]["seconds"], line["seconds"]))
+                seg = _finalize(current[0]["seconds"], line["seconds"])
+                if seg is not None:
+                    segments.append(seg)
                 current = []
 
     if current:
         end = video_duration if video_duration is not None else current[-1]["seconds"] + 10.0
-        segments.append((current[0]["seconds"], end))
+        seg = _finalize(current[0]["seconds"], end)
+        if seg is not None:
+            segments.append(seg)
 
     return segments
 
