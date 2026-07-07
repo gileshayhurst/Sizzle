@@ -50,3 +50,11 @@ def test_sends_system_prompt():
         call_kwargs = mock_client.messages.create.call_args.kwargs
     assert "system" in call_kwargs
     assert "transcript analyst" in call_kwargs["system"]
+
+
+def test_system_prompt_instructs_respondent_only():
+    with patch.object(claude_client, "_client") as mock_client:
+        mock_client.messages.create.return_value = _make_mock_response("none")
+        query_claude("t", "p")
+        system = mock_client.messages.create.call_args.kwargs["system"]
+    assert "interviewer" in system.lower()
