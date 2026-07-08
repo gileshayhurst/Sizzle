@@ -314,6 +314,57 @@ def _ensure_cloud_session(session_key: str) -> str:
     return tmp
 
 
+def _scan_load_folder(folder: str) -> tuple[dict | None, str | None]:
+    """Scan `folder` and apply every load-folder filter.
+
+    Shared by the synchronous /load-folder path and the cloud session_download
+    job thread. Returns (result, error): exactly one is non-None. result is
+    {"folder", "files", "needs_transcription"} where needs_transcription is a
+    list of video Paths lacking a non-empty .txt transcript.
+    """
+    try:
+        video_paths = scan_videos(folder)
+    except ValueError as e:
+        return None, str(e)
+
+    video_paths = _filter_generated_reels(video_paths)
+    if not video_paths:
+        return None, "No source video files found (folder contains only previously generated reels)"
+
+    # Check the sidecar for reels generated into this specific folder.
+    # In cloud mode this catches reels that were generated locally and then
+    # re-uploaded; in local mode it catches reels not yet in the library
+    # (e.g. library cleared) or downloaded from a different session.
+    locally_generated: set[str] = set()
+    sidecar = Path(folder) / "sizzle_generated_reels.txt"
+    if sidecar.exists():
+        try:
+            locally_generated = set(sidecar.read_text(encoding="utf-8").splitlines())
+        except Exception:
+            pass
+    if locally_generated:
+        video_paths = [p for p in video_paths if p.name not in locally_generated]
+        if not video_paths:
+            return None, "No source video files found (folder contains only previously generated reels)"
+
+    # In cloud mode Whisper is not available — only videos with pre-supplied
+    # .txt transcripts can be used.
+    if storage.is_cloud():
+        video_paths = [p for p in video_paths
+                       if p.with_suffix(".txt").exists()
+                       and p.with_suffix(".txt").stat().st_size > 0]
+        if not video_paths:
+            return None, "No transcripts found. In cloud mode, upload a .txt transcript alongside each video."
+
+    _save_recent_folder(folder, len(video_paths))
+    filenames = [p.name for p in video_paths]
+    needs_transcription = [p for p in video_paths
+                           if not p.with_suffix(".txt").exists()
+                           or p.with_suffix(".txt").stat().st_size == 0]
+    return {"folder": folder, "files": filenames,
+            "needs_transcription": needs_transcription}, None
+
+
 def create_app(testing: bool = False) -> Flask:
     app = Flask(__name__)
     app.config["TESTING"] = testing
@@ -475,45 +526,13 @@ def create_app(testing: bool = False) -> Flask:
             folder = _ensure_cloud_session(folder)
         if not folder or not Path(folder).exists():
             return jsonify({"error": "Folder not found"}), 404
-        try:
-            video_paths = scan_videos(folder)
-        except ValueError as e:
-            return jsonify({"error": str(e)}), 422
 
-        video_paths = _filter_generated_reels(video_paths)
-        if not video_paths:
-            return jsonify({"error": "No source video files found (folder contains only previously generated reels)"}), 422
+        result, error = _scan_load_folder(folder)
+        if error:
+            return jsonify({"error": error}), 422
 
-        # Check the sidecar for reels generated into this specific folder.
-        # In cloud mode this catches reels that were generated locally and then
-        # re-uploaded; in local mode it catches reels not yet in the library
-        # (e.g. library cleared) or downloaded from a different session.
-        locally_generated: set[str] = set()
-        sidecar = Path(folder) / "sizzle_generated_reels.txt"
-        if sidecar.exists():
-            try:
-                locally_generated = set(sidecar.read_text(encoding="utf-8").splitlines())
-            except Exception:
-                pass
-        if locally_generated:
-            video_paths = [p for p in video_paths if p.name not in locally_generated]
-            if not video_paths:
-                return jsonify({"error": "No source video files found (folder contains only previously generated reels)"}), 422
-
-        # In cloud mode Whisper is not available — only videos with pre-supplied
-        # .txt transcripts can be used.
-        if storage.is_cloud():
-            video_paths = [p for p in video_paths
-                           if p.with_suffix(".txt").exists()
-                           and p.with_suffix(".txt").stat().st_size > 0]
-            if not video_paths:
-                return jsonify({"error": "No transcripts found. In cloud mode, upload a .txt transcript alongside each video."}), 422
-
-        _save_recent_folder(folder, len(video_paths))
-        filenames = [p.name for p in video_paths]
-        needs_transcription = [p for p in video_paths
-                                if not p.with_suffix(".txt").exists()
-                                or p.with_suffix(".txt").stat().st_size == 0]
+        filenames = result["files"]
+        needs_transcription = result["needs_transcription"]
 
         if not needs_transcription:
             return jsonify({"job_id": None, "files": filenames, "folder": folder})
