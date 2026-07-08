@@ -86,12 +86,13 @@ body {
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
   height: 100vh;
+  height: 100dvh;
   overflow: hidden;
   display: flex;
   flex-direction: column;
 }
 
-#app { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+#app { display: flex; flex-direction: column; height: 100vh; height: 100dvh; overflow: hidden; }
 
 /* Reduced motion: collapse all transitions/animations to near-instant (DESIGN.md) */
 @media (prefers-reduced-motion: reduce) {
@@ -971,4 +972,58 @@ body {
   text-transform: uppercase;
   font-style: normal;
   vertical-align: middle;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   RESPONSIVE / ADAPT — structural reflow for tablet & phone (DESIGN.md:
+   "Responsive behavior is structural — collapse sidebar — not fluid type")
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* Tablet & below: the workspace sidebar becomes a horizontal file strip on top
+   instead of a fixed 220px rail, so the transcript gets the full width. */
+@media (max-width: 760px) {
+  .workspace-layout { flex-direction: column; }
+  #sidebar {
+    width: 100%; height: auto; flex-shrink: 0;
+    border-right: none; border-bottom: 1px solid var(--border);
+  }
+  .sidebar-header { display: none; }
+  #sidebar-list {
+    display: flex; flex-direction: row; overflow-x: auto; overflow-y: hidden;
+    padding: 8px; gap: 6px; scrollbar-width: thin;
+  }
+  .sidebar-item {
+    flex-direction: row; align-items: center; gap: 8px;
+    flex-shrink: 0; max-width: 72vw; white-space: nowrap;
+  }
+  .sidebar-item .item-name { max-width: 46vw; }
+}
+
+/* Phone: stack the analyze bar, footer, and result controls into one column
+   so nothing overflows or crowds. */
+@media (max-width: 600px) {
+  #analyze-bar, .analyze-add-row { flex-wrap: wrap; }
+  .btn-analyze, .btn-analyze-add { width: 100%; align-self: stretch; }
+
+  #workspace-footer { flex-direction: column; align-items: stretch; }
+  .footer-field-btn { margin-left: 0; align-self: stretch; }
+  .filename-input, .btn-generate { width: 100%; }
+
+  .result-controls { flex-wrap: wrap; }
+  .result-meta { flex: 1 1 100%; }
+  .result-actions { width: 100%; flex-wrap: wrap; }
+  .result-actions .btn-primary, .result-actions .btn-secondary { flex: 1 1 auto; }
+}
+
+/* Touch devices (coarse pointer): enforce ≥44px tap targets regardless of the
+   dense desktop sizing. Feature-detected, so mouse desktops keep their density. */
+@media (pointer: coarse) {
+  .nav-tab, .mode-btn { min-height: 44px; }
+  .btn-history-toggle, .btn-save-template,
+  .reel-btn-icon, .overlay-close { min-width: 44px; min-height: 44px; }
+  .reel-btn, .seg-skip-btn { min-height: 44px; }
+  .select-all-btn, .clear-all-btn { min-height: 44px; padding-inline: 6px; }
+  .ph-item, .ph-template-row { min-height: 44px; display: flex; align-items: center; }
+  .ph-delete-btn { min-width: 40px; min-height: 40px; }
+  .recent-folder-item { min-height: 48px; }
 }
