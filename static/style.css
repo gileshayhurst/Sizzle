@@ -472,7 +472,24 @@ body {
 }
 .footer-input::placeholder { color: var(--muted); }
 .footer-input:focus { outline: none; border-color: var(--amber); box-shadow: 0 0 0 3px rgba(224,123,57,.25); }
-.filename-input { width: 180px; font-family: var(--font-mono); font-size: 12px; }
+/* Output filename: editable base name + fixed, non-editable .mp4 suffix */
+.filename-field {
+  display: inline-flex; align-items: center; width: 200px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 0 11px; overflow: hidden;
+  transition: border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
+}
+.filename-field:focus-within { border-color: var(--amber); box-shadow: 0 0 0 3px rgba(224,123,57,.25); }
+.filename-field .filename-input {
+  flex: 1; min-width: 0;
+  border: none; background: transparent; outline: none;
+  padding: 8px 0; color: var(--ink);
+  font-family: var(--font-mono); font-size: 12px;
+}
+.filename-field .filename-ext {
+  flex-shrink: 0; user-select: none; padding-left: 1px;
+  color: var(--muted); font-family: var(--font-mono); font-size: 12px;
+}
 .prompt-input { width: 100%; }
 .btn-generate {
   background: var(--amber-strong); color: #fff; border: none; border-radius: var(--radius-md);
@@ -1026,7 +1043,7 @@ body {
 
   #workspace-footer { flex-direction: column; align-items: stretch; }
   .footer-field-btn { margin-left: 0; align-self: stretch; }
-  .filename-input, .btn-generate { width: 100%; }
+  .filename-field, .btn-generate { width: 100%; }
 
   .result-controls { flex-wrap: wrap; }
   .result-meta { flex: 1 1 100%; }

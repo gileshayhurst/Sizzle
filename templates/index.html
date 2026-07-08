@@ -157,7 +157,11 @@
           <footer id="workspace-footer">
             <div class="footer-field">
               <label class="footer-label" for="output-filename">Output filename</label>
-              <input id="output-filename" type="text" class="footer-input filename-input" value="sizzle_reel.mp4">
+              <div class="filename-field">
+                <input id="output-filename" type="text" class="filename-input" value="sizzle_reel"
+                       autocomplete="off" spellcheck="false" aria-describedby="filename-ext">
+                <span class="filename-ext" id="filename-ext">.mp4</span>
+              </div>
             </div>
             <div class="footer-field footer-field-btn">
               <label class="footer-label">&nbsp;</label>

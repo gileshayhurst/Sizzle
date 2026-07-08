@@ -431,7 +431,7 @@ function showWorkspace() {
   while (takenStems.has((base + suffix).toLowerCase())) {
     suffix = String(n++);
   }
-  $('output-filename').value = base + suffix + '.mp4';
+  $('output-filename').value = base + suffix;   // extension (.mp4) is a fixed suffix in the UI
 
   showScreen('screen-workspace');
   $('topbar-controls').classList.remove('hidden');
@@ -1081,7 +1081,10 @@ $('btn-generate').addEventListener('click', () => {
 
 async function submitGenerate(mode, selections) {
   const prompt = state.lastPrompt || $('analyze-input').value.trim();
-  const outputFilename = $('output-filename').value.trim() || 'sizzle_reel.mp4';
+  // The .mp4 suffix is a fixed, non-editable adornment; strip any stray extension the
+  // user pasted, then append the real output extension.
+  const outputBase = $('output-filename').value.trim().replace(/\.mp4$/i, '') || 'sizzle_reel';
+  const outputFilename = outputBase + '.mp4';
 
   showScreen('screen-generating');
   $('gen-log').innerHTML = '';
