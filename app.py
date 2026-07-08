@@ -484,23 +484,27 @@ def create_app(testing: bool = False) -> Flask:
         if not video_paths:
             return jsonify({"error": "No source video files found (folder contains only previously generated reels)"}), 422
 
+        # Check the sidecar for reels generated into this specific folder.
+        # In cloud mode this catches reels that were generated locally and then
+        # re-uploaded; in local mode it catches reels not yet in the library
+        # (e.g. library cleared) or downloaded from a different session.
+        locally_generated: set[str] = set()
+        sidecar = Path(folder) / "sizzle_generated_reels.txt"
+        if sidecar.exists():
+            try:
+                locally_generated = set(sidecar.read_text(encoding="utf-8").splitlines())
+            except Exception:
+                pass
+        if locally_generated:
+            video_paths = [p for p in video_paths if p.name not in locally_generated]
+            if not video_paths:
+                return jsonify({"error": "No source video files found (folder contains only previously generated reels)"}), 422
+
         # In cloud mode Whisper is not available — only videos with pre-supplied
         # .txt transcripts can be used.
         if storage.is_cloud():
-            # If the session was uploaded from a local folder that had previously
-            # generated reels, a sidecar file lists their filenames so we can
-            # filter them out even though they also have .txt transcripts.
-            locally_generated: set[str] = set()
-            sidecar = Path(folder) / "sizzle_generated_reels.txt"
-            if sidecar.exists():
-                try:
-                    locally_generated = set(sidecar.read_text(encoding="utf-8").splitlines())
-                except Exception:
-                    pass
-
             video_paths = [p for p in video_paths
-                           if p.name not in locally_generated
-                           and p.with_suffix(".txt").exists()
+                           if p.with_suffix(".txt").exists()
                            and p.with_suffix(".txt").stat().st_size > 0]
             if not video_paths:
                 return jsonify({"error": "No transcripts found. In cloud mode, upload a .txt transcript alongside each video."}), 422
@@ -621,6 +625,13 @@ def create_app(testing: bool = False) -> Flask:
         except ValueError as e:
             return jsonify({"error": str(e)}), 422
         video_paths = _filter_generated_reels(video_paths)
+        sidecar = Path(folder) / "sizzle_generated_reels.txt"
+        if sidecar.exists():
+            try:
+                locally_generated = set(sidecar.read_text(encoding="utf-8").splitlines())
+                video_paths = [p for p in video_paths if p.name not in locally_generated]
+            except Exception:
+                pass
         files = []
         for vp in video_paths:
             txt_path = vp.with_suffix(".txt")

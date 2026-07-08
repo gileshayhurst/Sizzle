@@ -466,8 +466,10 @@ def _run_generation_impl(job_id: str, folder: str,
                 label = " | ".join(item.get("lines", []))
                 _append_log(job_id, f"✗ Title card failed [{label}]: {exc}")
 
-        # Clips: parallel
-        max_workers = min(4, os.cpu_count() or 4)
+        # Clips: parallel (capped at 1 in cloud mode — concurrent ffmpeg processes
+        # each downloading and VP9-decoding large webm files from R2 spike memory
+        # and trigger OOM kills on Render).
+        max_workers = 1 if storage.is_cloud() else min(4, os.cpu_count() or 4)
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
             for idx, item in enumerate(plan):
                 if item["type"] != "clip":

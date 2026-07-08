@@ -54,6 +54,11 @@ def filter_generated_reels(video_paths: list, library: list = None) -> list:
 
     In cloud mode, matches by filename only — full paths differ between
     sessions so path-based matching would never filter anything.
+
+    In local mode, matches by resolved path for locally-generated reels and
+    also by filename for cloud-generated entries (identified by reel_s3_key) —
+    those have a Render /tmp path that never matches the user's local path.
+
     Pass library explicitly in tests to avoid live storage reads.
     """
     try:
@@ -66,6 +71,15 @@ def filter_generated_reels(video_paths: list, library: list = None) -> list:
             }
             return [vp for vp in video_paths if vp.name not in library_filenames]
         library_paths = {_Path(e["path"]).resolve() for e in library}
+        # Cloud-generated reels (reel_s3_key present) have a Render /tmp path
+        # in the library — match them by filename so downloaded copies are
+        # filtered out even when the path doesn't match.
+        cloud_reel_names = {
+            e.get("filename") or _Path(e["path"]).name
+            for e in library
+            if e.get("reel_s3_key")
+        }
     except Exception:
         return video_paths
-    return [vp for vp in video_paths if vp.resolve() not in library_paths]
+    return [vp for vp in video_paths
+            if vp.resolve() not in library_paths and vp.name not in cloud_reel_names]
