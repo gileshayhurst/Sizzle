@@ -4,6 +4,9 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Sizzle Reel</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
   <link rel="stylesheet" href="/static/style.css">
   <script>
     window.__CONFIG__ = {
@@ -15,19 +18,26 @@
 <body>
 <div id="app">
 
+  <h1 class="sr-only">Sizzle Reel — AI video highlight extraction</h1>
+
   <!-- TOP NAV -->
   <header id="topbar">
-    <span class="logo">🎬 SIZZLE REEL</span>
-    <nav class="nav-tabs">
-      <button class="nav-tab active" data-tab="create">✦ Create</button>
-      <button class="nav-tab" data-tab="library">📼 Library</button>
+    <span class="logo">
+      <span class="logo-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><g fill="currentColor"><rect x="4.4" y="10" width="1.8" height="4" rx=".9"/><rect x="7.5" y="7.5" width="1.8" height="9" rx=".9"/><rect x="10.6" y="5.5" width="1.8" height="13" rx=".9"/><rect x="13.7" y="8" width="1.8" height="8" rx=".9"/><rect x="16.8" y="10.5" width="1.8" height="3" rx=".9"/></g></svg>
+      </span>
+      Sizzle Reel
+    </span>
+    <nav class="nav-tabs" role="tablist" aria-label="Main">
+      <button class="nav-tab active" data-tab="create" role="tab" aria-selected="true">Create</button>
+      <button class="nav-tab" data-tab="library" role="tab" aria-selected="false">Library</button>
     </nav>
     <!-- Shown only in Create tab, after folder loaded -->
     <div id="topbar-controls" class="hidden">
       <span id="folder-badge" class="folder-badge"></span>
-      <div class="mode-toggle">
-        <button class="mode-btn active" data-mode="checkbox">☑ Checkbox</button>
-        <button class="mode-btn" data-mode="highlight">✦ Highlight</button>
+      <div class="mode-toggle" role="group" aria-label="Selection mode">
+        <button class="mode-btn active" data-mode="checkbox" aria-pressed="true">Checkbox</button>
+        <button class="mode-btn" data-mode="highlight" aria-pressed="false">Highlight</button>
       </div>
     </div>
   </header>
@@ -37,34 +47,28 @@
 
     <!-- FOLDER PICKER SCREEN -->
     <div id="screen-folder-picker" class="screen">
-      <div class="picker-split">
-        <!-- Left: branding panel -->
-        <div class="picker-brand">
-          <div class="picker-brand-icon">🎬</div>
-          <div class="picker-brand-title">SIZZLE REEL</div>
-          <div class="picker-brand-tagline">AI-powered video<br>highlight extraction</div>
-          <div class="picker-steps">
-            <div class="picker-step">
-              <span class="picker-step-num">1</span>Open a folder of videos
-            </div>
-            <div class="picker-step">
-              <span class="picker-step-num">2</span>Describe what you want
-            </div>
-            <div class="picker-step">
-              <span class="picker-step-num">3</span>Generate your reel
-            </div>
+      <div class="picker-single">
+        <!-- Brand lockup -->
+        <div class="picker-brandline">
+          <span class="picker-mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><g fill="currentColor"><rect x="4.4" y="10" width="1.8" height="4" rx=".9"/><rect x="7.5" y="7.5" width="1.8" height="9" rx=".9"/><rect x="10.6" y="5.5" width="1.8" height="13" rx=".9"/><rect x="13.7" y="8" width="1.8" height="8" rx=".9"/><rect x="16.8" y="10.5" width="1.8" height="3" rx=".9"/></g></svg>
+          </span>
+          <div class="picker-brandtext">
+            <div class="picker-wordmark">Sizzle Reel</div>
+            <div class="picker-tagline">Turn raw research footage into client-ready highlight reels.</div>
           </div>
         </div>
-        <!-- Right: form + recent folders -->
-        <div class="picker-form">
-          <h2>Open a folder</h2>
+
+        <!-- Focused form card -->
+        <div class="picker-card">
+          <h2>Open a folder of videos</h2>
           <p class="subtitle">Select the folder containing your video files.</p>
           <div class="folder-input-row">
-            <input id="folder-path-input" type="text" placeholder="Paste a folder path..." class="folder-path-input">
-            <button id="btn-browse" class="btn-primary">Browse…</button>
+            <input id="folder-path-input" type="text" placeholder="Paste a folder path..." class="folder-path-input" aria-label="Folder path">
+            <button id="btn-browse" class="btn-secondary">Browse…</button>
           </div>
           <div id="folder-error" class="error-msg hidden"></div>
-          <button id="btn-load-folder" class="btn-primary" style="margin-top:4px">Open Folder</button>
+          <button id="btn-load-folder" class="btn-primary picker-open-btn">Open Folder</button>
           <div id="recent-folders-section" class="recent-folders-section hidden">
             <div class="recent-folders-label">Recent folders</div>
             <ul id="recent-folders-list" class="recent-folders-list"></ul>
@@ -73,6 +77,15 @@
           <input id="cloud-folder-picker" type="file" webkitdirectory multiple style="display:none">
           <input id="cloud-file-picker" type="file" multiple accept=".mp4,.mov,.avi,.mkv,.webm,.txt" style="display:none">
           <div id="upload-error" class="error-msg hidden"></div>
+        </div>
+
+        <!-- Slim onboarding strip -->
+        <div class="picker-steps-strip">
+          <span class="pstep"><span class="pstep-num">1</span>Open a folder</span>
+          <span class="pstep-sep"></span>
+          <span class="pstep"><span class="pstep-num">2</span>Describe what you want</span>
+          <span class="pstep-sep"></span>
+          <span class="pstep"><span class="pstep-num">3</span>Generate your reel</span>
         </div>
       </div>
     </div>
@@ -103,9 +116,10 @@
           <div id="analyze-bar">
             <div class="prompt-wrap">
               <textarea id="analyze-input" class="footer-input analyze-input"
+                        aria-label="Describe what you're looking for"
                         placeholder="Describe what you're looking for…"></textarea>
-              <button id="btn-history-toggle" class="btn-history-toggle" type="button" title="Prompt history">▾</button>
-              <button id="btn-save-template" class="btn-save-template hidden" type="button" title="Save as template">★</button>
+              <button id="btn-history-toggle" class="btn-history-toggle" type="button" title="Prompt history" aria-label="Prompt history"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+              <button id="btn-save-template" class="btn-save-template hidden" type="button" title="Save as template" aria-label="Save as template"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M6 4h12v16l-6-4-6 4V4Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg></button>
               <div id="prompt-history-panel" class="prompt-history-panel hidden">
                 <div class="prompt-history-section" id="ph-recent-section">
                   <div class="prompt-history-heading">Recent</div>
@@ -128,6 +142,7 @@
           <div id="analyze-error" class="error-msg hidden" style="padding:3px 14px;font-size:10px;"></div>
           <div id="analyze-add-row" class="analyze-add-row hidden">
             <textarea id="analyze-add-input" class="footer-input analyze-input"
+                      aria-label="Add another angle to your selection"
                       placeholder="Add another angle…"></textarea>
             <button id="btn-analyze-add" type="button" class="btn-analyze-add">+ Add to selection</button>
           </div>
@@ -143,12 +158,12 @@
           <div id="transcript-scroll" class="transcript-scroll"></div>
           <footer id="workspace-footer">
             <div class="footer-field">
-              <label class="footer-label">Output filename</label>
+              <label class="footer-label" for="output-filename">Output filename</label>
               <input id="output-filename" type="text" class="footer-input filename-input" value="sizzle_reel.mp4">
             </div>
             <div class="footer-field footer-field-btn">
               <label class="footer-label">&nbsp;</label>
-              <button id="btn-generate" class="btn-generate" disabled>▶ Generate Reel</button>
+              <button id="btn-generate" class="btn-generate" disabled>Generate Reel</button>
             </div>
           </footer>
         </div>
@@ -159,7 +174,7 @@
     <!-- GENERATION PROGRESS SCREEN -->
     <div id="screen-generating" class="screen hidden">
       <div class="center-card">
-        <h2>⏳ Generating your sizzle reel...</h2>
+        <h2>Generating your sizzle reel…</h2>
         <p class="subtitle">Extracting selected clips and assembling your reel…</p>
         <div class="progress-bar-wrap">
           <div id="gen-bar" class="progress-bar" style="width:0%"></div>
@@ -184,12 +199,12 @@
           </div>
           <div class="result-actions">
             <div class="seg-skip-controls">
-              <button id="btn-prev-seg" class="seg-skip-btn" title="Previous segment">⏮ Prev</button>
-              <button id="btn-next-seg" class="seg-skip-btn" title="Next segment">Next ⏭</button>
+              <button id="btn-prev-seg" class="seg-skip-btn" title="Previous segment">← Prev</button>
+              <button id="btn-next-seg" class="seg-skip-btn" title="Next segment">Next →</button>
             </div>
             <button id="btn-new-reel" class="btn-primary">+ New Reel</button>
-            <button id="btn-open-folder" class="btn-secondary">📂 Open Folder</button>
-            <button id="btn-set-output-folder" class="btn-secondary hidden">📁 Set output folder</button>
+            <button id="btn-open-folder" class="btn-secondary">Open Folder</button>
+            <button id="btn-set-output-folder" class="btn-secondary hidden">Set output folder</button>
           </div>
         </div>
       </div>
@@ -201,8 +216,8 @@
   <main id="tab-library" class="tab-panel hidden">
     <div class="library-toolbar">
       <span id="library-count" class="library-count"></span>
-      <button id="btn-lib-set-output-folder" class="btn-secondary hidden">📁 Set output folder</button>
-      <select id="library-sort" class="library-sort-select">
+      <button id="btn-lib-set-output-folder" class="btn-secondary hidden">Set output folder</button>
+      <select id="library-sort" class="library-sort-select" aria-label="Sort library">
         <option value="newest">Date: Newest</option>
         <option value="oldest">Date: Oldest</option>
         <option value="most-clips">Most clips</option>
@@ -219,10 +234,10 @@
           <source id="library-source" src="" type="video/mp4">
         </video>
         <div class="seg-skip-controls" style="margin-top:8px">
-          <button id="btn-lib-prev-seg" class="seg-skip-btn" title="Previous segment">⏮ Prev</button>
-          <button id="btn-lib-next-seg" class="seg-skip-btn" title="Next segment">Next ⏭</button>
+          <button id="btn-lib-prev-seg" class="seg-skip-btn" title="Previous segment">← Prev</button>
+          <button id="btn-lib-next-seg" class="seg-skip-btn" title="Next segment">Next →</button>
         </div>
-        <div id="library-player-meta" style="padding:8px 0;font-size:12px;color:#5090d0"></div>
+        <div id="library-player-meta" style="padding:8px 0;font-size:12px;color:var(--body)"></div>
       </div>
     </div>
   </main>
@@ -231,10 +246,10 @@
   <div id="not-downloaded-modal" class="overlay hidden">
     <div class="overlay-card" style="max-width:440px">
       <button id="btn-not-downloaded-close" class="overlay-close">✕</button>
-      <div style="font-size:14px;font-weight:600;color:#b8d8ff;margin-bottom:10px">
+      <div style="font-size:15px;font-weight:600;color:var(--ink);margin-bottom:10px">
         You have not downloaded this file
       </div>
-      <div id="not-downloaded-body" style="color:#7090a8;margin-bottom:18px;font-size:12px"></div>
+      <div id="not-downloaded-body" style="color:var(--body);margin-bottom:18px;font-size:13px"></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button id="btn-not-downloaded-save" class="btn-primary"></button>
         <button id="btn-not-downloaded-view" class="btn-secondary">View in Browser</button>

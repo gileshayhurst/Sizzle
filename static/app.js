@@ -64,7 +64,7 @@ function _setDownload(entryId, info) {
 // ─── Output folder name display ───────────────────────────────────────────────
 function _updateOutputFolderUI() {
   const name = localStorage.getItem('sizzle_output_folder_name');
-  const label = name ? `📁 ${name}` : '📁 Set output folder';
+  const label = name ? name : 'Set output folder';
   const r = $('btn-set-output-folder');
   const l = $('btn-lib-set-output-folder');
   if (r) r.textContent = label;
@@ -222,8 +222,8 @@ $('btn-not-downloaded-save').addEventListener('click', async () => {
   }
 
   const saveBtn = document.querySelector(`.reel-btn.show[data-id="${entry.id}"]`);
-  const prevBtnText = saveBtn ? saveBtn.textContent : '📂 Show';
-  if (saveBtn) { saveBtn.textContent = '⬇ Saving…'; saveBtn.disabled = true; }
+  const prevBtnText = saveBtn ? saveBtn.textContent : 'Show';
+  if (saveBtn) { saveBtn.textContent = 'Saving…'; saveBtn.disabled = true; }
 
   try {
     const resp = await fetch(`${GENERATOR_URL}/library-video/${entry.id}`);
@@ -233,7 +233,7 @@ $('btn-not-downloaded-save').addEventListener('click', async () => {
 
     if (saveBtn) {
       saveBtn.disabled = false;
-      saveBtn.textContent = saved.localFolderPath ? '📂 Show' : '🌐 View';
+      saveBtn.textContent = saved.localFolderPath ? 'Show' : 'View';
     }
   } catch (err) {
     if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = prevBtnText; }
@@ -244,8 +244,12 @@ $('btn-not-downloaded-save').addEventListener('click', async () => {
 // ─── Navigation ───────────────────────────────────────────────────────────────
 document.querySelectorAll('.nav-tab').forEach(btn => {
   btn.addEventListener('click', () => {
-    document.querySelectorAll('.nav-tab').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.nav-tab').forEach(b => {
+      b.classList.remove('active');
+      b.setAttribute('aria-selected', 'false');
+    });
     btn.classList.add('active');
+    btn.setAttribute('aria-selected', 'true');
     const tab = btn.dataset.tab;
     $('tab-create').classList.toggle('hidden', tab !== 'create');
     $('tab-library').classList.toggle('hidden', tab !== 'library');
@@ -333,7 +337,7 @@ async function openFolder(folder, displayName) {
   state.checked = {};
   state.highlighted = {};
 
-  $('folder-badge').textContent = '📁 ' + state.folderName + '/ ▾';
+  $('folder-badge').textContent = state.folderName + '/  ▾';
 
   if (data.job_id) {
     // Needs transcription
@@ -463,8 +467,12 @@ async function _safeJson(resp) {
 // ─── Mode toggle ──────────────────────────────────────────────────────────────
 document.querySelectorAll('.mode-btn').forEach(btn => {
   btn.addEventListener('click', () => {
-    document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.mode-btn').forEach(b => {
+      b.classList.remove('active');
+      b.setAttribute('aria-pressed', 'false');
+    });
     btn.classList.add('active');
+    btn.setAttribute('aria-pressed', 'true');
     state.mode = btn.dataset.mode;
     if (state.activeFile) renderTranscript(state.activeFile);
     updateSelectAllBtn();
@@ -724,6 +732,9 @@ function renderCheckboxMode(fileObj) {
     // ── Minute header with select-all checkbox ─────────────────────────────
     const labelEl = document.createElement('div');
     labelEl.className = 'minute-label-cb';
+    labelEl.setAttribute('role', 'button');
+    labelEl.setAttribute('tabindex', '0');
+    labelEl.setAttribute('aria-label', `Select all lines in ${group.label}`);
 
     const headerCb = document.createElement('div');
     _updateHeaderCbState(headerCb, group.lines, s);
@@ -734,7 +745,7 @@ function renderCheckboxMode(fileObj) {
     labelEl.appendChild(headerCb);
     labelEl.appendChild(labelText);
 
-    labelEl.addEventListener('click', () => {
+    const toggleGroup = () => {
       const allChecked = group.lines.every(l => s.has(l.raw));
       if (allChecked) {
         group.lines.forEach(l => s.delete(l.raw));
@@ -749,12 +760,17 @@ function renderCheckboxMode(fileObj) {
           const checked = s.has(l.raw);
           cb.className = 'cb-box cb-box-line' + (checked ? ' checked' : '');
           cb.textContent = checked ? '✓' : '';
+          lineEl.setAttribute('aria-checked', checked ? 'true' : 'false');
         }
       });
       _updateHeaderCbState(headerCb, group.lines, s);
       refreshBadge(fileObj.name);
       updateGenerateBtn();
       _saveSelections();
+    };
+    labelEl.addEventListener('click', toggleGroup);
+    labelEl.addEventListener('keydown', e => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleGroup(); }
     });
 
     groupEl.appendChild(labelEl);
@@ -764,6 +780,10 @@ function renderCheckboxMode(fileObj) {
       const lineEl = document.createElement('div');
       lineEl.className = 'transcript-line-cb';
       lineEl.dataset.lineRaw = line.raw;
+      lineEl.setAttribute('role', 'checkbox');
+      lineEl.setAttribute('tabindex', '0');
+      lineEl.setAttribute('aria-checked', s.has(line.raw) ? 'true' : 'false');
+      lineEl.setAttribute('aria-label', `${line.timestamp} ${line.text}`);
 
       const lineCb = document.createElement('div');
       lineCb.className = 'cb-box cb-box-line' + (s.has(line.raw) ? ' checked' : '');
@@ -788,21 +808,27 @@ function renderCheckboxMode(fileObj) {
       lineEl.appendChild(ts);
       lineEl.appendChild(text);
 
-      lineEl.addEventListener('click', () => {
+      const toggleLine = () => {
         const checked = s.has(line.raw);
         if (checked) {
           s.delete(line.raw);
           lineCb.className = 'cb-box cb-box-line';
           lineCb.textContent = '';
+          lineEl.setAttribute('aria-checked', 'false');
         } else {
           s.add(line.raw);
           lineCb.className = 'cb-box cb-box-line checked';
           lineCb.textContent = '✓';
+          lineEl.setAttribute('aria-checked', 'true');
         }
         _updateHeaderCbState(headerCb, group.lines, s);
         refreshBadge(fileObj.name);
         updateGenerateBtn();
         _saveSelections();
+      };
+      lineEl.addEventListener('click', toggleLine);
+      lineEl.addEventListener('keydown', e => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleLine(); }
       });
 
       groupEl.appendChild(lineEl);
@@ -862,9 +888,13 @@ function renderHighlightMode(fileObj) {
 
   fileObj.lines.forEach(line => {
     const lineEl = document.createElement('div');
-    lineEl.className = 'transcript-line-hl' +
-      (state.highlighted[fileObj.name].has(line.raw) ? ' highlighted' : '');
+    const isHl = state.highlighted[fileObj.name].has(line.raw);
+    lineEl.className = 'transcript-line-hl' + (isHl ? ' highlighted' : '');
     lineEl.dataset.raw = line.raw;
+    lineEl.setAttribute('role', 'checkbox');
+    lineEl.setAttribute('tabindex', '0');
+    lineEl.setAttribute('aria-checked', isHl ? 'true' : 'false');
+    lineEl.setAttribute('aria-label', `${line.timestamp} ${line.text}`);
 
     const bar = document.createElement('div');
     bar.className = 'hl-bar';
@@ -887,6 +917,19 @@ function renderHighlightMode(fileObj) {
     lineEl.appendChild(bar);
     lineEl.appendChild(ts);
     lineEl.appendChild(text);
+
+    // Keyboard toggle (mouse uses drag-to-brush below)
+    lineEl.addEventListener('keydown', e => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        const setTo = !state.highlighted[fileObj.name].has(line.raw);
+        _applyHighlight(fileObj.name, lineEl, setTo);
+        refreshBadge(fileObj.name);
+        updateGenerateBtn();
+        _saveSelections();
+      }
+    });
+
     scroll.appendChild(lineEl);
   });
 
@@ -943,6 +986,7 @@ function _applyHighlight(filename, lineEl, setTo) {
     hl.delete(raw);
     lineEl.classList.remove('highlighted');
   }
+  lineEl.setAttribute('aria-checked', setTo ? 'true' : 'false');
 }
 
 function highlightAllInFile(filename) {
@@ -1144,7 +1188,7 @@ function _handleGenerationTerminal(jobId, status, result, error) {
     showResult(result);
     if (APP_MODE === 'cloud' && result && result.entry_id) {
       const openBtn = $('btn-open-folder');
-      openBtn.textContent = '⬇ Saving…';
+      openBtn.textContent = 'Saving…';
       openBtn.disabled = true;
       _autoSaveReelResult(jobId, result.filename, result.entry_id)
         .then(saved => {
@@ -1154,12 +1198,12 @@ function _handleGenerationTerminal(jobId, status, result, error) {
             openBtn.dataset.savedPath = saved.localFolderPath || '';
             openBtn.dataset.savedFilename = result.filename;
           } else {
-            openBtn.textContent = '⬇ Download';
+            openBtn.textContent = 'Download';
           }
         })
         .catch(() => {
           openBtn.disabled = false;
-          openBtn.textContent = '⬇ Download';
+          openBtn.textContent = 'Download';
         });
     }
   } else if (status === 'error') {
@@ -1254,13 +1298,13 @@ function showResult(result) {
   const openBtn = $('btn-open-folder');
   if (APP_MODE === 'cloud') {
     if (state.resultDownloadUrl) {
-      openBtn.textContent = '⬇ Download';
+      openBtn.textContent = 'Download';
       openBtn.style.display = '';
     } else {
       openBtn.style.display = 'none';
     }
   } else {
-    openBtn.textContent = '📂 Open Folder';
+    openBtn.textContent = 'Open Folder';
     openBtn.style.display = '';
   }
 }
@@ -1395,7 +1439,7 @@ function renderLibrary() {
     const thumb = document.createElement('div');
     thumb.className = 'reel-thumb';
     thumb.dataset.id = entry.id;
-    thumb.innerHTML = `<div class="reel-play-icon">▶</div><div class="reel-duration">${durStr}</div>`;
+    thumb.innerHTML = `<div class="reel-play-icon"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7-11-7Z"/></svg></div><div class="reel-duration">${durStr}</div>`;
     thumb.addEventListener('click', () => openLibraryPlayer(entry));
 
     const body = document.createElement('div');
@@ -1433,12 +1477,14 @@ function _renderCardBody(body, card, entry, dateStr) {
   const editBtn = document.createElement('button');
   editBtn.className = 'reel-btn-icon';
   editBtn.title = 'Edit';
-  editBtn.textContent = '✏️';
+  editBtn.setAttribute('aria-label', 'Edit');
+  editBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M14.5 5.5l4 4M4.5 19.5l1-4L16 5a2 2 0 0 1 3 3L8.5 18.5l-4 1Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>';
 
   const deleteBtn = document.createElement('button');
   deleteBtn.className = 'reel-btn-icon';
   deleteBtn.title = 'Delete';
-  deleteBtn.textContent = '🗑';
+  deleteBtn.setAttribute('aria-label', 'Delete');
+  deleteBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M5 7h14M10 7V5h4v2M7.5 7l.8 12h7.4l.8-12" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 
   iconRow.appendChild(editBtn);
   iconRow.appendChild(deleteBtn);
@@ -1474,7 +1520,7 @@ function _renderCardBody(body, card, entry, dateStr) {
   const playBtn = document.createElement('button');
   playBtn.className = 'reel-btn play';
   playBtn.dataset.id = entry.id;
-  playBtn.textContent = '▶ Play';
+  playBtn.textContent = 'Play';
 
   const showBtn = document.createElement('button');
   showBtn.className = 'reel-btn show';
@@ -1484,14 +1530,14 @@ function _renderCardBody(body, card, entry, dateStr) {
   if (APP_MODE === 'cloud') {
     const dlInfo = _getDownload(entry.id);
     if (dlInfo && dlInfo.localFolderPath) {
-      showBtn.textContent = '📂 Show';
+      showBtn.textContent = 'Show';
     } else if (dlInfo) {
-      showBtn.textContent = '🌐 View';
+      showBtn.textContent = 'View';
     } else {
-      showBtn.textContent = '📂 Show';
+      showBtn.textContent = 'Show';
     }
   } else {
-    showBtn.textContent = '📂 Show';
+    showBtn.textContent = 'Show';
   }
 
   actions.appendChild(playBtn);
@@ -1724,7 +1770,7 @@ $('folder-badge').addEventListener('click', async (e) => {
     const sessions = JSON.parse(localStorage.getItem('sizzleRecentSessions') || '[]');
     sessions.forEach(s => {
       const btn = document.createElement('button');
-      btn.textContent = '📁 ' + s.name + '/';
+      btn.textContent = s.name + '/';
       btn.title = s.name;
       btn.addEventListener('click', async () => {
         _closeFolderDropdown();
@@ -1735,7 +1781,7 @@ $('folder-badge').addEventListener('click', async (e) => {
 
     const newBtn = document.createElement('button');
     newBtn.className = 'dropdown-new-folder';
-    newBtn.textContent = '📂 Upload new files...';
+    newBtn.textContent = 'Upload new files…';
     newBtn.addEventListener('click', () => {
       _closeFolderDropdown();
       showScreen('screen-folder-picker');
@@ -1750,7 +1796,7 @@ $('folder-badge').addEventListener('click', async (e) => {
 
     recents.forEach(entry => {
       const btn = document.createElement('button');
-      btn.textContent = '📁 ' + entry.path.split(/[\\/]/).pop() + '/';
+      btn.textContent = entry.path.split(/[\\/]/).pop() + '/';
       btn.title = entry.path;
       btn.addEventListener('click', () => {
         _closeFolderDropdown();
@@ -1761,7 +1807,7 @@ $('folder-badge').addEventListener('click', async (e) => {
 
     const newBtn = document.createElement('button');
     newBtn.className = 'dropdown-new-folder';
-    newBtn.textContent = '📂 Select new folder...';
+    newBtn.textContent = 'Select new folder…';
     newBtn.addEventListener('click', async () => {
       _closeFolderDropdown();
       const resp = await fetch('/browse', { method: 'POST' });
@@ -1981,7 +2027,7 @@ $('folder-badge').addEventListener('click', async (e) => {
       li.className = 'recent-folder-item';
       const nameSpan = document.createElement('span');
       nameSpan.className = 'recent-folder-name';
-      nameSpan.textContent = `📁 ${s.name}/`;
+      nameSpan.textContent = `${s.name}/`;
       const metaSpan = document.createElement('span');
       metaSpan.className = 'recent-folder-meta';
       metaSpan.textContent = `${s.video_count} video${s.video_count !== 1 ? 's' : ''} · ${relativeTime(s.last_opened)}`;

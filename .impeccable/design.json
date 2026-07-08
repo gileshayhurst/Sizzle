@@ -1,0 +1,146 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-07-06T00:00:00Z",
+  "title": "Design System: Sizzle Reel",
+  "extensions": {
+    "colorMeta": {
+      "studio-amber": { "role": "primary", "displayName": "Studio Amber", "canonical": "oklch(0.685 0.145 52)", "tonalRamp": ["#3D1E0A", "#5E2F10", "#8A4718", "#B4531A", "#CC6B2C", "#E07B39", "#EFA771", "#FBD9BC"] },
+      "amber-tint": { "role": "primary", "displayName": "Amber Tint", "canonical": "oklch(0.930 0.045 62)" },
+      "canvas": { "role": "neutral", "displayName": "Studio Canvas", "canonical": "oklch(0.972 0.008 250)", "tonalRamp": ["#141B26", "#25303F", "#3A4A5E", "#5A6E86", "#8494AA", "#B4C1D2", "#D8E0EB", "#F1F5FB"] },
+      "surface": { "role": "neutral", "displayName": "Working Surface", "canonical": "oklch(1 0 0)" },
+      "stage": { "role": "neutral", "displayName": "Video Stage", "canonical": "oklch(0.16 0.008 260)", "tonalRamp": ["#0B0F16", "#141A24", "#1F2836", "#33404F", "#4E5D6F", "#728196", "#9EAABB", "#CDD6E1"] },
+      "ink": { "role": "neutral", "displayName": "Navy-Slate Ink", "canonical": "oklch(0.28 0.045 262)" },
+      "body": { "role": "neutral", "displayName": "Slate Body", "canonical": "oklch(0.45 0.030 255)" },
+      "muted": { "role": "neutral", "displayName": "Muted Slate", "canonical": "oklch(0.58 0.022 255)" },
+      "link": { "role": "secondary", "displayName": "Forven Link Blue", "canonical": "oklch(0.545 0.200 262)" },
+      "success": { "role": "tertiary", "displayName": "Published Green", "canonical": "oklch(0.520 0.130 150)" },
+      "warning": { "role": "tertiary", "displayName": "Draft Amber", "canonical": "oklch(0.560 0.120 75)" },
+      "danger": { "role": "tertiary", "displayName": "Action Rose", "canonical": "oklch(0.560 0.180 22)" }
+    },
+    "typographyMeta": {
+      "display": { "displayName": "Display", "purpose": "Page titles only (Projects, Library). Fixed rem, never fluid." },
+      "headline": { "displayName": "Headline", "purpose": "Screen/section headings, modal titles." },
+      "title": { "displayName": "Title", "purpose": "Card names, file names, sub-headings." },
+      "body": { "displayName": "Body", "purpose": "All body and control copy; prose caps ~70ch." },
+      "label": { "displayName": "Label", "purpose": "Rationed uppercase eyebrows and field labels." },
+      "mono": { "displayName": "Mono", "purpose": "Transcript timestamps only." }
+    },
+    "shadows": [
+      { "name": "resting", "value": "0 1px 2px rgba(20,40,80,.05)", "purpose": "Default lift for cards and panels off the canvas." },
+      { "name": "raised", "value": "0 1px 2px rgba(20,40,80,.04), 0 6px 20px rgba(20,40,80,.06)", "purpose": "Card hover and active toolbars." },
+      { "name": "popover", "value": "0 8px 28px rgba(20,40,80,.14)", "purpose": "Dropdowns, prompt history, folder switcher, modals." }
+    ],
+    "motion": [
+      { "name": "ease-out", "value": "cubic-bezier(0.2, 0.8, 0.2, 1)", "purpose": "Default state-transition easing. No bounce, no elastic." },
+      { "name": "duration-fast", "value": "150ms", "purpose": "Hover, focus, small state changes." },
+      { "name": "duration-base", "value": "220ms", "purpose": "Screen transitions, reveals, progress." }
+    ],
+    "breakpoints": [
+      { "name": "md", "value": "768px" },
+      { "name": "lg", "value": "1040px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The single key action in a view (Analyze, Open Folder, + New Reel).",
+      "html": "<button class=\"ds-btn-primary\">Analyze</button>",
+      "css": ".ds-btn-primary { background: #BD5419; color: #fff; font: 600 0.875rem/1 Inter, system-ui, sans-serif; padding: 8px 16px; border: none; border-radius: 12px; cursor: pointer; transition: background 150ms cubic-bezier(0.2,0.8,0.2,1), box-shadow 150ms cubic-bezier(0.2,0.8,0.2,1); } .ds-btn-primary:hover { background: #A5470F; box-shadow: 0 1px 2px rgba(20,40,80,.04), 0 6px 20px rgba(20,40,80,.06); } .ds-btn-primary:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(224,123,57,.28); } .ds-btn-primary:disabled { opacity: .45; cursor: default; box-shadow: none; }"
+    },
+    {
+      "name": "Danger Button",
+      "kind": "button",
+      "refersTo": "button-danger",
+      "description": "Destructive actions only (delete reel, clear all). Generate Reel is primary amber, not danger.",
+      "html": "<button class=\"ds-btn-danger\">Delete reel</button>",
+      "css": ".ds-btn-danger { background: #DC3355; color: #fff; font: 600 0.875rem/1 Inter, system-ui, sans-serif; padding: 8px 18px; border: none; border-radius: 12px; cursor: pointer; transition: background 150ms cubic-bezier(0.2,0.8,0.2,1); } .ds-btn-danger:hover { background: #C42848; } .ds-btn-danger:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(220,51,85,.28); } .ds-btn-danger:disabled { opacity: .4; cursor: default; }"
+    },
+    {
+      "name": "Secondary Button",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "Supporting actions. Quiet at rest, gains an ink border on hover.",
+      "html": "<button class=\"ds-btn-secondary\">Open Folder</button>",
+      "css": ".ds-btn-secondary { background: #fff; color: #46586E; font: 400 0.875rem/1 Inter, system-ui, sans-serif; padding: 8px 16px; border: 1px solid #E5EBF3; border-radius: 12px; cursor: pointer; transition: border-color 150ms cubic-bezier(0.2,0.8,0.2,1), color 150ms cubic-bezier(0.2,0.8,0.2,1); } .ds-btn-secondary:hover { border-color: #D2DBE6; color: #1B2A44; } .ds-btn-secondary:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(224,123,57,.20); }"
+    },
+    {
+      "name": "Filter Pill",
+      "kind": "chip",
+      "refersTo": "chip-active",
+      "description": "Forven-style status/filter/count pill. Tint + ink, never color alone.",
+      "html": "<span class=\"ds-chip is-active\">4 published</span>",
+      "css": ".ds-chip { display: inline-flex; align-items: center; background: #fff; color: #46586E; font: 600 0.6875rem/1.4 Inter, system-ui, sans-serif; letter-spacing: .08em; text-transform: uppercase; padding: 4px 12px; border: 1px solid #E5EBF3; border-radius: 999px; cursor: pointer; } .ds-chip.is-active { background: #FCE7D3; color: #A84D17; border-color: #F3D3B4; }"
+    },
+    {
+      "name": "Text Input",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "Folder path, output filename, analyze textarea. Amber focus ring.",
+      "html": "<input class=\"ds-input\" placeholder=\"Describe what you're looking for…\">",
+      "css": ".ds-input { background: #fff; color: #1B2A44; font: 400 0.875rem/1.4 Inter, system-ui, sans-serif; padding: 8px 12px; border: 1px solid #E5EBF3; border-radius: 8px; width: 100%; transition: border-color 150ms cubic-bezier(0.2,0.8,0.2,1), box-shadow 150ms cubic-bezier(0.2,0.8,0.2,1); } .ds-input::placeholder { color: #6D7E93; } .ds-input:focus { outline: none; border-color: #E07B39; box-shadow: 0 0 0 3px rgba(224,123,57,.25); }"
+    },
+    {
+      "name": "Nav Item",
+      "kind": "nav",
+      "refersTo": "nav-item-active",
+      "description": "Top-nav text links; active item is an amber-tint pill (exactly Forven's treatment).",
+      "html": "<nav class=\"ds-nav\"><a class=\"ds-nav-item is-active\">Create</a><a class=\"ds-nav-item\">Library</a></nav>",
+      "css": ".ds-nav { display: inline-flex; gap: 6px; } .ds-nav-item { font: 400 0.875rem/1 Inter, system-ui, sans-serif; color: #46586E; padding: 6px 14px; border-radius: 999px; cursor: pointer; text-decoration: none; transition: color 150ms cubic-bezier(0.2,0.8,0.2,1), background 150ms cubic-bezier(0.2,0.8,0.2,1); } .ds-nav-item:hover { color: #1B2A44; } .ds-nav-item.is-active { background: #FCE7D3; color: #A84D17; font-weight: 600; }"
+    },
+    {
+      "name": "Reel Card",
+      "kind": "card",
+      "refersTo": "card",
+      "description": "Library entry. White surface, dark media thumb, resting shadow lifting to raised on hover.",
+      "html": "<div class=\"ds-card\"><div class=\"ds-card-thumb\">▶</div><div class=\"ds-card-body\"><div class=\"ds-card-title\">Grocery Store Reactions</div><div class=\"ds-card-meta\">6 clips · 0:48</div></div></div>",
+      "css": ".ds-card { background: #fff; border: 1px solid #E5EBF3; border-radius: 16px; overflow: hidden; box-shadow: 0 1px 2px rgba(20,40,80,.05); transition: box-shadow 150ms cubic-bezier(0.2,0.8,0.2,1), border-color 150ms cubic-bezier(0.2,0.8,0.2,1); } .ds-card:hover { box-shadow: 0 1px 2px rgba(20,40,80,.04), 0 6px 20px rgba(20,40,80,.06); border-color: #F3D3B4; } .ds-card-thumb { background: #0B0F16; height: 92px; display: flex; align-items: center; justify-content: center; color: #E07B39; font-size: 26px; } .ds-card-body { padding: 12px 14px; } .ds-card-title { font: 600 1.0625rem/1.4 Inter, system-ui, sans-serif; color: #1B2A44; } .ds-card-meta { font: 400 0.8125rem/1.5 Inter, system-ui, sans-serif; color: #6D7E93; margin-top: 2px; }"
+    },
+    {
+      "name": "Transcript Line (Highlight)",
+      "kind": "custom",
+      "refersTo": null,
+      "description": "Signature surface. Amber left-marker + tint wash on select; mono timestamp + ink text. Selection carries by shape, not color alone.",
+      "html": "<div class=\"ds-line is-selected\"><span class=\"ds-line-mark\"></span><span class=\"ds-line-ts\">1:24</span><span class=\"ds-line-text\">and honestly the price is what stopped me</span></div>",
+      "css": ".ds-line { display: flex; align-items: flex-start; gap: 10px; padding: 7px 10px; border-radius: 8px; cursor: pointer; } .ds-line:hover { background: #F1F5FB; } .ds-line.is-selected { background: #FCE7D3; } .ds-line-mark { width: 3px; align-self: stretch; min-height: 18px; border-radius: 2px; background: transparent; } .ds-line.is-selected .ds-line-mark { background: #E07B39; } .ds-line-ts { font: 400 0.8125rem/1.4 'SF Mono', ui-monospace, monospace; color: #6D7E93; flex-shrink: 0; } .ds-line-text { font: 400 0.875rem/1.55 Inter, system-ui, sans-serif; color: #46586E; } .ds-line.is-selected .ds-line-text { color: #1B2A44; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Bright Studio",
+    "overview": "Sizzle Reel is a clean, well-lit editing studio for research findings. The room is bright — pale cool-blue canvas, white cards floating with soft shadows, generous air. One warm light is on: Studio Amber, the terracotta accent, marks the single thing worth acting on. At the center is the one dark surface that matters: the black video stage. Light chrome, dark media. This is the posture of the parent Forven / HumanLens platform; Sizzle Reel must read as a native feature of it. Restraint is the strategy: surfaces are quiet, hierarchy comes from weight and space rather than color, and the amber accent earns its rarity by never being decoration.",
+    "keyCharacteristics": [
+      "Light, airy canvas; white cards; one dark video stage.",
+      "Single warm accent (Studio Amber) for primary action, active state, and identity.",
+      "Deep navy-slate ink on white; every value clears WCAG AA.",
+      "Generous rounding (16px cards, fully-rounded pills), soft 1px borders, whisper shadows.",
+      "One humanist sans (Inter), fixed rem scale, hierarchy by weight.",
+      "Calm, state-only motion; reduced-motion honored everywhere."
+    ],
+    "rules": [
+      { "name": "The One Light Rule", "body": "Studio Amber appears on ≤10% of any screen, reserved for the single most important action or the current selection. Never a background wash, gradient, or decoration. Its rarity is what makes it read as 'act here.'", "section": "colors" },
+      { "name": "The Light-Chrome-Dark-Media Rule", "body": "Exactly one surface is dark: the video stage (#0B0F16). Everything that frames, controls, or describes the video is light. Never invert this to 'go dark for a video app' — that is the outgoing theme, and it hid the text.", "section": "colors" },
+      { "name": "The One Voice Rule", "body": "Inter carries headings, buttons, labels, body, and data. No second family, no display face. A different font in a UI label is a bug.", "section": "typography" },
+      { "name": "The Rationed Eyebrow Rule", "body": "One eyebrow that genuinely titles a region is on-brand (Forven uses them). An eyebrow stamped over every section is AI scaffolding — forbidden.", "section": "typography" },
+      { "name": "The Cool-Shadow Rule", "body": "Shadows are cool and low-alpha (rgba(20,40,80,…)), never neutral black. If a shadow looks gray-black or the blur is tight, widen the blur, drop the alpha, cool the hue.", "section": "elevation" }
+    ],
+    "dos": [
+      "Do keep the interface light — Canvas (#F1F5FB) page, white Surface cards — with the video stage (#0B0F16) as the only dark surface.",
+      "Do reserve Studio Amber for the single most important action or current selection, on ≤10% of any screen.",
+      "Do hold all body text to WCAG AA (≥4.5:1): Body #46586E for copy, Muted for large/bold only, Faint for disabled/decoration only.",
+      "Do carry hierarchy with Inter weight and whitespace, not a second font or more color.",
+      "Do use fully-rounded tint+ink pills for filters, counts, and statuses, pairing color with a label or icon.",
+      "Do keep shadows cool, low-alpha, and diffuse, and let elevation respond to state.",
+      "Do honor prefers-reduced-motion on every transition, with a crossfade/instant fallback."
+    ],
+    "donts": [
+      "Don't make it look like a consumer creator app — no TikTok/CapCut emoji chrome, no gamified flourishes.",
+      "Don't rebuild the intimidating pro-NLE (Premiere/Resolve) wall of controls and timelines.",
+      "Don't revert to a hacker-terminal dark dashboard, or the outgoing muted-gray-on-navy body text (#3a5070 on #080c14).",
+      "Don't use border-left/border-right > 1px as a colored accent stripe on cards or rows.",
+      "Don't nest cards inside cards, and don't stamp an uppercase eyebrow over every section.",
+      "Don't signal state by color alone — every success/warning/selected state gets a label, icon, or shape too.",
+      "Don't let Studio Amber become a background wash, gradient, or gradient-text."
+    ]
+  }
+}
