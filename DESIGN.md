@@ -1,6 +1,6 @@
 ---
 name: Sizzle Reel
-description: Light, warm-professional research tool that turns raw footage into client-ready highlight reels — a native feature of the Forven / HumanLens platform.
+description: Light, warm-professional research tool that turns raw footage into presentation-ready highlight reels — a native feature of the Forven / HumanLens platform.
 colors:
   studio-amber: "#E07B39"
   amber-hover: "#CC6B2C"

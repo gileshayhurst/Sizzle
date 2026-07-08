@@ -171,7 +171,8 @@ body {
 .nav-tab.active { color: var(--amber-ink); background: var(--amber-tint); font-weight: 600; }
 .nav-tab:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(224,123,57,.22); }
 
-#topbar-controls { display: flex; align-items: center; gap: 12px; margin-left: 4px; }
+/* Right-anchor the folder badge + mode toggle so the workspace topbar reads balanced */
+#topbar-controls { display: flex; align-items: center; gap: 12px; margin-left: auto; }
 
 .folder-badge {
   background: var(--canvas); border: 1px solid var(--border); border-radius: var(--radius-pill);
