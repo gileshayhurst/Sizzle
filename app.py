@@ -273,11 +273,22 @@ def _run_analyze(folder: str, prompt: str) -> dict:
     return {"highlights": highlights}
 
 
-def _ensure_cloud_session(session_key: str) -> str:
+class SessionDownloadCancelled(Exception):
+    """A cloud session download was cancelled via its job's cancel event."""
+
+
+def _ensure_cloud_session(session_key: str, job_id: str | None = None,
+                          cancel_event: threading.Event | None = None) -> str:
     """Download session files from S3 into a local temp dir if not already cached.
 
     Thread-safe: concurrent callers for the same session_key block until the
     first caller finishes downloading (rather than getting a half-populated dir).
+
+    When job_id/cancel_event are supplied (the async /load-folder path), progress
+    is reported to the job between files, and the download aborts with
+    SessionDownloadCancelled when the event is set. On cancel the cache entries
+    are removed BEFORE waiters are released, so a retry re-downloads cleanly and
+    any waiter wakes to a missing entry and raises SessionDownloadCancelled too.
     """
     with _cloud_session_lock:
         if session_key in _cloud_session_dirs:
@@ -292,25 +303,51 @@ def _ensure_cloud_session(session_key: str) -> str:
 
     if not is_new:
         event.wait()          # block until the first caller finishes
-        return _cloud_session_dirs[session_key]
+        with _cloud_session_lock:
+            cached = _cloud_session_dirs.get(session_key)
+        if cached is None:    # first caller was cancelled and cleaned up
+            raise SessionDownloadCancelled(session_key)
+        return cached
 
+    tmp = _cloud_session_dirs[session_key]
     try:
-        tmp = _cloud_session_dirs[session_key]
         # The main app only ever reads .txt sidecars (scan_videos merely enumerates
         # filenames; analyze/transcripts read transcripts). Downloading the video
         # bytes would pile hundreds of MB per session into Render's /tmp and blow the
         # 2GB ephemeral-disk limit. So download only transcripts; give each video a
         # 0-byte placeholder so scan_videos still lists it.
-        for key in storage.list_keys(session_key + "/"):
+        keys = storage.list_keys(session_key + "/")
+        if job_id is not None:
+            txt_total = sum(1 for k in keys if Path(k).suffix.lower() == ".txt")
+            with _jobs_lock:
+                if job_id in _jobs:
+                    _jobs[job_id]["total"] = txt_total
+        done = 0
+        for key in keys:
+            if cancel_event is not None and cancel_event.is_set():
+                raise SessionDownloadCancelled(session_key)
             filename = Path(key).name
             dest = os.path.join(tmp, filename)
             if Path(filename).suffix.lower() == ".txt":
                 storage.download_file(key, dest)
+                done += 1
+                if job_id is not None:
+                    with _jobs_lock:
+                        if job_id in _jobs:
+                            _jobs[job_id]["done"] = done
             else:
                 Path(dest).touch()
+    except SessionDownloadCancelled:
+        # Remove the cache entries BEFORE the finally releases waiters, so
+        # waiters see the missing entry (= cancelled) rather than a
+        # half-populated dir, and a retry re-downloads.
+        with _cloud_session_lock:
+            _cloud_session_dirs.pop(session_key, None)
+            _cloud_session_ready.pop(session_key, None)
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise
     finally:
         event.set()           # release waiters even if download failed
-
     return tmp
 
 

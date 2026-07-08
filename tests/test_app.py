@@ -309,6 +309,109 @@ def test_ensure_cloud_session_downloads_only_transcripts(tmp_path):
     app_module._cloud_session_ready.clear()
 
 
+def test_ensure_cloud_session_cancel_cleans_cache_and_raises(tmp_path):
+    """A cancel event set mid-download aborts the download, removes the session
+    cache entries, and deletes the temp dir so a retry re-downloads cleanly."""
+    import app as app_module
+
+    app_module._cloud_session_dirs.clear()
+    app_module._cloud_session_ready.clear()
+
+    cancel = threading.Event()
+    job_id = "dl-cancel-unit-job"
+    with app_module._jobs_lock:
+        app_module._jobs[job_id] = {
+            "type": "session_download", "status": "running", "total": 0,
+            "done": 0, "log": [], "result": None, "error": None, "cancel": cancel,
+        }
+
+    session_tmp = tmp_path / "sess"
+    session_tmp.mkdir()
+
+    def fake_download(key, local_path):
+        Path(local_path).write_text("t", encoding="utf-8")
+        cancel.set()  # cancellation arrives right after the first file
+
+    with patch("storage.list_keys", return_value=["sessions/c/a.txt", "sessions/c/b.txt"]), \
+         patch("storage.download_file", side_effect=fake_download), \
+         patch("tempfile.mkdtemp", return_value=str(session_tmp)):
+        with pytest.raises(app_module.SessionDownloadCancelled):
+            app_module._ensure_cloud_session("sessions/c", job_id=job_id, cancel_event=cancel)
+
+    assert "sessions/c" not in app_module._cloud_session_dirs
+    assert "sessions/c" not in app_module._cloud_session_ready
+    assert not session_tmp.exists()
+
+    with app_module._jobs_lock:
+        del app_module._jobs[job_id]
+
+
+def test_ensure_cloud_session_waiter_raises_after_cancel():
+    """A concurrent waiter that wakes to a removed cache entry must raise
+    SessionDownloadCancelled instead of returning a broken path."""
+    import app as app_module
+
+    app_module._cloud_session_dirs["sessions/w"] = "/fake-half-populated"
+    ev = threading.Event()
+    app_module._cloud_session_ready["sessions/w"] = ev
+
+    outcome = {}
+
+    def waiter():
+        try:
+            app_module._ensure_cloud_session("sessions/w")
+            outcome["result"] = "returned"
+        except app_module.SessionDownloadCancelled:
+            outcome["result"] = "cancelled"
+
+    t = threading.Thread(target=waiter)
+    t.start()
+    # Simulate the downloading caller being cancelled: entries removed, then
+    # waiters released.
+    with app_module._cloud_session_lock:
+        app_module._cloud_session_dirs.pop("sessions/w")
+        app_module._cloud_session_ready.pop("sessions/w")
+    ev.set()
+    t.join(timeout=2)
+    assert not t.is_alive()
+    assert outcome["result"] == "cancelled"
+
+
+def test_ensure_cloud_session_reports_progress_to_job(tmp_path):
+    """total = number of .txt keys (videos are 0-byte placeholders and don't
+    count); done increments per downloaded transcript."""
+    import app as app_module
+
+    app_module._cloud_session_dirs.clear()
+    app_module._cloud_session_ready.clear()
+
+    job_id = "dl-progress-unit-job"
+    with app_module._jobs_lock:
+        app_module._jobs[job_id] = {
+            "type": "session_download", "status": "running", "total": 0,
+            "done": 0, "log": [], "result": None, "error": None,
+            "cancel": threading.Event(),
+        }
+
+    with patch("storage.list_keys", return_value=[
+             "sessions/p/v.mp4", "sessions/p/v.txt", "sessions/p/w.txt"]), \
+         patch("storage.download_file",
+               side_effect=lambda k, d: Path(d).write_text("t", encoding="utf-8")), \
+         patch("tempfile.mkdtemp", return_value=str(tmp_path)):
+        result = app_module._ensure_cloud_session(
+            "sessions/p", job_id=job_id,
+            cancel_event=app_module._jobs[job_id]["cancel"])
+
+    assert result == str(tmp_path)
+    with app_module._jobs_lock:
+        assert app_module._jobs[job_id]["total"] == 2
+        assert app_module._jobs[job_id]["done"] == 2
+        del app_module._jobs[job_id]
+
+    app_module._cloud_session_dirs.clear()
+    app_module._cloud_session_ready.clear()
+
+
 def test_transcripts_excludes_generated_reels(client, tmp_path, monkeypatch):
     """GET /transcripts filters out library entries so generated reels don't appear
     in the sidebar."""
