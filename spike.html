@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Sizzle Reel — Browser Encode Spike</title>
+  <style>
+    body { font-family: monospace; padding: 24px; background: #111; color: #eee; }
+    textarea { width: 100%; height: 60px; font-family: monospace; font-size: 12px; }
+    button { margin: 8px 4px; padding: 8px 16px; cursor: pointer; }
+    #log { white-space: pre-wrap; font-size: 12px; margin-top: 12px; }
+    video { max-width: 640px; display: block; margin: 16px 0; background: #000; }
+  </style>
+</head>
+<body>
+<h2>Browser Encode Spike</h2>
+<p>Paste presigned R2 URLs (from gen_presigned.py) and click Run.</p>
+
+<label>URL 1 (clip: start=10, end=40):</label><br>
+<textarea id="url1" placeholder="https://..."></textarea>
+
+<label>URL 2 (clip: start=60, end=90 — same URL as URL 1 is fine):</label><br>
+<textarea id="url2" placeholder="https://..."></textarea>
+
+<button id="btn-run">Run spike</button>
+<button id="btn-play" disabled>Play result</button>
+<video id="result" controls></video>
+<pre id="log">Waiting…</pre>
+
+<script type="module">
+// During spike only: loads from node_modules. After spike, vendor into static/vendor/.
+// Run: npm install mediabunny mp4-muxer  before opening this page.
+import { Demuxer } from './node_modules/mediabunny/dist/mediabunny.js';
+import { Muxer, ArrayBufferTarget } from './node_modules/mp4-muxer/dist/mp4-muxer.js';
+
+const logEl = document.getElementById('log');
+const log = (msg) => { logEl.textContent += '\n' + msg; console.log(msg); };
+
+const WIDTH = 1280, HEIGHT = 720, FPS = 30, SAMPLE_RATE = 48000;
+
+async function encodeTitleCard(titleLines, durationSec, videoEnc, audioEnc, tsUsec) {
+  const canvas = new OffscreenCanvas(WIDTH, HEIGHT);
+  const ctx = canvas.getContext('2d');
+  const totalFrames = Math.round(durationSec * FPS);
+  const fadeInFrames = Math.round(2.0 * FPS);
+  const fontSize = Math.max(24, Math.floor(HEIGHT / 15));
+  const lineHeight = Math.round(fontSize * 1.4);
+  const startY = Math.round((HEIGHT - titleLines.length * lineHeight) / 2 + fontSize);
+
+  for (let i = 0; i < totalFrames; i++) {
+    const alpha = Math.min(1.0, i / Math.max(1, fadeInFrames - 1));
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, WIDTH, HEIGHT);
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = '#fff';
+    ctx.font = `bold ${fontSize}px sans-serif`;
+    ctx.textAlign = 'center';
+    titleLines.forEach((line, idx) => ctx.fillText(line, WIDTH / 2, startY + idx * lineHeight));
+    ctx.globalAlpha = 1.0;
+
+    const frameTs = tsUsec + Math.round(i * 1_000_000 / FPS);
+    const frame = new VideoFrame(canvas, { timestamp: frameTs });
+    videoEnc.encode(frame, { keyFrame: i === 0 });
+    frame.close();
+    if (i % 15 === 0) await new Promise(r => setTimeout(r, 0));
+  }
+
+  const totalSamples = Math.round(durationSec * SAMPLE_RATE);
+  const chunkSize = 2048;
+  for (let offset = 0; offset < totalSamples; offset += chunkSize) {
+    const count = Math.min(chunkSize, totalSamples - offset);
+    const frameTs = tsUsec + Math.round(offset * 1_000_000 / SAMPLE_RATE);
+    const audioData = new AudioData({
+      format: 'f32-planar', sampleRate: SAMPLE_RATE,
+      numberOfFrames: count, numberOfChannels: 2,
+      timestamp: frameTs, data: new Float32Array(count * 2),
+    });
+    audioEnc.encode(audioData);
+    audioData.close();
+  }
+
+  return tsUsec + Math.round(durationSec * 1_000_000);
+}
+
+async function encodeClip(url, startSec, endSec, videoEnc, audioEnc, tsUsec) {
+  const clipDurationSec = endSec - startSec;
+  const fadeStartSec = Math.max(0, clipDurationSec - 2.0);
+
+  const videoFrames = [];
+  const audioChunks = [];
+
+  const videoDecoder = new VideoDecoder({
+    output: (frame) => videoFrames.push(frame),
+    error: (e) => { throw new Error('VideoDecoder: ' + e.message); },
+  });
+  const audioDecoder = new AudioDecoder({
+    output: (data) => audioChunks.push(data),
+    error: (e) => { throw new Error('AudioDecoder: ' + e.message); },
+  });
+
+  // ── MEDIABUNNY API ──────────────────────────────────────────────────────────
+  // If the import above fails: check node_modules/mediabunny/dist/ for the
+  // correct filename, and check the .d.ts for the actual class/method names.
+  const demuxer = new Demuxer();
+  await demuxer.load(url);
+  log(`  demuxer loaded — video codec: ${demuxer.videoDecoderConfig?.codec ?? 'unknown'}, audio: ${demuxer.audioDecoderConfig?.codec ?? 'unknown'}`);
+
+  videoDecoder.configure(demuxer.videoDecoderConfig);
+  audioDecoder.configure(demuxer.audioDecoderConfig);
+
+  // ADAPT THIS to the actual mediabunny API if extractRange does not exist.
+  // Check node_modules/mediabunny/dist/mediabunny.d.ts for the real method name.
+  // Common alternatives: demuxer.seek(startSec) then loop on demuxer.read(),
+  // or an event-based API like demuxer.on('videoChunk', fn).
+  await demuxer.extractRange(startSec, endSec, {
+    onVideoChunk: (chunk) => videoDecoder.decode(chunk),
+    onAudioChunk: (chunk) => audioDecoder.decode(chunk),
+  });
+
+  await videoDecoder.flush();
+  await audioDecoder.flush();
+  videoDecoder.close();
+  audioDecoder.close();
+
+  log(`  decoded ${videoFrames.length} video frames, ${audioChunks.length} audio chunks`);
+
+  // Apply video fade-out
+  const canvas = new OffscreenCanvas(WIDTH, HEIGHT);
+  const ctx = canvas.getContext('2d');
+  for (let i = 0; i < videoFrames.length; i++) {
+    const frame = videoFrames[i];
+    const relSec = (frame.timestamp / 1_000_000) - startSec;
+    const alpha = relSec >= fadeStartSec ? Math.max(0, 1 - (relSec - fadeStartSec) / 2.0) : 1.0;
+    ctx.clearRect(0, 0, WIDTH, HEIGHT);
+    ctx.globalAlpha = alpha;
+    ctx.drawImage(frame, 0, 0, WIDTH, HEIGHT);
+    ctx.globalAlpha = 1.0;
+    frame.close();
+    const outTs = tsUsec + Math.round(relSec * 1_000_000);
+    const outFrame = new VideoFrame(canvas, { timestamp: outTs });
+    videoEnc.encode(outFrame, { keyFrame: i === 0 });
+    outFrame.close();
+    if (i % 15 === 0) await new Promise(r => setTimeout(r, 0));
+  }
+
+  // Apply audio fade-out
+  for (const data of audioChunks) {
+    const relSec = (data.timestamp / 1_000_000) - startSec;
+    const gain = relSec >= fadeStartSec ? Math.max(0, 1 - (relSec - fadeStartSec) / 2.0) : 1.0;
+    const count = data.numberOfFrames;
+    const ch0 = new Float32Array(count);
+    const ch1 = new Float32Array(count);
+    data.copyTo(ch0, { planeIndex: 0 });
+    data.copyTo(ch1, { planeIndex: 1 });
+    for (let i = 0; i < count; i++) { ch0[i] *= gain; ch1[i] *= gain; }
+    data.close();
+    const merged = new Float32Array(count * 2);
+    merged.set(ch0, 0); merged.set(ch1, count);
+    const outTs = tsUsec + Math.round(relSec * 1_000_000);
+    const outData = new AudioData({
+      format: 'f32-planar', sampleRate: SAMPLE_RATE,
+      numberOfFrames: count, numberOfChannels: 2,
+      timestamp: outTs, data: merged,
+    });
+    audioEnc.encode(outData);
+    outData.close();
+  }
+
+  return tsUsec + Math.round(clipDurationSec * 1_000_000);
+}
+
+document.getElementById('btn-run').addEventListener('click', async () => {
+  document.getElementById('btn-play').disabled = true;
+  logEl.textContent = 'Starting…';
+
+  const url1 = document.getElementById('url1').value.trim();
+  const url2 = document.getElementById('url2').value.trim() || url1;
+  if (!url1) { log('Paste URL 1 first.'); return; }
+
+  const target = new ArrayBufferTarget();
+  const muxer = new Muxer({
+    target,
+    video: { codec: 'avc', width: WIDTH, height: HEIGHT },
+    audio: { codec: 'aac', sampleRate: SAMPLE_RATE, numberOfChannels: 2 },
+    fastStart: 'in-memory',
+  });
+
+  const videoEncoder = new VideoEncoder({
+    output: (chunk, meta) => muxer.addVideoChunk(chunk, meta),
+    error: (e) => log('VideoEncoder error: ' + e),
+  });
+  videoEncoder.configure({ codec: 'avc1.42001f', width: WIDTH, height: HEIGHT, bitrate: 3_000_000, framerate: FPS });
+
+  const audioEncoder = new AudioEncoder({
+    output: (chunk, meta) => muxer.addAudioChunk(chunk, meta),
+    error: (e) => log('AudioEncoder error: ' + e),
+  });
+  audioEncoder.configure({ codec: 'mp4a.40.2', sampleRate: SAMPLE_RATE, numberOfChannels: 2, bitrate: 128_000 });
+
+  try {
+    let ts = 0;
+    log('Encoding title card 1…');
+    ts = await encodeTitleCard(['Clip 1', 'from 0:10', 'Segment 1 / 2'], 5.0, videoEncoder, audioEncoder, ts);
+    log('Encoding clip 1 (10–40s)…');
+    ts = await encodeClip(url1, 10, 40, videoEncoder, audioEncoder, ts);
+    log('Encoding title card 2…');
+    ts = await encodeTitleCard(['Clip 2', 'from 1:00', 'Segment 2 / 2'], 5.0, videoEncoder, audioEncoder, ts);
+    log('Encoding clip 2 (60–90s)…');
+    ts = await encodeClip(url2, 60, 90, videoEncoder, audioEncoder, ts);
+    await videoEncoder.flush();
+    await audioEncoder.flush();
+    muxer.finalize();
+    const blob = new Blob([target.buffer], { type: 'video/mp4' });
+    const objUrl = URL.createObjectURL(blob);
+    document.getElementById('result').src = objUrl;
+    document.getElementById('btn-play').disabled = false;
+    document.getElementById('btn-play').onclick = () => document.getElementById('result').play();
+    log(`\nDone. MP4 size: ${(blob.size / 1024 / 1024).toFixed(1)} MB`);
+    log('NOTE FOR TASK 4: record which mediabunny methods worked above (demuxer.load(), demuxer.extractRange(), etc.)');
+  } catch (err) {
+    log('ERROR: ' + err.stack);
+    log('\nIf "extractRange is not a function": open node_modules/mediabunny/dist/mediabunny.d.ts');
+    log('and find the method name for iterating encoded chunks in a time range.');
+  }
+});
+</script>
+</body>
+</html>
