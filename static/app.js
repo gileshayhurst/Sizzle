@@ -293,17 +293,59 @@ $('folder-path-input').addEventListener('keydown', e => {
   }
 });
 
+// ─── Loading-folder modal ─────────────────────────────────────────────────────
+// One load is in flight at a time. Each openFolder call captures its own ctx,
+// so late responses from a cancelled load are ignored.
+let _loadingCtx = null;
+
+function _showLoadingModal(name) {
+  _loadingCtx = { abort: null, jobId: null, pollTimer: null, cancelled: false };
+  $('loading-folder-name').textContent = name;
+  const bar = $('loading-folder-bar');
+  bar.style.width = '';               // let the .indeterminate width apply
+  bar.classList.add('indeterminate');
+  $('loading-folder-status').textContent = 'Opening folder…';
+  $('loading-folder-modal').classList.remove('hidden');
+  return _loadingCtx;
+}
+
+function _closeLoadingModal() {
+  $('loading-folder-modal').classList.add('hidden');
+  $('loading-folder-bar').classList.remove('indeterminate');
+  _loadingCtx = null;
+}
+
+$('btn-loading-folder-cancel').addEventListener('click', () => {
+  const ctx = _loadingCtx;
+  if (!ctx) return;
+  ctx.cancelled = true;
+  if (ctx.abort) ctx.abort.abort();
+  if (ctx.pollTimer) clearInterval(ctx.pollTimer);
+  if (ctx.jobId) fetch(`/jobs/${ctx.jobId}`, { method: 'DELETE' }).catch(() => {});
+  _closeLoadingModal();
+  const btnLoad = $('btn-load-folder');
+  if (btnLoad) btnLoad.disabled = false;
+  // No-op when already on the picker; returns there from the upload flow.
+  showScreen('screen-folder-picker');
+});
+
 async function openFolder(folder, displayName) {
-  // Show a neutral loading indicator while the folder loads.
-  // In cloud mode /load-folder downloads files from remote storage which can
-  // take ~10 seconds. Without feedback the user may click "Upload"
-  // and see a spurious "Select a folder or files first." error.
   const folderErr = $('folder-error');
   const btnLoad   = $('btn-load-folder');
-  folderErr.textContent = 'Loading folder…';
-  folderErr.classList.remove('hidden');
-  folderErr.classList.add('folder-loading');
+  const name = displayName || folder.split(/[\\/]/).pop() || folder;
+  folderErr.classList.add('hidden');
   if (btnLoad) btnLoad.disabled = true;
+
+  const ctx = _showLoadingModal(name + '/');
+  ctx.abort = new AbortController();
+
+  const fail = (msg) => {
+    _closeLoadingModal();
+    if (btnLoad) btnLoad.disabled = false;
+    showScreen('screen-folder-picker');
+    folderErr.textContent = msg;
+    folderErr.classList.remove('hidden');
+  };
 
   let resp, data;
   try {
@@ -311,26 +353,78 @@ async function openFolder(folder, displayName) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ folder }),
+      signal: ctx.abort.signal,
     });
     data = await resp.json();
   } catch (err) {
-    folderErr.classList.remove('folder-loading');
-    folderErr.textContent = 'Could not open folder — try uploading your files again.';
-    // folderErr stays visible as an error
-    if (btnLoad) btnLoad.disabled = false;
+    if (ctx.cancelled) return;   // user hit ✕ — handler already cleaned up
+    fail('Could not open folder — try uploading your files again.');
     return;
   }
-
-  folderErr.classList.remove('folder-loading');
-  if (btnLoad) btnLoad.disabled = false;
+  if (ctx.cancelled) return;
 
   if (!resp.ok) {
-    folderErr.textContent = data.error || 'Failed to open folder';
-    folderErr.classList.remove('hidden');
+    fail(data.error || 'Failed to open folder');
     return;
   }
 
-  folderErr.classList.add('hidden');
+  if (data.job_type === 'session_download') {
+    // Cloud: transcripts are downloading server-side — poll for progress.
+    ctx.jobId = data.job_id;
+    const bar = $('loading-folder-bar');
+    bar.classList.remove('indeterminate');
+    bar.style.width = '0%';
+    _pollSessionDownload(ctx, folder, name, fail);
+    return;
+  }
+
+  _closeLoadingModal();
+  if (btnLoad) btnLoad.disabled = false;
+  await _enterFolder(folder, name, data);
+}
+
+function _pollSessionDownload(ctx, folder, displayName, fail) {
+  ctx.pollTimer = setInterval(async () => {
+    let job;
+    try {
+      const resp = await fetch(`/status/${ctx.jobId}`);
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      job = await resp.json();
+    } catch (err) {
+      clearInterval(ctx.pollTimer);
+      if (ctx.cancelled) return;
+      fail('Lost contact with server while loading the folder.');
+      return;
+    }
+    if (ctx.cancelled) return;
+
+    if (job.total > 0) {
+      const pct = Math.round((job.done / job.total) * 100);
+      $('loading-folder-bar').style.width = pct + '%';
+      $('loading-folder-status').textContent =
+        `Downloading transcripts… ${job.done} of ${job.total}`;
+    }
+
+    if (job.status === 'done') {
+      clearInterval(ctx.pollTimer);
+      _closeLoadingModal();
+      const btnLoad = $('btn-load-folder');
+      if (btnLoad) btnLoad.disabled = false;
+      await _enterFolder(folder, displayName, job.result || {});
+    } else if (job.status === 'error') {
+      clearInterval(ctx.pollTimer);
+      fail(job.error || 'Failed to load folder');
+    } else if (job.status === 'cancelled') {
+      // Cancelled from another tab/path — mirror the ✕ cleanup.
+      clearInterval(ctx.pollTimer);
+      _closeLoadingModal();
+      const btnLoad = $('btn-load-folder');
+      if (btnLoad) btnLoad.disabled = false;
+    }
+  }, 500);
+}
+
+async function _enterFolder(folder, displayName, data) {
   state.folder = folder;
   state.folderName = displayName || folder.split(/[\\/]/).pop();
   state.files = [];
@@ -340,7 +434,7 @@ async function openFolder(folder, displayName) {
   $('folder-badge').textContent = state.folderName + '/  ▾';
 
   if (data.job_id) {
-    // Needs transcription
+    // Needs transcription (local mode)
     showScreen('screen-transcribing');
     $('topbar-controls').classList.add('hidden');
     pollTranscription(data.job_id, folder);
