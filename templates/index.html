@@ -259,6 +259,22 @@
     </div>
   </div>
 
+  <!-- Loading-folder modal — shown while /load-folder (and any cloud session
+       download) is in flight; ✕ cancels the load -->
+  <div id="loading-folder-modal" class="overlay hidden">
+    <div class="overlay-card" style="max-width:420px">
+      <button id="btn-loading-folder-cancel" class="overlay-close" aria-label="Cancel loading folder">✕</button>
+      <div style="font-size:15px;font-weight:600;color:var(--ink);margin-bottom:4px">
+        Loading folder
+      </div>
+      <div id="loading-folder-name" style="color:var(--body);font-size:13px;margin-bottom:14px"></div>
+      <div class="progress-bar-wrap">
+        <div id="loading-folder-bar" class="progress-bar" style="width:0%"></div>
+      </div>
+      <div id="loading-folder-status" style="color:var(--muted);font-size:12px;margin-top:8px">Opening folder…</div>
+    </div>
+  </div>
+
 </div>
 <script src="/static/app.js"></script>
 </body>

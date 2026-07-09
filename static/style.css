@@ -276,8 +276,6 @@ body {
   outline: none; border-color: var(--amber); box-shadow: 0 0 0 3px rgba(224,123,57,.25);
 }
 .error-msg { color: var(--danger); font-size: 12px; }
-/* Loading state overrides the red error colour — higher specificity wins */
-.error-msg.folder-loading { color: var(--muted); font-style: italic; }
 
 /* RECENT FOLDERS */
 .recent-folders-section { margin-top: 8px; padding-top: 18px; border-top: 1px solid var(--border); }
@@ -306,6 +304,17 @@ body {
 .progress-bar-wrap { width: 100%; background: var(--border); border-radius: var(--radius-pill); height: 6px; overflow: hidden; }
 /* Determinate progress: width animation is correct here (real progress), not layout thrash */
 .progress-bar { height: 100%; background: var(--amber); border-radius: var(--radius-pill); transition: width 0.3s var(--ease-out); }
+
+/* Indeterminate variant — loading-folder modal before real progress exists
+   (local scans, cloud pre-download). JS clears the inline width first. */
+.progress-bar.indeterminate {
+  width: 40%;
+  animation: progress-indeterminate 1.2s ease-in-out infinite;
+}
+@keyframes progress-indeterminate {
+  from { margin-left: -40%; }
+  to   { margin-left: 100%; }
+}
 
 .log-box {
   width: 100%; background: var(--canvas); border: 1px solid var(--border); border-radius: var(--radius-md);
