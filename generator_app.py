@@ -901,6 +901,106 @@ def create_app(testing: bool = False) -> Flask:
             t.start()
         return jsonify({"job_id": job_id})
 
+    @app.post("/plan")
+    def plan():
+        """Return the ordered segment plan + presigned URLs for browser-side encoding."""
+        if not storage.is_cloud():
+            return jsonify({"error": "browser planning is only available in cloud mode"}), 400
+
+        body = request.get_json() or {}
+        session_key = (body.get("session_key") or "").strip()
+        if not session_key:
+            return jsonify({"error": "session_key required"}), 400
+
+        VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
+        selections = body.get("selections", {})
+        output_filename = Path((body.get("output_filename") or "sizzle_reel.mp4").strip()).name
+
+        all_keys = storage.list_keys(session_key + "/")
+        selected_filenames = set(selections.keys())
+
+        tmp_dir = tempfile.mkdtemp(prefix="sizzle_plan_")
+        try:
+            # Download only the .txt transcripts we need (same logic as /generate)
+            for key in all_keys:
+                p = Path(key)
+                if p.suffix.lower() == ".txt":
+                    stem = p.stem
+                    if any(Path(fn).stem == stem for fn in selected_filenames):
+                        storage.download_file(key, os.path.join(tmp_dir, p.name))
+
+            # Generate presigned GET URLs for selected video files (2-hour TTL)
+            video_urls: dict = {}
+            for key in all_keys:
+                p = Path(key)
+                if p.suffix.lower() in VIDEO_EXTS and p.name in selected_filenames:
+                    video_urls[p.name] = storage.presigned_url(key, expires=7200)
+
+            # Synthetic Path objects pointing to downloaded transcripts
+            video_paths = sorted(
+                [Path(tmp_dir) / fn for fn in video_urls],
+                key=lambda p: p.name,
+            )
+
+            segments = _build_segment_list(video_paths, selections, video_urls)
+            if not segments:
+                return jsonify({"error": "No segments found in selections"}), 422
+
+            # Probe dimensions from the first video's presigned URL (cheap, ~0.1s)
+            try:
+                width, height = get_video_dimensions(segments[0]["ffmpeg_input"])
+            except Exception:
+                width, height = 1920, 1080
+
+            # Presigned PUT URL so the browser can upload the finished reel to R2
+            reel_key = f"{session_key}/{output_filename}"
+            presigned_put = storage.presigned_put_url(reel_key, expires=7200)
+
+            return jsonify({
+                "session_key": session_key,
+                "output_filename": output_filename,
+                "width": width,
+                "height": height,
+                "reel_key": reel_key,
+                "presigned_put_url": presigned_put,
+                "segments": [
+                    {
+                        "video": seg["video_name"],
+                        "presigned_get_url": seg["ffmpeg_input"],
+                        "start_sec": seg["start_sec"],
+                        "end_sec": seg["end_sec"],
+                        "title_lines": seg["title_lines"],
+                    }
+                    for seg in segments
+                ],
+            })
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    @app.post("/library")
+    def library_add_endpoint():
+        """Record a reel that the browser encoded and uploaded directly to R2."""
+        body = request.get_json() or {}
+        session_key = (body.get("session_key") or "").strip()
+        output_filename = (body.get("output_filename") or "").strip()
+        if not session_key or not output_filename:
+            return jsonify({"error": "session_key and output_filename required"}), 400
+
+        entry = {
+            "id": str(uuid.uuid4()),
+            "filename": output_filename,
+            "path": "",
+            "source_folder": Path(session_key).name + "/",
+            "prompt": body.get("prompt", ""),
+            "duration_seconds": int(body.get("duration_seconds", 0)),
+            "clip_count": int(body.get("clip_count", 0)),
+            "segment_starts": body.get("segment_starts", []),
+            "created_at": datetime.now().isoformat(timespec="seconds"),
+            "reel_s3_key": f"{session_key}/{output_filename}",
+        }
+        _library_add(entry)
+        return jsonify({"id": entry["id"]})
+
     @app.get("/status/<job_id>")
     def job_status(job_id):
         with _jobs_lock:
