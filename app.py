@@ -560,7 +560,49 @@ def create_app(testing: bool = False) -> Flask:
     def load_folder():
         folder = (request.get_json() or {}).get("folder", "").strip()
         if storage.is_cloud() and folder and not Path(folder).exists():
-            folder = _ensure_cloud_session(folder)
+            session_key = folder
+            with _cloud_session_lock:
+                ready = _cloud_session_ready.get(session_key)
+                cached = (ready is not None and ready.is_set()
+                          and session_key in _cloud_session_dirs)
+            if not cached:
+                # Download runs as a cancellable background job; the frontend
+                # polls /status/<job_id> and cancels via DELETE /jobs/<job_id>.
+                job_id = _new_job("session_download", 0)
+
+                def _download():
+                    cancel_event = _jobs[job_id]["cancel"]
+                    try:
+                        local_dir = _ensure_cloud_session(
+                            session_key, job_id=job_id, cancel_event=cancel_event)
+                    except SessionDownloadCancelled:
+                        with _jobs_lock:
+                            if job_id in _jobs and _jobs[job_id]["status"] == "running":
+                                _jobs[job_id]["status"] = "cancelled"
+                        return
+                    except Exception as exc:
+                        with _jobs_lock:
+                            if job_id in _jobs:
+                                _jobs[job_id]["status"] = "error"
+                                _jobs[job_id]["error"] = str(exc)
+                        return
+                    result, error = _scan_load_folder(local_dir)
+                    with _jobs_lock:
+                        if job_id not in _jobs:
+                            return
+                        if error:
+                            _jobs[job_id]["status"] = "error"
+                            _jobs[job_id]["error"] = error
+                        else:
+                            _jobs[job_id]["status"] = "done"
+                            _jobs[job_id]["result"] = {
+                                "folder": result["folder"],
+                                "files": result["files"],
+                            }
+
+                threading.Thread(target=_download, daemon=True).start()
+                return jsonify({"job_id": job_id, "job_type": "session_download"})
+            folder = _ensure_cloud_session(session_key)
         if not folder or not Path(folder).exists():
             return jsonify({"error": "Folder not found"}), 404
 
