@@ -1308,3 +1308,65 @@ def test_cloud_temp_dir_cleanup_scheduled(client, tmp_path):
     assert resp.status_code == 200
     assert len(timers_started) >= 1
     assert timers_started[0] == 3600   # 1 hour
+
+
+# ─── _build_segment_list ─────────────────────────────────────────────────────
+
+def test_build_segment_list_returns_segments_with_correct_fields(tmp_path):
+    from generator_app import _build_segment_list
+    transcript = "[0:10] Speaker: Hello world. Great content here.\n[0:20] Speaker: Second line."
+    (tmp_path / "video.webm").write_bytes(b"")
+    (tmp_path / "video.txt").write_text(transcript, encoding="utf-8")
+    vp = tmp_path / "video.webm"
+    selections = {"video.webm": ["[0:10] Speaker: Hello world. Great content here."]}
+    with patch("generator_app.get_video_duration", return_value=60.0):
+        result = _build_segment_list([vp], selections)
+    assert len(result) == 1
+    seg = result[0]
+    assert seg["video_name"] == "video.webm"
+    assert seg["video_stem"] == "video"
+    assert seg["start_sec"] == 10.0
+    assert seg["title_lines"][0] == "video"
+    assert seg["title_lines"][1] == "from 0:10"
+    assert seg["title_lines"][2] == "Segment 1 / 1"
+
+
+def test_build_segment_list_numbers_segments_across_videos(tmp_path):
+    from generator_app import _build_segment_list
+    for name in ["a.webm", "b.webm"]:
+        (tmp_path / name).write_bytes(b"")
+        (tmp_path / name).with_suffix(".txt").write_text(
+            "[0:05] Speaker: Clip from this file.", encoding="utf-8"
+        )
+    vps = [tmp_path / "a.webm", tmp_path / "b.webm"]
+    sel = {
+        "a.webm": ["[0:05] Speaker: Clip from this file."],
+        "b.webm": ["[0:05] Speaker: Clip from this file."],
+    }
+    with patch("generator_app.get_video_duration", return_value=60.0):
+        result = _build_segment_list(vps, sel)
+    assert len(result) == 2
+    assert result[0]["title_lines"][2] == "Segment 1 / 2"
+    assert result[1]["title_lines"][2] == "Segment 2 / 2"
+
+
+def test_build_segment_list_skips_video_with_no_txt(tmp_path):
+    from generator_app import _build_segment_list
+    vp = tmp_path / "video.webm"
+    vp.write_bytes(b"")
+    # No .txt file
+    with patch("generator_app.get_video_duration", return_value=60.0):
+        result = _build_segment_list([vp], {"video.webm": ["[0:05] Speaker: Hi."]})
+    assert result == []
+
+
+def test_build_segment_list_uses_video_urls_for_ffmpeg_input(tmp_path):
+    from generator_app import _build_segment_list
+    vp = tmp_path / "video.webm"
+    vp.write_bytes(b"")
+    (tmp_path / "video.txt").write_text("[0:05] Speaker: Hi there.", encoding="utf-8")
+    presigned = "https://r2.example.com/video.webm?sig=abc"
+    with patch("generator_app.get_video_duration", return_value=60.0):
+        result = _build_segment_list([vp], {"video.webm": ["[0:05] Speaker: Hi there."]},
+                                     video_urls={"video.webm": presigned})
+    assert result[0]["ffmpeg_input"] == presigned

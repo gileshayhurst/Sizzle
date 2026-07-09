@@ -313,6 +313,56 @@ def make_title_card(
 
 # ─── Generation worker ────────────────────────────────────────────────────────
 
+def _build_segment_list(
+    video_paths: list,
+    selections: dict,
+    video_urls: dict | None = None,
+) -> list[dict]:
+    """Parse transcripts and group selected lines into ordered segments.
+
+    Shared between POST /generate (via _run_generation_impl) and POST /plan
+    so segment ordering, timing, and title-card text are computed once.
+
+    Returns a list of dicts ordered as they appear in video_paths:
+      video_name, video_stem, ffmpeg_input, start_sec, end_sec, title_lines
+    Videos with no transcript or no matching selections are skipped silently.
+    """
+    grouped = []
+    for vp in video_paths:
+        selected_raws = selections.get(vp.name, [])
+        if not selected_raws:
+            continue
+        txt_path = vp.with_suffix(".txt")
+        if not txt_path.exists():
+            continue
+        all_lines = _parse_transcript_lines(txt_path.read_text(encoding="utf-8"))
+        ffmpeg_input = video_urls.get(vp.name, str(vp)) if video_urls else str(vp)
+        duration = get_video_duration(ffmpeg_input)
+        segs = _group_lines_into_segments(all_lines, set(selected_raws), video_duration=duration)
+        if segs:
+            grouped.append((vp, segs, ffmpeg_input))
+
+    total_segs = sum(len(segs) for _, segs, _ in grouped)
+    result = []
+    seg_num = 0
+    for vp, segs, ffmpeg_input in grouped:
+        for start_sec, end_sec in segs:
+            seg_num += 1
+            result.append({
+                "video_name": vp.name,
+                "video_stem": vp.stem,
+                "ffmpeg_input": ffmpeg_input,
+                "start_sec": start_sec,
+                "end_sec": end_sec,
+                "title_lines": [
+                    vp.stem,
+                    f"from {_format_seconds(start_sec)}",
+                    f"Segment {seg_num} / {total_segs}",
+                ],
+            })
+    return result
+
+
 def _run_generation(job_id: str, folder: str,
                     selections: dict, prompt: str, output_filename: str,
                     session_key: str = None,
@@ -364,45 +414,37 @@ def _run_generation_impl(job_id: str, folder: str,
             return
         video_paths = _filter_generated_reels(video_paths)
 
-    video_segments = []
+    # Build segment plan (shared with POST /plan)
+    segments = _build_segment_list(video_paths, selections, video_urls)
 
+    # Log per-video results and advance progress counter
+    segment_video_names = {s["video_name"] for s in segments}
     for vp in video_paths:
         if job["cancel"].is_set():
             with _jobs_lock:
                 job["status"] = "cancelled"
             return
-
         selected_raws = selections.get(vp.name, [])
         if not selected_raws:
             continue
-
-        txt_path = vp.with_suffix(".txt")
-        if not txt_path.exists():
+        if not vp.with_suffix(".txt").exists():
             _append_log(job_id, f"· {vp.name} — no transcript, skipping")
-            continue
-
-        all_lines = _parse_transcript_lines(txt_path.read_text(encoding="utf-8"))
-        ffmpeg_input = video_urls.get(vp.name, str(vp)) if video_urls else str(vp)
-        duration = get_video_duration(ffmpeg_input)
-        segs = _group_lines_into_segments(all_lines, set(selected_raws), video_duration=duration)
-
-        if segs:
-            _append_log(job_id, f"✓ {vp.name} — {len(segs)} segment(s)")
-            video_segments.append((vp, segs, ffmpeg_input))
-        else:
+        elif vp.name not in segment_video_names:
             _append_log(job_id, f"· {vp.name} — selections produced no segments")
-
+        else:
+            count = sum(1 for s in segments if s["video_name"] == vp.name)
+            _append_log(job_id, f"✓ {vp.name} — {count} segment(s)")
         with _jobs_lock:
             job["done"] += 1
 
-    if not video_segments:
+    if not segments:
         with _jobs_lock:
             job["status"] = "error"
             job["error"] = "No segments found in selections"
         return
 
     TITLE_CARD_DURATION = 5.0
-    total_segs = sum(len(segs) for _, segs, _ in video_segments)
+    total_segs = len(segments)
 
     _append_log(job_id, "· Extracting clips...")
     output_path = str(Path(folder) / output_filename)
@@ -411,41 +453,38 @@ def _run_generation_impl(job_id: str, folder: str,
         # ── Phase 1: Plan ────────────────────────────────────────────────
         plan = []      # ordered list of {"type": "title"|"clip", ...}
         item_idx = 0
-        seg_num = 0
+        _dim_cache: dict = {}
 
-        for vp, segs, ffmpeg_input in video_segments:
-            try:
-                width, height = get_video_dimensions(ffmpeg_input)
-            except Exception:
-                width, height = 1920, 1080
-            for start_sec, end_sec in segs:
-                seg_num += 1
-                card_path = os.path.join(tmp_dir, f"clip_{item_idx:04d}.mp4")
-                item_idx += 1
-                clip_path = os.path.join(tmp_dir, f"clip_{item_idx:04d}.mp4")
-                item_idx += 1
-                plan.append({
-                    "type": "title",
-                    "path": card_path,
-                    "lines": [
-                        vp.stem,
-                        f"from {_format_seconds(start_sec)}",
-                        f"Segment {seg_num} / {total_segs}",
-                    ],
-                    "width": width,
-                    "height": height,
-                    "ok": False,
-                    "error": None,
-                })
-                plan.append({
-                    "type": "clip",
-                    "path": clip_path,
-                    "video_path": ffmpeg_input,
-                    "start_sec": start_sec,
-                    "end_sec": end_sec,
-                    "ok": False,
-                    "error": None,
-                })
+        for seg in segments:
+            ffmpeg_input = seg["ffmpeg_input"]
+            if ffmpeg_input not in _dim_cache:
+                try:
+                    _dim_cache[ffmpeg_input] = get_video_dimensions(ffmpeg_input)
+                except Exception:
+                    _dim_cache[ffmpeg_input] = (1920, 1080)
+            width, height = _dim_cache[ffmpeg_input]
+            card_path = os.path.join(tmp_dir, f"clip_{item_idx:04d}.mp4")
+            item_idx += 1
+            clip_path = os.path.join(tmp_dir, f"clip_{item_idx:04d}.mp4")
+            item_idx += 1
+            plan.append({
+                "type": "title",
+                "path": card_path,
+                "lines": seg["title_lines"],
+                "width": width,
+                "height": height,
+                "ok": False,
+                "error": None,
+            })
+            plan.append({
+                "type": "clip",
+                "path": clip_path,
+                "video_path": ffmpeg_input,
+                "start_sec": seg["start_sec"],
+                "end_sec": seg["end_sec"],
+                "ok": False,
+                "error": None,
+            })
 
         # ── Phase 2: Execute ─────────────────────────────────────────────
         # Title cards: serial (fast, ~0.1s each)
