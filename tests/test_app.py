@@ -453,6 +453,43 @@ def test_analyze_returns_highlights(client, tmp_path):
     assert len(data["highlights"]["vid.mp4"]) == 2
 
 
+def test_parse_scored_timestamps_with_scores():
+    from timestamp_parser import parse_scored_timestamps
+    assert parse_scored_timestamps("0:05-0:20|9\n1:00-1:10|7") == [
+        ("0:05-0:20", 9), ("1:00-1:10", 7)
+    ]
+
+
+def test_parse_scored_timestamps_missing_score_defaults_to_5():
+    from timestamp_parser import parse_scored_timestamps
+    assert parse_scored_timestamps("0:05-0:20") == [("0:05-0:20", 5)]
+
+
+def test_parse_scored_timestamps_garbled_score_defaults_and_clamps():
+    from timestamp_parser import parse_scored_timestamps
+    # non-integer -> default 5; out-of-range -> clamp to 1..10
+    assert parse_scored_timestamps("0:05-0:20|foo") == [("0:05-0:20", 5)]
+    assert parse_scored_timestamps("0:05-0:20|99") == [("0:05-0:20", 10)]
+    assert parse_scored_timestamps("0:05-0:20|0") == [("0:05-0:20", 1)]
+
+
+def test_parse_scored_timestamps_none():
+    from timestamp_parser import parse_scored_timestamps
+    assert parse_scored_timestamps("none") is None
+
+
+def test_parse_scored_timestamps_commas_and_whitespace():
+    from timestamp_parser import parse_scored_timestamps
+    assert parse_scored_timestamps("0:05-0:20|8, 1:00-1:10|6") == [
+        ("0:05-0:20", 8), ("1:00-1:10", 6)
+    ]
+
+
+def test_parse_timestamps_still_returns_ranges_only():
+    from timestamp_parser import parse_timestamps
+    assert parse_timestamps("0:05-0:20|9\n1:00-1:10|7") == ["0:05-0:20", "1:00-1:10"]
+
+
 def test_analyze_missing_prompt_returns_400(client, tmp_path):
     resp = client.post("/analyze", json={"folder": str(tmp_path)})
     assert resp.status_code == 400
