@@ -12,6 +12,9 @@ const state = {
   currentJobId: null,
   resultJobId: null,
   lastPrompt: '',     // prompt used for the most recent Analyze call
+  pool: [],           // flat candidate array (buildCandidatePool output)
+  poolOrdered: [],    // pool sorted into priority order
+  sliderCustom: false,// true once the selection diverges from a priority prefix
   resultSegmentStarts: [],
   resultDownloadUrl: null,
   resultPath: null,
@@ -98,6 +101,86 @@ function prefixForDuration(ordered, targetSeconds) {
     if (sums[i] <= targetSeconds + 1e-6) k = i + 1;
   }
   return ordered.slice(0, k);
+}
+
+function _fmtSeconds(s) {
+  const m = Math.floor(s / 60);
+  const r = Math.round(s % 60);
+  return `${m}:${String(r).padStart(2, '0')}`;
+}
+
+// Replace the current selection with the given candidate list's lines,
+// applied to BOTH checked and highlighted (mirrors runAnalyze).
+function _applyCandidatesToSelection(candidates) {
+  state.files.forEach(f => {
+    state.checked[f.name] = new Set();
+    state.highlighted[f.name] = new Set();
+  });
+  candidates.forEach(c => {
+    c.lines.forEach(l => {
+      state.checked[c.file].add(l);
+      state.highlighted[c.file].add(l);
+    });
+  });
+}
+
+// Update slider min/max/marker/value WITHOUT changing the current selection.
+function _refreshSliderChromeOnly(value) {
+  const ordered = state.poolOrdered;
+  if (ordered.length < 2) return;
+  $('reel-length-row').classList.remove('hidden');
+  const sums = cumulativeDurations(ordered);
+  const slider = $('reel-slider');
+  slider.min = sums[0];
+  slider.max = sums[sums.length - 1];
+  slider.value = value == null ? sums[0] : value;
+  const optD = optimalDuration(ordered);
+  const pct = sums[sums.length - 1] > sums[0]
+    ? ((optD - sums[0]) / (sums[sums.length - 1] - sums[0])) * 100 : 0;
+  $('reel-optimal-marker').style.left = `${pct}%`;
+  $('reel-slider-min').textContent = _fmtSeconds(sums[0]);
+  $('reel-slider-max').textContent = _fmtSeconds(sums[sums.length - 1]);
+}
+
+// Rebuild the slider UI from state.poolOrdered. selectDuration: the duration to
+// select at (defaults to optimal). Mutates selection + DOM.
+function _refreshSlider(selectDuration) {
+  const ordered = state.poolOrdered;
+  if (ordered.length < 2) { $('reel-length-row').classList.add('hidden'); return; }
+  const optD = optimalDuration(ordered);
+  const target = selectDuration == null ? optD : selectDuration;
+  _refreshSliderChromeOnly(target);
+  _applySliderSelection(target);
+}
+
+// Apply the priority prefix for `target` seconds and update label + counts.
+function _applySliderSelection(target) {
+  const ordered = state.poolOrdered;
+  const prefix = prefixForDuration(ordered, target);
+  _applyCandidatesToSelection(prefix);
+  state.sliderCustom = false;
+
+  const selDur = prefix.reduce((s, c) => s + c.duration_seconds, 0);
+  $('reel-length-label').textContent =
+    `Reel length · ${_fmtSeconds(selDur)} · ${prefix.length} of ${ordered.length} segments`;
+  const status = document.querySelector('.reel-length-status');
+  if (status) status.classList.remove('custom');
+
+  if (state.activeFile) renderTranscript(state.activeFile);
+  state.files.forEach(f => refreshBadge(f.name));
+  updateGenerateBtn();
+  _saveSelections();
+  _savePool();
+}
+
+// Called when the user manually edits lines — mark the slider "custom".
+function markSliderCustom() {
+  if (state.poolOrdered.length < 2) return;
+  state.sliderCustom = true;
+  const status = document.querySelector('.reel-length-status');
+  if (status) status.classList.add('custom');
+  $('reel-length-label').textContent = 'Custom selection · drag slider to reset';
+  _savePool();
 }
 
 // ─── IndexedDB helpers (persist FileSystemDirectoryHandle across reloads) ────
@@ -665,6 +748,17 @@ $('analyze-input').addEventListener('keydown', e => {
   if (e.key === 'Enter') runAnalyze();
 });
 
+$('reel-slider').addEventListener('input', e => {
+  const sums = cumulativeDurations(state.poolOrdered);
+  if (sums.length === 0) return;
+  // snap raw value to the nearest cumulative snap point
+  const raw = parseFloat(e.target.value);
+  let snapped = sums[0];
+  for (const s of sums) { if (Math.abs(s - raw) < Math.abs(snapped - raw)) snapped = s; }
+  e.target.value = snapped;
+  _applySliderSelection(snapped);
+});
+
 $('btn-analyze-add').addEventListener('click', runAddAnalyze);
 $('analyze-add-input').addEventListener('keydown', e => {
   if (e.key === 'Enter' && !e.shiftKey) runAddAnalyze();
@@ -725,17 +819,22 @@ async function runAnalyze() {
 
     state.lastPrompt = prompt;
 
-    // Apply returned highlights to BOTH sets so mode-switching preserves analysis
-    state.files.forEach(f => {
-      const lines = data.highlights[f.name] || [];
-      state.checked[f.name] = new Set(lines);
-      state.highlighted[f.name] = new Set(lines);
-    });
+    // Build the candidate pool from scored segments and select the optimal cut.
+    state.pool = buildCandidatePool(data.segments || {}, state.files.map(f => f.name));
+    state.poolOrdered = sortByPriority(state.pool, state.files.map(f => f.name));
 
-    if (state.activeFile) renderTranscript(state.activeFile);
-    state.files.forEach(f => refreshBadge(f.name));
-    updateGenerateBtn();
-    _saveSelections();
+    if (state.poolOrdered.length >= 2) {
+      _refreshSlider();  // selects optimal, renders, saves
+    } else {
+      // 0 or 1 candidate: no slider — fall back to selecting whatever we have.
+      _applyCandidatesToSelection(state.poolOrdered);
+      $('reel-length-row').classList.add('hidden');
+      if (state.activeFile) renderTranscript(state.activeFile);
+      state.files.forEach(f => refreshBadge(f.name));
+      updateGenerateBtn();
+      _saveSelections();
+      _savePool();
+    }
     $('analyze-add-row').classList.remove('hidden');
 
   } catch (err) {
