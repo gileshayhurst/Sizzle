@@ -363,6 +363,38 @@ function _saveSelections() {
   }
 }
 
+function _savePool() {
+  if (!state.folder) return;
+  try {
+    localStorage.setItem('sizzle_pool_' + state.folder, JSON.stringify({
+      pool: state.pool,
+      sliderValue: parseFloat($('reel-slider')?.value || '0'),
+      custom: state.sliderCustom,
+    }));
+  } catch (_) {}
+}
+
+function _restorePool() {
+  if (!state.folder) return;
+  try {
+    const raw = localStorage.getItem('sizzle_pool_' + state.folder);
+    if (!raw) return;
+    const saved = JSON.parse(raw);
+    const fileNames = new Set(state.files.map(f => f.name));
+    state.pool = (saved.pool || []).filter(c => fileNames.has(c.file));
+    state.poolOrdered = sortByPriority(state.pool, state.files.map(f => f.name));
+    if (state.poolOrdered.length >= 2) {
+      if (saved.custom) {
+        // rebuild slider chrome without overwriting the restored selection
+        _refreshSliderChromeOnly(saved.sliderValue);
+        markSliderCustom();
+      } else {
+        _refreshSlider(saved.sliderValue);
+      }
+    }
+  } catch (_) {}
+}
+
 function _clearSelections() {
   // Remove the persisted payload so a page reload starts empty.
   if (state.folder) {
@@ -372,6 +404,13 @@ function _clearSelections() {
   // if the user navigates back without reloading.
   for (const filename of Object.keys(state.checked))     state.checked[filename]     = new Set();
   for (const filename of Object.keys(state.highlighted)) state.highlighted[filename] = new Set();
+  if (state.folder) {
+    try { localStorage.removeItem('sizzle_pool_' + state.folder); } catch (_) {}
+  }
+  state.pool = [];
+  state.poolOrdered = [];
+  state.sliderCustom = false;
+  $('reel-length-row')?.classList.add('hidden');
   $('analyze-add-row')?.classList.add('hidden');
   const addInput = $('analyze-add-input');
   if (addInput) addInput.value = '';
@@ -708,6 +747,8 @@ async function loadTranscripts(folder) {
   } catch (_) {
     // Malformed or unavailable localStorage — silently ignore
   }
+
+  _restorePool();
 }
 
 function showWorkspace() {
