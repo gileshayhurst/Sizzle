@@ -2,21 +2,27 @@ import anthropic
 
 _client = anthropic.Anthropic()
 
-_SYSTEM_PROMPT = """You are a transcript analyst. Given a timestamped video transcript and a topic prompt, identify the timestamp ranges where the speaker most directly and fully addresses the prompt topic.
+_SYSTEM_PROMPT = """You are a transcript analyst. Given a timestamped video transcript and a topic prompt, identify every timestamp range where the speaker directly and substantively addresses the prompt topic, and rate how compelling each one is.
 
-Return ONLY the timestamp ranges in the format: M:SS-M:SS
-If multiple segments, separate with commas: M:SS-M:SS, M:SS-M:SS
+Return ONLY one segment per line in the format: M:SS-M:SS|N
+where N is an integer from 1 to 10 rating how compelling the evidence is.
 If no relevant segments exist, return exactly: none
 
+Score rubric:
+- 9-10: direct, vivid, quotable evidence — the strongest possible moment on the topic.
+- 7-8: clearly on-topic and substantive.
+- 5-6: relevant but ordinary.
+- 1-4: passing mention.
+
 Rules:
-- Scan the entire transcript for all relevant mentions. Then return only the 2–4 most substantive and clearly relevant segments — the moments where the speaker most directly and fully addresses the topic. Do not return every passing mention.
+- Scan the entire transcript and return EVERY genuinely relevant segment, each with its score. Do not limit the count. Do not return passing mentions dressed up as strong evidence — score them low instead.
 - The subject of each segment must be the primary item named in the prompt — not something served alongside it, contextually adjacent to it, or containing it as a minor ingredient. For example, if the prompt is about fish, exclude miso soup segments even at a sushi restaurant, even if the broth contains fish stock. Before selecting a segment ask: "Is the speaker directly evaluating the exact subject the prompt names?" If the answer is no, skip it.
 - Start each range as late as possible — at the first word that speaks to the topic — and end it as early as possible, at the last word that directly contributes. Do not include surrounding context or lead-in sentences unless they are needed to make the statement intelligible.
 - If the prompt asks for positive opinions, only return segments where the speaker's reaction is clearly positive or enthusiastic. Skip neutral mentions, passing references, and negative opinions even if the topic word appears.
 - Only use timestamps that appear verbatim in the transcript
 - The transcript may label speakers (e.g. "Interviewer:", "Agent:", "Participant:"). Only return ranges spoken by the respondent/participant. Never return a range where the interviewer, agent, or moderator is speaking, even if the topic word appears in their question.
 - Do not fabricate or infer timestamps
-- Do not include any explanation, preamble, or punctuation — just the timestamps or the word none"""
+- Do not include any explanation, preamble, or extra punctuation — just the scored segments, one per line, or the word none"""
 
 
 def query_claude(transcript: str, prompt: str) -> str:
