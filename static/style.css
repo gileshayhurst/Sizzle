@@ -1069,3 +1069,39 @@ body {
   .ph-delete-btn { min-width: 40px; min-height: 40px; }
   .recent-folder-item { min-height: 48px; }
 }
+
+/* Reel-length slider (priority-scored analysis) */
+.reel-length-row {
+  padding: 8px 14px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.reel-length-status {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+.reel-length-status.custom { font-style: italic; }
+.reel-slider-wrap { position: relative; }
+.reel-slider {
+  width: 100%;
+  accent-color: var(--amber);
+}
+.reel-optimal-marker {
+  position: absolute;
+  top: -3px;
+  width: 0; height: 0;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-bottom: 7px solid var(--amber);
+  transform: translateX(-5px);
+  pointer-events: none;
+}
+.reel-slider-ends {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  color: var(--muted);
+}

@@ -453,6 +453,90 @@ def test_analyze_returns_highlights(client, tmp_path):
     assert len(data["highlights"]["vid.mp4"]) == 2
 
 
+def test_analyze_returns_segments_with_scores(client, tmp_path):
+    (tmp_path / "vid.mp4").touch()
+    (tmp_path / "vid.txt").write_text(
+        "[0:05] Speaker: Hello world.\n[0:15] Speaker: Black cod is amazing.",
+        encoding="utf-8",
+    )
+    with patch("app.query_claude", return_value="0:05-0:20|9"):
+        resp = client.post("/analyze", json={"folder": str(tmp_path), "prompt": "food"})
+    assert resp.status_code == 200
+    data = resp.get_json()
+    segs = data["segments"]["vid.mp4"]
+    assert len(segs) == 1
+    seg = segs[0]
+    assert seg["score"] == 9
+    assert seg["start"] == "0:05" and seg["end"] == "0:20"
+    assert seg["duration_seconds"] == 15.0
+    assert len(seg["lines"]) == 2  # both lines fall within 0:05-0:20
+
+
+def test_analyze_highlights_is_union_of_segment_lines(client, tmp_path):
+    (tmp_path / "vid.mp4").touch()
+    (tmp_path / "vid.txt").write_text(
+        "[0:05] Speaker: Hello world.\n[0:15] Speaker: Black cod is amazing.",
+        encoding="utf-8",
+    )
+    with patch("app.query_claude", return_value="0:05-0:20|9"):
+        resp = client.post("/analyze", json={"folder": str(tmp_path), "prompt": "food"})
+    data = resp.get_json()
+    seg_lines = [l for s in data["segments"]["vid.mp4"] for l in s["lines"]]
+    assert set(data["highlights"]["vid.mp4"]) == set(seg_lines)
+
+
+def test_analyze_drops_interviewer_only_segment(client, tmp_path):
+    (tmp_path / "vid.mp4").touch()
+    (tmp_path / "vid.txt").write_text(
+        "[0:05] Interviewer: What did you think of the cod?\n"
+        "[0:15] Speaker: The cod was superb.",
+        encoding="utf-8",
+    )
+    # First range is only the interviewer line -> dropped; second maps to respondent.
+    with patch("app.query_claude", return_value="0:05-0:09|8\n0:15-0:20|9"):
+        resp = client.post("/analyze", json={"folder": str(tmp_path), "prompt": "cod"})
+    segs = resp.get_json()["segments"]["vid.mp4"]
+    assert len(segs) == 1
+    assert segs[0]["start"] == "0:15"
+
+
+def test_parse_scored_timestamps_with_scores():
+    from timestamp_parser import parse_scored_timestamps
+    assert parse_scored_timestamps("0:05-0:20|9\n1:00-1:10|7") == [
+        ("0:05-0:20", 9), ("1:00-1:10", 7)
+    ]
+
+
+def test_parse_scored_timestamps_missing_score_defaults_to_5():
+    from timestamp_parser import parse_scored_timestamps
+    assert parse_scored_timestamps("0:05-0:20") == [("0:05-0:20", 5)]
+
+
+def test_parse_scored_timestamps_garbled_score_defaults_and_clamps():
+    from timestamp_parser import parse_scored_timestamps
+    # non-integer -> default 5; out-of-range -> clamp to 1..10
+    assert parse_scored_timestamps("0:05-0:20|foo") == [("0:05-0:20", 5)]
+    assert parse_scored_timestamps("0:05-0:20|99") == [("0:05-0:20", 10)]
+    assert parse_scored_timestamps("0:05-0:20|0") == [("0:05-0:20", 1)]
+
+
+def test_parse_scored_timestamps_none():
+    from timestamp_parser import parse_scored_timestamps
+    assert parse_scored_timestamps("none") is None
+
+
+def test_parse_scored_timestamps_commas_and_whitespace():
+    from timestamp_parser import parse_scored_timestamps
+    assert parse_scored_timestamps("0:05-0:20|8, 1:00-1:10|6") == [
+        ("0:05-0:20", 8), ("1:00-1:10", 6)
+    ]
+
+
+def test_parse_timestamps_still_returns_ranges_only():
+    from timestamp_parser import parse_timestamps
+    assert parse_timestamps("0:05-0:20|9\n1:00-1:10|7") == ["0:05-0:20", "1:00-1:10"]
+
+
 def test_analyze_missing_prompt_returns_400(client, tmp_path):
     resp = client.post("/analyze", json={"folder": str(tmp_path)})
     assert resp.status_code == 400

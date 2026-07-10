@@ -30,7 +30,7 @@ from flask import Flask, jsonify, render_template, request, send_file
 
 from claude_client import query_claude
 from loader import scan_videos
-from timestamp_parser import parse_timestamps
+from timestamp_parser import parse_scored_timestamps
 from transcriber import transcribe_video
 from video_editor import parse_timestamp_to_seconds
 from shared import parse_transcript_lines as _parse_transcript_lines, filter_generated_reels as _filter_generated_reels
@@ -210,15 +210,16 @@ def _prompt_history_use(text: str) -> None:
 
 
 def _run_analyze(folder: str, prompt: str) -> dict:
-    """Call Claude on every transcript in folder. Returns per-video matched raw lines."""
+    """Call Claude on every transcript in folder. Returns per-video scored
+    segments plus a legacy `highlights` union of the matched lines."""
     try:
         video_paths = scan_videos(folder)
     except Exception as exc:
         return {"error": str(exc)}
     video_paths = _filter_generated_reels(video_paths)
 
-    def _analyze_one(vp: Path) -> tuple[str, list[str], str | None]:
-        """Analyze a single video. Returns (name, matched_lines, error).
+    def _analyze_one(vp: Path) -> tuple[str, list[dict], str | None]:
+        """Analyze a single video. Returns (name, segments, error).
 
         Runs the (slow) Claude call plus timestamp matching for one video so the
         whole folder can be processed concurrently — a folder of many long videos
@@ -234,24 +235,38 @@ def _run_analyze(folder: str, prompt: str) -> dict:
 
         try:
             response = query_claude(transcript, prompt)
-            ranges = parse_timestamps(response) or []
+            scored = parse_scored_timestamps(response) or []
         except Exception as exc:
             return vp.name, [], f"{vp.name}: {exc}"
 
-        matched: list[str] = []
-        for seg in ranges:
+        segments: list[dict] = []
+        for seg, score in scored:
             start_str, end_str = seg.split("-", 1)
             start_sec = parse_timestamp_to_seconds(start_str)
             end_sec = parse_timestamp_to_seconds(end_str)
+            lines: list[str] = []
             for line in all_lines:
                 if line.get("is_interviewer"):
                     continue  # analyze never auto-selects the interviewer
                 if start_sec - 0.5 <= line["seconds"] <= end_sec + 0.5:
-                    if line["raw"] not in matched:
-                        matched.append(line["raw"])
+                    if line["raw"] not in lines:
+                        lines.append(line["raw"])
+            if not lines:
+                continue  # segment mapped to no respondent lines — drop it
+            segments.append({
+                "start": start_str,
+                "end": end_str,
+                "start_seconds": start_sec,
+                "end_seconds": end_sec,
+                "duration_seconds": max(0.0, end_sec - start_sec),
+                "score": score,
+                "lines": lines,
+            })
 
-        return vp.name, matched, None
+        segments.sort(key=lambda s: s["start_seconds"])
+        return vp.name, segments, None
 
+    segments_by_file: dict[str, list[dict]] = {}
     highlights: dict[str, list[str]] = {}
     errors: list[str] = []
 
@@ -262,15 +277,23 @@ def _run_analyze(folder: str, prompt: str) -> dict:
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         results = list(executor.map(_analyze_one, video_paths))
 
-    for name, matched, error in results:
-        highlights[name] = matched
+    for name, segments, error in results:
+        segments_by_file[name] = segments
+        # Legacy union: preserves the existing `highlights` contract for any
+        # caller/test that still reads it.
+        union: list[str] = []
+        for seg in segments:
+            for raw in seg["lines"]:
+                if raw not in union:
+                    union.append(raw)
+        highlights[name] = union
         if error:
             errors.append(error)
 
     if len(errors) == len(video_paths) and not any(highlights.values()):
         return {"error": "; ".join(errors)}
 
-    return {"highlights": highlights}
+    return {"segments": segments_by_file, "highlights": highlights}
 
 
 class SessionDownloadCancelled(Exception):

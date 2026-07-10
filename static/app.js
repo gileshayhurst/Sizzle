@@ -12,6 +12,9 @@ const state = {
   currentJobId: null,
   resultJobId: null,
   lastPrompt: '',     // prompt used for the most recent Analyze call
+  pool: [],           // flat candidate array (buildCandidatePool output)
+  poolOrdered: [],    // pool sorted into priority order
+  sliderCustom: false,// true once the selection diverges from a priority prefix
   resultSegmentStarts: [],
   resultDownloadUrl: null,
   resultPath: null,
@@ -19,6 +22,195 @@ const state = {
   librarySort: 'newest',
   libraryEntries: [],
 };
+
+// ─── Priority selection model ───────────────────────────────────────────────
+// A "candidate" is one scored segment: {file, score, duration_seconds,
+// start_seconds, lines:[raw...]}. All math below is pure (no DOM, no network).
+
+const OPTIMAL_MIN_SCORE = 8;      // quality bar for the optimal cut
+const OPTIMAL_SOFT_CAP_SECONDS = 180;  // ~3 min soft cap on the optimal cut
+
+// Flatten the /analyze `segments` payload into one candidate array.
+// fileOrder is the array of filenames in state.files order (for tie-breaking).
+function buildCandidatePool(segmentsByFile, fileOrder) {
+  const pool = [];
+  fileOrder.forEach(file => {
+    (segmentsByFile[file] || []).forEach(seg => {
+      pool.push({
+        file,
+        score: seg.score,
+        duration_seconds: seg.duration_seconds,
+        start_seconds: seg.start_seconds,
+        lines: seg.lines,
+      });
+    });
+  });
+  return pool;
+}
+
+// Deterministic priority order: score desc, duration asc, file order, start asc.
+function sortByPriority(pool, fileOrder) {
+  const fileIndex = f => {
+    const i = fileOrder.indexOf(f);
+    return i === -1 ? fileOrder.length : i;
+  };
+  return [...pool].sort((a, b) =>
+    b.score - a.score ||
+    a.duration_seconds - b.duration_seconds ||
+    fileIndex(a.file) - fileIndex(b.file) ||
+    a.start_seconds - b.start_seconds
+  );
+}
+
+// Cumulative durations along the priority order — the slider's snap points.
+// Returns [d1, d1+d2, ...] (length === ordered.length).
+function cumulativeDurations(ordered) {
+  const sums = [];
+  let total = 0;
+  ordered.forEach(c => { total += c.duration_seconds; sums.push(total); });
+  return sums;
+}
+
+// The optimal cut: all candidates scoring >= OPTIMAL_MIN_SCORE, falling back to
+// the highest score present; trimmed to the soft cap but never below 1 segment.
+// Returns the optimal duration in seconds (a valid snap point).
+function optimalDuration(ordered) {
+  if (ordered.length === 0) return 0;
+  let qualifying = ordered.filter(c => c.score >= OPTIMAL_MIN_SCORE);
+  if (qualifying.length === 0) {
+    const top = ordered[0].score;  // ordered is score-desc, so [0] is highest
+    qualifying = ordered.filter(c => c.score === top);
+  }
+  // qualifying is a prefix of `ordered` by construction (highest-priority items).
+  // Trim from the end until under the soft cap, keeping at least one.
+  let dur = qualifying.reduce((s, c) => s + c.duration_seconds, 0);
+  while (qualifying.length > 1 && dur > OPTIMAL_SOFT_CAP_SECONDS) {
+    dur -= qualifying[qualifying.length - 1].duration_seconds;
+    qualifying = qualifying.slice(0, -1);
+  }
+  return dur;
+}
+
+// Given a target duration, return the priority PREFIX whose cumulative duration
+// is the largest snap point <= target, but always >= 1 segment.
+function prefixForDuration(ordered, targetSeconds) {
+  if (ordered.length === 0) return [];
+  const sums = cumulativeDurations(ordered);
+  let k = 1;  // always at least one segment
+  for (let i = 0; i < sums.length; i++) {
+    if (sums[i] <= targetSeconds + 1e-6) k = i + 1;
+  }
+  return ordered.slice(0, k);
+}
+
+// Merge new scored segments into the pool. Overlapping ranges in the same file
+// dedupe keeping the higher score. Returns the merged flat pool. Candidates from
+// buildCandidatePool lack end_seconds, so the overlap check reconstructs it from
+// start_seconds + duration_seconds.
+function mergeIntoPool(existingPool, segmentsByFile, fileOrder) {
+  const merged = [...existingPool];
+  const end = c => c.start_seconds + c.duration_seconds;
+  const overlaps = (a, b) =>
+    a.file === b.file && a.start_seconds < end(b) && b.start_seconds < end(a);
+  fileOrder.forEach(file => {
+    (segmentsByFile[file] || []).forEach(seg => {
+      const cand = {
+        file,
+        score: seg.score,
+        duration_seconds: seg.duration_seconds,
+        start_seconds: seg.start_seconds,
+        lines: seg.lines,
+      };
+      const hit = merged.find(m => overlaps(m, cand));
+      if (hit) {
+        if (cand.score > hit.score) Object.assign(hit, cand);
+      } else {
+        merged.push(cand);
+      }
+    });
+  });
+  return merged;
+}
+
+function _fmtSeconds(s) {
+  const m = Math.floor(s / 60);
+  const r = Math.round(s % 60);
+  return `${m}:${String(r).padStart(2, '0')}`;
+}
+
+// Replace the current selection with the given candidate list's lines,
+// applied to BOTH checked and highlighted (mirrors runAnalyze).
+function _applyCandidatesToSelection(candidates) {
+  state.files.forEach(f => {
+    state.checked[f.name] = new Set();
+    state.highlighted[f.name] = new Set();
+  });
+  candidates.forEach(c => {
+    c.lines.forEach(l => {
+      state.checked[c.file].add(l);
+      state.highlighted[c.file].add(l);
+    });
+  });
+}
+
+// Update slider min/max/marker/value WITHOUT changing the current selection.
+function _refreshSliderChromeOnly(value) {
+  const ordered = state.poolOrdered;
+  if (ordered.length < 2) return;
+  $('reel-length-row').classList.remove('hidden');
+  const sums = cumulativeDurations(ordered);
+  const slider = $('reel-slider');
+  slider.min = sums[0];
+  slider.max = sums[sums.length - 1];
+  slider.value = value == null ? sums[0] : value;
+  const optD = optimalDuration(ordered);
+  const pct = sums[sums.length - 1] > sums[0]
+    ? ((optD - sums[0]) / (sums[sums.length - 1] - sums[0])) * 100 : 0;
+  $('reel-optimal-marker').style.left = `${pct}%`;
+  $('reel-slider-min').textContent = _fmtSeconds(sums[0]);
+  $('reel-slider-max').textContent = _fmtSeconds(sums[sums.length - 1]);
+}
+
+// Rebuild the slider UI from state.poolOrdered. selectDuration: the duration to
+// select at (defaults to optimal). Mutates selection + DOM.
+function _refreshSlider(selectDuration) {
+  const ordered = state.poolOrdered;
+  if (ordered.length < 2) { $('reel-length-row').classList.add('hidden'); return; }
+  const optD = optimalDuration(ordered);
+  const target = selectDuration == null ? optD : selectDuration;
+  _refreshSliderChromeOnly(target);
+  _applySliderSelection(target);
+}
+
+// Apply the priority prefix for `target` seconds and update label + counts.
+function _applySliderSelection(target) {
+  const ordered = state.poolOrdered;
+  const prefix = prefixForDuration(ordered, target);
+  _applyCandidatesToSelection(prefix);
+  state.sliderCustom = false;
+
+  const selDur = prefix.reduce((s, c) => s + c.duration_seconds, 0);
+  $('reel-length-label').textContent =
+    `Reel length · ${_fmtSeconds(selDur)} · ${prefix.length} of ${ordered.length} segments`;
+  const status = document.querySelector('.reel-length-status');
+  if (status) status.classList.remove('custom');
+
+  if (state.activeFile) renderTranscript(state.activeFile);
+  state.files.forEach(f => refreshBadge(f.name));
+  updateGenerateBtn();
+  _saveSelections();
+  _savePool();
+}
+
+// Called when the user manually edits lines — mark the slider "custom".
+function markSliderCustom() {
+  if (state.poolOrdered.length < 2) return;
+  state.sliderCustom = true;
+  const status = document.querySelector('.reel-length-status');
+  if (status) status.classList.add('custom');
+  $('reel-length-label').textContent = 'Custom selection · drag slider to reset';
+  _savePool();
+}
 
 // ─── IndexedDB helpers (persist FileSystemDirectoryHandle across reloads) ────
 function _idbOpen() {
@@ -171,6 +363,38 @@ function _saveSelections() {
   }
 }
 
+function _savePool() {
+  if (!state.folder) return;
+  try {
+    localStorage.setItem('sizzle_pool_' + state.folder, JSON.stringify({
+      pool: state.pool,
+      sliderValue: parseFloat($('reel-slider')?.value || '0'),
+      custom: state.sliderCustom,
+    }));
+  } catch (_) {}
+}
+
+function _restorePool() {
+  if (!state.folder) return;
+  try {
+    const raw = localStorage.getItem('sizzle_pool_' + state.folder);
+    if (!raw) return;
+    const saved = JSON.parse(raw);
+    const fileNames = new Set(state.files.map(f => f.name));
+    state.pool = (saved.pool || []).filter(c => fileNames.has(c.file));
+    state.poolOrdered = sortByPriority(state.pool, state.files.map(f => f.name));
+    if (state.poolOrdered.length >= 2) {
+      if (saved.custom) {
+        // rebuild slider chrome without overwriting the restored selection
+        _refreshSliderChromeOnly(saved.sliderValue);
+        markSliderCustom();
+      } else {
+        _refreshSlider(saved.sliderValue);
+      }
+    }
+  } catch (_) {}
+}
+
 function _clearSelections() {
   // Remove the persisted payload so a page reload starts empty.
   if (state.folder) {
@@ -180,6 +404,13 @@ function _clearSelections() {
   // if the user navigates back without reloading.
   for (const filename of Object.keys(state.checked))     state.checked[filename]     = new Set();
   for (const filename of Object.keys(state.highlighted)) state.highlighted[filename] = new Set();
+  if (state.folder) {
+    try { localStorage.removeItem('sizzle_pool_' + state.folder); } catch (_) {}
+  }
+  state.pool = [];
+  state.poolOrdered = [];
+  state.sliderCustom = false;
+  $('reel-length-row')?.classList.add('hidden');
   $('analyze-add-row')?.classList.add('hidden');
   const addInput = $('analyze-add-input');
   if (addInput) addInput.value = '';
@@ -516,6 +747,8 @@ async function loadTranscripts(folder) {
   } catch (_) {
     // Malformed or unavailable localStorage — silently ignore
   }
+
+  _restorePool();
 }
 
 function showWorkspace() {
@@ -585,6 +818,17 @@ $('analyze-input').addEventListener('keydown', e => {
   if (e.key === 'Enter') runAnalyze();
 });
 
+$('reel-slider').addEventListener('input', e => {
+  const sums = cumulativeDurations(state.poolOrdered);
+  if (sums.length === 0) return;
+  // snap raw value to the nearest cumulative snap point
+  const raw = parseFloat(e.target.value);
+  let snapped = sums[0];
+  for (const s of sums) { if (Math.abs(s - raw) < Math.abs(snapped - raw)) snapped = s; }
+  e.target.value = snapped;
+  _applySliderSelection(snapped);
+});
+
 $('btn-analyze-add').addEventListener('click', runAddAnalyze);
 $('analyze-add-input').addEventListener('keydown', e => {
   if (e.key === 'Enter' && !e.shiftKey) runAddAnalyze();
@@ -645,17 +889,22 @@ async function runAnalyze() {
 
     state.lastPrompt = prompt;
 
-    // Apply returned highlights to BOTH sets so mode-switching preserves analysis
-    state.files.forEach(f => {
-      const lines = data.highlights[f.name] || [];
-      state.checked[f.name] = new Set(lines);
-      state.highlighted[f.name] = new Set(lines);
-    });
+    // Build the candidate pool from scored segments and select the optimal cut.
+    state.pool = buildCandidatePool(data.segments || {}, state.files.map(f => f.name));
+    state.poolOrdered = sortByPriority(state.pool, state.files.map(f => f.name));
 
-    if (state.activeFile) renderTranscript(state.activeFile);
-    state.files.forEach(f => refreshBadge(f.name));
-    updateGenerateBtn();
-    _saveSelections();
+    if (state.poolOrdered.length >= 2) {
+      _refreshSlider();  // selects optimal, renders, saves
+    } else {
+      // 0 or 1 candidate: no slider — fall back to selecting whatever we have.
+      _applyCandidatesToSelection(state.poolOrdered);
+      $('reel-length-row').classList.add('hidden');
+      if (state.activeFile) renderTranscript(state.activeFile);
+      state.files.forEach(f => refreshBadge(f.name));
+      updateGenerateBtn();
+      _saveSelections();
+      _savePool();
+    }
     $('analyze-add-row').classList.remove('hidden');
 
   } catch (err) {
@@ -686,19 +935,37 @@ async function runAddAnalyze() {
       return;
     }
 
-    // Union — add new lines without removing existing selections
+    const fileOrder = state.files.map(f => f.name);
+    // Merge new candidates into the pool; re-rank; widen the slider range.
+    state.pool = mergeIntoPool(state.pool, data.segments || {}, fileOrder);
+    state.poolOrdered = sortByPriority(state.pool, fileOrder);
+
+    // Union the new qualifying (score >= OPTIMAL_MIN_SCORE) segments' lines into
+    // the current selection, preserving the "add" intent.
     state.files.forEach(f => {
-      const lines = data.highlights[f.name] || [];
       if (!state.checked[f.name])     state.checked[f.name]     = new Set();
       if (!state.highlighted[f.name]) state.highlighted[f.name] = new Set();
-      lines.forEach(l => state.checked[f.name].add(l));
-      lines.forEach(l => state.highlighted[f.name].add(l));
     });
+    Object.entries(data.segments || {}).forEach(([file, segs]) => {
+      segs.filter(s => s.score >= OPTIMAL_MIN_SCORE).forEach(s => {
+        s.lines.forEach(l => {
+          state.checked[file].add(l);
+          state.highlighted[file].add(l);
+        });
+      });
+    });
+
+    // Selection is generally no longer a clean prefix -> custom state.
+    if (state.poolOrdered.length >= 2) {
+      _refreshSliderChromeOnly($('reel-slider').value);
+      markSliderCustom();
+    }
 
     if (state.activeFile) renderTranscript(state.activeFile);
     state.files.forEach(f => refreshBadge(f.name));
     updateGenerateBtn();
     _saveSelections();
+    _savePool();
 
   } catch (err) {
     $('analyze-error').textContent = _analyzeErrorMessage(err);
@@ -864,6 +1131,7 @@ function renderCheckboxMode(fileObj) {
       _updateHeaderCbState(headerCb, group.lines, s);
       refreshBadge(fileObj.name);
       updateGenerateBtn();
+      markSliderCustom();
       _saveSelections();
     };
     labelEl.addEventListener('click', toggleGroup);
@@ -922,6 +1190,7 @@ function renderCheckboxMode(fileObj) {
         _updateHeaderCbState(headerCb, group.lines, s);
         refreshBadge(fileObj.name);
         updateGenerateBtn();
+        markSliderCustom();
         _saveSelections();
       };
       lineEl.addEventListener('click', toggleLine);
@@ -943,6 +1212,7 @@ function checkAllInFile(filename) {
   renderTranscript(filename);
   refreshBadge(filename);
   updateGenerateBtn();
+  markSliderCustom();
   _saveSelections();
 }
 
@@ -952,6 +1222,7 @@ function uncheckAllInFile(filename) {
   renderTranscript(filename);
   refreshBadge(filename);
   updateGenerateBtn();
+  markSliderCustom();
   _saveSelections();
 }
 
@@ -966,7 +1237,7 @@ let _dragActive = false;
 let _dragSetTo = null;   // true = highlighting, false = un-highlighting
 let _hlAbortController = null;  // cancels stale mousedown/mousemove listeners
 document.addEventListener('mouseup', () => {
-  if (_dragActive) _saveSelections();
+  if (_dragActive) { markSliderCustom(); _saveSelections(); }
   _dragActive = false;
 });
 
@@ -1024,6 +1295,7 @@ function renderHighlightMode(fileObj) {
         _applyHighlight(fileObj.name, lineEl, setTo);
         refreshBadge(fileObj.name);
         updateGenerateBtn();
+        markSliderCustom();
         _saveSelections();
       }
     });
@@ -1094,6 +1366,7 @@ function highlightAllInFile(filename) {
   renderTranscript(filename);
   refreshBadge(filename);
   updateGenerateBtn();
+  markSliderCustom();
   _saveSelections();
 }
 
@@ -1103,6 +1376,7 @@ function clearHighlightsInFile(filename) {
   renderTranscript(filename);
   refreshBadge(filename);
   updateGenerateBtn();
+  markSliderCustom();
   _saveSelections();
 }
 
