@@ -144,6 +144,21 @@
                       placeholder="Add another angle…"></textarea>
             <button id="btn-analyze-add" type="button" class="btn-analyze-add">+ Add to selection</button>
           </div>
+          <div id="reel-length-row" class="reel-length-row hidden">
+            <div class="reel-length-status">
+              <span id="reel-length-label">Reel length</span>
+            </div>
+            <div class="reel-slider-wrap">
+              <input id="reel-slider" type="range" class="reel-slider"
+                     min="0" max="0" step="0.1" value="0"
+                     aria-label="Reel length in seconds">
+              <div id="reel-optimal-marker" class="reel-optimal-marker" aria-hidden="true"></div>
+            </div>
+            <div class="reel-slider-ends">
+              <span id="reel-slider-min">0:00</span>
+              <span id="reel-slider-max">0:00</span>
+            </div>
+          </div>
         </div>
         <div class="transcript-zone">
           <div id="transcript-header">
