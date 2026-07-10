@@ -103,6 +103,35 @@ function prefixForDuration(ordered, targetSeconds) {
   return ordered.slice(0, k);
 }
 
+// Merge new scored segments into the pool. Overlapping ranges in the same file
+// dedupe keeping the higher score. Returns the merged flat pool. Candidates from
+// buildCandidatePool lack end_seconds, so the overlap check reconstructs it from
+// start_seconds + duration_seconds.
+function mergeIntoPool(existingPool, segmentsByFile, fileOrder) {
+  const merged = [...existingPool];
+  const end = c => c.start_seconds + c.duration_seconds;
+  const overlaps = (a, b) =>
+    a.file === b.file && a.start_seconds < end(b) && b.start_seconds < end(a);
+  fileOrder.forEach(file => {
+    (segmentsByFile[file] || []).forEach(seg => {
+      const cand = {
+        file,
+        score: seg.score,
+        duration_seconds: seg.duration_seconds,
+        start_seconds: seg.start_seconds,
+        lines: seg.lines,
+      };
+      const hit = merged.find(m => overlaps(m, cand));
+      if (hit) {
+        if (cand.score > hit.score) Object.assign(hit, cand);
+      } else {
+        merged.push(cand);
+      }
+    });
+  });
+  return merged;
+}
+
 function _fmtSeconds(s) {
   const m = Math.floor(s / 60);
   const r = Math.round(s % 60);
@@ -865,19 +894,37 @@ async function runAddAnalyze() {
       return;
     }
 
-    // Union — add new lines without removing existing selections
+    const fileOrder = state.files.map(f => f.name);
+    // Merge new candidates into the pool; re-rank; widen the slider range.
+    state.pool = mergeIntoPool(state.pool, data.segments || {}, fileOrder);
+    state.poolOrdered = sortByPriority(state.pool, fileOrder);
+
+    // Union the new qualifying (score >= OPTIMAL_MIN_SCORE) segments' lines into
+    // the current selection, preserving the "add" intent.
     state.files.forEach(f => {
-      const lines = data.highlights[f.name] || [];
       if (!state.checked[f.name])     state.checked[f.name]     = new Set();
       if (!state.highlighted[f.name]) state.highlighted[f.name] = new Set();
-      lines.forEach(l => state.checked[f.name].add(l));
-      lines.forEach(l => state.highlighted[f.name].add(l));
     });
+    Object.entries(data.segments || {}).forEach(([file, segs]) => {
+      segs.filter(s => s.score >= OPTIMAL_MIN_SCORE).forEach(s => {
+        s.lines.forEach(l => {
+          state.checked[file].add(l);
+          state.highlighted[file].add(l);
+        });
+      });
+    });
+
+    // Selection is generally no longer a clean prefix -> custom state.
+    if (state.poolOrdered.length >= 2) {
+      _refreshSliderChromeOnly($('reel-slider').value);
+      markSliderCustom();
+    }
 
     if (state.activeFile) renderTranscript(state.activeFile);
     state.files.forEach(f => refreshBadge(f.name));
     updateGenerateBtn();
     _saveSelections();
+    _savePool();
 
   } catch (err) {
     $('analyze-error').textContent = _analyzeErrorMessage(err);
