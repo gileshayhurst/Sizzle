@@ -20,6 +20,86 @@ const state = {
   libraryEntries: [],
 };
 
+// ─── Priority selection model ───────────────────────────────────────────────
+// A "candidate" is one scored segment: {file, score, duration_seconds,
+// start_seconds, lines:[raw...]}. All math below is pure (no DOM, no network).
+
+const OPTIMAL_MIN_SCORE = 8;      // quality bar for the optimal cut
+const OPTIMAL_SOFT_CAP_SECONDS = 180;  // ~3 min soft cap on the optimal cut
+
+// Flatten the /analyze `segments` payload into one candidate array.
+// fileOrder is the array of filenames in state.files order (for tie-breaking).
+function buildCandidatePool(segmentsByFile, fileOrder) {
+  const pool = [];
+  fileOrder.forEach(file => {
+    (segmentsByFile[file] || []).forEach(seg => {
+      pool.push({
+        file,
+        score: seg.score,
+        duration_seconds: seg.duration_seconds,
+        start_seconds: seg.start_seconds,
+        lines: seg.lines,
+      });
+    });
+  });
+  return pool;
+}
+
+// Deterministic priority order: score desc, duration asc, file order, start asc.
+function sortByPriority(pool, fileOrder) {
+  const fileIndex = f => {
+    const i = fileOrder.indexOf(f);
+    return i === -1 ? fileOrder.length : i;
+  };
+  return [...pool].sort((a, b) =>
+    b.score - a.score ||
+    a.duration_seconds - b.duration_seconds ||
+    fileIndex(a.file) - fileIndex(b.file) ||
+    a.start_seconds - b.start_seconds
+  );
+}
+
+// Cumulative durations along the priority order — the slider's snap points.
+// Returns [d1, d1+d2, ...] (length === ordered.length).
+function cumulativeDurations(ordered) {
+  const sums = [];
+  let total = 0;
+  ordered.forEach(c => { total += c.duration_seconds; sums.push(total); });
+  return sums;
+}
+
+// The optimal cut: all candidates scoring >= OPTIMAL_MIN_SCORE, falling back to
+// the highest score present; trimmed to the soft cap but never below 1 segment.
+// Returns the optimal duration in seconds (a valid snap point).
+function optimalDuration(ordered) {
+  if (ordered.length === 0) return 0;
+  let qualifying = ordered.filter(c => c.score >= OPTIMAL_MIN_SCORE);
+  if (qualifying.length === 0) {
+    const top = ordered[0].score;  // ordered is score-desc, so [0] is highest
+    qualifying = ordered.filter(c => c.score === top);
+  }
+  // qualifying is a prefix of `ordered` by construction (highest-priority items).
+  // Trim from the end until under the soft cap, keeping at least one.
+  let dur = qualifying.reduce((s, c) => s + c.duration_seconds, 0);
+  while (qualifying.length > 1 && dur > OPTIMAL_SOFT_CAP_SECONDS) {
+    dur -= qualifying[qualifying.length - 1].duration_seconds;
+    qualifying = qualifying.slice(0, -1);
+  }
+  return dur;
+}
+
+// Given a target duration, return the priority PREFIX whose cumulative duration
+// is the largest snap point <= target, but always >= 1 segment.
+function prefixForDuration(ordered, targetSeconds) {
+  if (ordered.length === 0) return [];
+  const sums = cumulativeDurations(ordered);
+  let k = 1;  // always at least one segment
+  for (let i = 0; i < sums.length; i++) {
+    if (sums[i] <= targetSeconds + 1e-6) k = i + 1;
+  }
+  return ordered.slice(0, k);
+}
+
 // ─── IndexedDB helpers (persist FileSystemDirectoryHandle across reloads) ────
 function _idbOpen() {
   return new Promise((resolve, reject) => {
