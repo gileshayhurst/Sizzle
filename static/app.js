@@ -1043,6 +1043,7 @@ function renderCheckboxMode(fileObj) {
       _updateHeaderCbState(headerCb, group.lines, s);
       refreshBadge(fileObj.name);
       updateGenerateBtn();
+      markSliderCustom();
       _saveSelections();
     };
     labelEl.addEventListener('click', toggleGroup);
@@ -1101,6 +1102,7 @@ function renderCheckboxMode(fileObj) {
         _updateHeaderCbState(headerCb, group.lines, s);
         refreshBadge(fileObj.name);
         updateGenerateBtn();
+        markSliderCustom();
         _saveSelections();
       };
       lineEl.addEventListener('click', toggleLine);
@@ -1122,6 +1124,7 @@ function checkAllInFile(filename) {
   renderTranscript(filename);
   refreshBadge(filename);
   updateGenerateBtn();
+  markSliderCustom();
   _saveSelections();
 }
 
@@ -1131,6 +1134,7 @@ function uncheckAllInFile(filename) {
   renderTranscript(filename);
   refreshBadge(filename);
   updateGenerateBtn();
+  markSliderCustom();
   _saveSelections();
 }
 
@@ -1145,7 +1149,7 @@ let _dragActive = false;
 let _dragSetTo = null;   // true = highlighting, false = un-highlighting
 let _hlAbortController = null;  // cancels stale mousedown/mousemove listeners
 document.addEventListener('mouseup', () => {
-  if (_dragActive) _saveSelections();
+  if (_dragActive) { markSliderCustom(); _saveSelections(); }
   _dragActive = false;
 });
 
@@ -1203,6 +1207,7 @@ function renderHighlightMode(fileObj) {
         _applyHighlight(fileObj.name, lineEl, setTo);
         refreshBadge(fileObj.name);
         updateGenerateBtn();
+        markSliderCustom();
         _saveSelections();
       }
     });
@@ -1273,6 +1278,7 @@ function highlightAllInFile(filename) {
   renderTranscript(filename);
   refreshBadge(filename);
   updateGenerateBtn();
+  markSliderCustom();
   _saveSelections();
 }
 
@@ -1282,6 +1288,7 @@ function clearHighlightsInFile(filename) {
   renderTranscript(filename);
   refreshBadge(filename);
   updateGenerateBtn();
+  markSliderCustom();
   _saveSelections();
 }
 
