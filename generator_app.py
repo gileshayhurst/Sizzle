@@ -1183,10 +1183,6 @@ def create_app(testing: bool = False) -> Flask:
             pass  # no-op on non-Windows (Linux/macOS) where explorer doesn't exist
         return jsonify({"ok": True})
 
-        @app.get("/spike")
-        def spike_page():
-            return send_file(Path(__file__).parent / "spike.html")
-
     return app
 
 

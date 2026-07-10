@@ -133,7 +133,11 @@ async function _autoSaveReelResult(jobId, filename, entryId) {
   const timeoutId = setTimeout(() => controller.abort(), 120_000);
   let blob;
   try {
-    const resp = await fetch(`${GENERATOR_URL}/video/${jobId}`, { signal: controller.signal });
+    // Browser path has no server job — fetch from library-video via entry id.
+    const videoSrc = jobId
+      ? `${GENERATOR_URL}/video/${jobId}`
+      : `${GENERATOR_URL}/library-video/${entryId}`;
+    const resp = await fetch(videoSrc, { signal: controller.signal });
     if (!resp.ok) throw new Error(`Video fetch failed: ${resp.status}`);
     blob = await resp.blob();
   } finally {
@@ -1185,6 +1189,31 @@ async function submitGenerate(mode, selections) {
   $('gen-bar').style.width = '0%';
   $('topbar-controls').classList.add('hidden');
 
+  // In cloud mode, try the browser encode path if WebCodecs is available. This
+  // moves the heavy H.264/AAC encode off the free-plan server into the user's
+  // hardware encoder. Any failure falls through to the unchanged server pipeline.
+  if (APP_MODE === 'cloud' && window.ReelEncoder?.isSupported()) {
+    try {
+      await _submitGenerateBrowser(mode, selections, prompt, outputFilename);
+      return;
+    } catch (err) {
+      if (err.name === 'AbortError') {
+        // User cancelled — don't fall through to the server.
+        showScreen('screen-workspace');
+        $('topbar-controls').classList.remove('hidden');
+        return;
+      }
+      appendLog('gen-log', `⚠ Browser encode failed (${err.message}) — retrying on server…`);
+      $('gen-log').innerHTML = '';
+      $('gen-bar').style.width = '0%';
+    }
+  }
+
+  // Server path (local mode, unsupported browser, or browser fallback).
+  await _submitGenerateServer(mode, selections, prompt, outputFilename);
+}
+
+async function _submitGenerateServer(mode, selections, prompt, outputFilename) {
   let resp, jobData;
   try {
     resp = await fetch(GENERATOR_URL + '/generate', {
@@ -1215,6 +1244,85 @@ async function submitGenerate(mode, selections) {
 
   state.currentJobId = job_id;
   watchGeneration(job_id);
+}
+
+async function _submitGenerateBrowser(mode, selections, prompt, outputFilename) {
+  const controller = new AbortController();
+  _genTerminated = false;
+
+  // Cancel tears down the AbortController — there is no server job to DELETE.
+  $('btn-cancel-gen').onclick = () => {
+    _genTerminated = true;
+    controller.abort();
+    showScreen('screen-workspace');
+    $('topbar-controls').classList.remove('hidden');
+  };
+
+  // POST /plan — get the ordered segment list and presigned URLs.
+  appendLog('gen-log', '· Planning segments…');
+  const planResp = await fetch(GENERATOR_URL + '/plan', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      session_key: state.folder,
+      mode,
+      selections,
+      prompt,
+      output_filename: outputFilename,
+    }),
+    signal: controller.signal,
+  });
+  if (!planResp.ok) {
+    const body = await planResp.json().catch(() => ({}));
+    throw new Error(body.error || `Plan failed: ${planResp.status}`);
+  }
+  const plan = await planResp.json();
+  plan.prompt = prompt;
+
+  $('gen-bar').style.width = '5%';
+
+  // ReelEncoder.generate drives the encode, R2 upload, and library record.
+  const result = await window.ReelEncoder.generate(plan, {
+    onLog: (msg) => appendLog('gen-log', msg),
+    onProgress: (done, tot) => {
+      const pct = tot > 0 ? Math.round((done / tot) * 100) : 0;
+      $('gen-bar').style.width = Math.max(pct, 5) + '%';
+    },
+    signal: controller.signal,
+    generatorUrl: GENERATOR_URL,
+  });
+
+  if (_genTerminated) return; // cancelled mid-encode
+
+  // result: { entry_id, filename, duration_seconds, clip_count, segment_starts }
+  _genTerminated = true;
+  $('gen-bar').style.width = '100%';
+  state.resultJobId = null; // no server job — playback goes via library-video
+  _clearSelections();
+
+  showResult({ ...result, download_url: null });
+
+  // Auto-save (uses entry_id when jobId is null — see _autoSaveReelResult).
+  if (result.entry_id) {
+    const openBtn = $('btn-open-folder');
+    openBtn.textContent = 'Saving…';
+    openBtn.disabled = true;
+    _autoSaveReelResult(null, result.filename, result.entry_id)
+      .then(saved => {
+        openBtn.disabled = false;
+        if (saved) {
+          openBtn.textContent = `✓ Saved to ${saved.folderName}`;
+          openBtn.dataset.savedPath = saved.localFolderPath || '';
+          openBtn.dataset.savedFilename = result.filename;
+        } else {
+          openBtn.textContent = 'Download';
+        }
+      })
+      .catch(() => {
+        openBtn.disabled = false;
+        openBtn.textContent = 'Download';
+      });
+  }
 }
 
 function watchGeneration(jobId) {
@@ -1379,7 +1487,10 @@ function showResult(result) {
   // Always serve through the generator endpoint — it serves directly from the
   // local temp file (kept alive until container restart) so playback works
   // even when the R2 upload failed or is slow.
-  const src = `${GENERATOR_URL}/video/${state.resultJobId}`;
+  // Browser path has no server job — serve from library-video directly.
+  const src = state.resultJobId
+    ? `${GENERATOR_URL}/video/${state.resultJobId}`
+    : `${GENERATOR_URL}/library-video/${result.entry_id}`;
   $('result-source').src = src;
   $('result-video').load();
 
