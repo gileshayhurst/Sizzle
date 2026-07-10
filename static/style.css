@@ -481,23 +481,20 @@ body {
 }
 .footer-input::placeholder { color: var(--muted); }
 .footer-input:focus { outline: none; border-color: var(--amber); box-shadow: 0 0 0 3px rgba(224,123,57,.25); }
-/* Output filename: editable base name + fixed, non-editable .mp4 suffix */
+/* Output filename: a plain editable base name. The reel is always saved as .mp4,
+   appended automatically at generation time — no visible format tag on the field. */
 .filename-field {
-  display: inline-flex; align-items: center; width: 200px;
+  display: inline-flex; align-items: stretch; width: 210px;
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm);
-  padding: 0 11px; overflow: hidden;
+  overflow: hidden;
   transition: border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
 }
 .filename-field:focus-within { border-color: var(--amber); box-shadow: 0 0 0 3px rgba(224,123,57,.25); }
 .filename-field .filename-input {
   flex: 1; min-width: 0;
   border: none; background: transparent; outline: none;
-  padding: 8px 0; color: var(--ink);
+  padding: 8px 11px; color: var(--ink);
   font-family: var(--font-mono); font-size: 12px;
-}
-.filename-field .filename-ext {
-  flex-shrink: 0; user-select: none; padding-left: 1px;
-  color: var(--muted); font-family: var(--font-mono); font-size: 12px;
 }
 .prompt-input { width: 100%; }
 .btn-generate {
