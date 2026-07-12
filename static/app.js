@@ -720,7 +720,10 @@ function pollTranscription(jobId, folder) {
 async function loadTranscripts(folder) {
   const [transcResp, libResp] = await Promise.all([
     fetch(`/transcripts?folder=${encodeURIComponent(folder)}`),
-    fetch(GENERATOR_URL + '/library').catch(() => null),
+    // Timeout: a sleeping Render generator holds the connection open for its
+    // whole cold start (30-60s+), which would silently block the workspace
+    // from opening. Give up after 4s — same handled path as "unreachable".
+    fetch(GENERATOR_URL + '/library', { signal: AbortSignal.timeout(4000) }).catch(() => null),
   ]);
   const data = await transcResp.json();
   state.files = data.files;
@@ -2212,6 +2215,10 @@ $('btn-close-player').addEventListener('click', () => {
 
 // Load recent folders on startup
 loadRecentFolders();
+
+// Wake the generator service (Render free tier sleeps after ~15 min idle) so
+// it's usually up by the time the user opens a folder or generates a reel.
+fetch(GENERATOR_URL + '/library').catch(() => {});
 
 // ─── Folder badge dropdown ────────────────────────────────────────────────────
 let _folderDropdown = null;
