@@ -1959,6 +1959,12 @@ function _renderCardBody(body, card, entry, dateStr) {
   const iconRow = document.createElement('div');
   iconRow.style.cssText = 'display:flex;gap:2px;flex-shrink:0';
 
+  const downloadBtn = document.createElement('button');
+  downloadBtn.className = 'reel-btn-icon';
+  downloadBtn.title = 'Download';
+  downloadBtn.setAttribute('aria-label', 'Download');
+  downloadBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M12 4v10m0 0l-4-4m4 4l4-4M5 19h14" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
   const editBtn = document.createElement('button');
   editBtn.className = 'reel-btn-icon';
   editBtn.title = 'Edit';
@@ -1971,6 +1977,7 @@ function _renderCardBody(body, card, entry, dateStr) {
   deleteBtn.setAttribute('aria-label', 'Delete');
   deleteBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M5 7h14M10 7V5h4v2M7.5 7l.8 12h7.4l.8-12" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 
+  iconRow.appendChild(downloadBtn);
   iconRow.appendChild(editBtn);
   iconRow.appendChild(deleteBtn);
   nameRow.appendChild(nameEl);
@@ -2074,6 +2081,15 @@ function _renderCardBody(body, card, entry, dateStr) {
   deleteBtn.addEventListener('click', () => _showDeleteConfirm(body, card, entry, dateStr, actions));
 
   editBtn.addEventListener('click', () => _showEditForm(body, card, entry, dateStr));
+
+  downloadBtn.addEventListener('click', () => {
+    const a = document.createElement('a');
+    a.href = `${GENERATOR_URL}/library-video/${entry.id}?download=1`;
+    a.download = entry.filename || 'reel.mp4';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  });
 }
 
 function _showDeleteConfirm(body, card, entry, dateStr, actions) {
