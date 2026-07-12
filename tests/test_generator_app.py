@@ -390,6 +390,34 @@ def test_library_video_download_flag_sets_attachment(client, tmp_path):
     assert not without_flag.headers.get("Content-Disposition", "").startswith("attachment")
 
 
+def test_library_video_cloud_sanitizes_filename_in_disposition():
+    """The cloud presigned-URL Content-Disposition must not let a filename break
+    out of the quoted token or inject a header (", \\, CR, LF stripped)."""
+    entry = {
+        "id": "dl-test-2",
+        "filename": 'evil".mp4\r\nX-Injected: 1',
+        "path": "/nonexistent/reel.mp4",   # forces the cloud fallback branch
+        "reel_s3_key": "sessions/abc/reel.mp4",
+    }
+    captured = {}
+
+    def fake_presigned(key, **kwargs):
+        captured.update(kwargs)
+        return "https://r2.example.com/vid.mp4"
+
+    from generator_app import create_app
+    client = create_app(testing=True).test_client()
+    with patch("generator_app._load_library", return_value=[entry]), \
+         patch("generator_app.storage.is_cloud", return_value=True), \
+         patch("generator_app.storage.presigned_url", side_effect=fake_presigned):
+        resp = client.get("/library-video/dl-test-2?download=1")
+    assert resp.status_code == 302
+    disp = captured["content_disposition"]
+    assert disp == 'attachment; filename="evil.mp4X-Injected: 1"'
+    assert '"' not in disp[len("attachment; filename=\""):-1]
+    assert "\r" not in disp and "\n" not in disp
+
+
 # ─── Library edit ─────────────────────────────────────────────────────────────
 
 def test_patch_library_entry_updates_title_and_notes(client):

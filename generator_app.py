@@ -1,6 +1,7 @@
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -1072,12 +1073,16 @@ def create_app(testing: bool = False) -> Flask:
         if storage.is_cloud() and entry.get("reel_s3_key"):
             try:
                 disposition = "attachment" if download else "inline"
+                # Strip chars that could break out of the quoted filename token or
+                # inject a header (", \, CR, LF). filename is server-side data, but
+                # it flows unescaped into the presigned URL's Content-Disposition.
+                safe_filename = re.sub(
+                    r'["\\\r\n]', "", entry.get("filename", "reel.mp4")
+                ) or "reel.mp4"
                 url = storage.presigned_url(
                     entry["reel_s3_key"],
                     content_type="video/mp4",
-                    content_disposition=(
-                        f'{disposition}; filename="{entry.get("filename", "reel.mp4")}"'
-                    ),
+                    content_disposition=f'{disposition}; filename="{safe_filename}"',
                 )
                 return redirect(url)
             except Exception as exc:
