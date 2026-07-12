@@ -366,6 +366,30 @@ def test_delete_library_entry_not_found_returns_404(client):
     assert resp.status_code == 404
 
 
+def test_library_video_download_flag_sets_attachment(client, tmp_path):
+    """GET /library-video/<id>?download=1 serves the file as an attachment."""
+    reel_file = tmp_path / "reel.mp4"
+    reel_file.write_bytes(b"fake reel")
+    entry = {
+        "id": "dl-test-1",
+        "filename": "reel.mp4",
+        "path": str(reel_file),
+        "source_folder": "test/",
+        "prompt": "test",
+        "duration_seconds": 10,
+        "clip_count": 1,
+        "segment_starts": [],
+        "created_at": "2026-07-12T00:00:00",
+    }
+    with patch("generator_app._load_library", return_value=[entry]):
+        with_flag = client.get("/library-video/dl-test-1?download=1")
+        without_flag = client.get("/library-video/dl-test-1")
+    assert with_flag.status_code == 200
+    assert with_flag.headers["Content-Disposition"].startswith("attachment")
+    assert "reel.mp4" in with_flag.headers["Content-Disposition"]
+    assert not without_flag.headers.get("Content-Disposition", "").startswith("attachment")
+
+
 # ─── Library edit ─────────────────────────────────────────────────────────────
 
 def test_patch_library_entry_updates_title_and_notes(client):

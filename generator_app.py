@@ -1051,10 +1051,16 @@ def create_app(testing: bool = False) -> Flask:
         entry = next((e for e in entries if e["id"] == entry_id), None)
         if not entry:
             return jsonify({"error": "not found"}), 404
+        download = request.args.get("download") == "1"
         # Local file first — works as long as the generator container hasn't restarted.
         path = Path(entry["path"])
         if path.is_file():
-            return send_file(str(path), conditional=True)
+            return send_file(
+                str(path),
+                conditional=True,
+                as_attachment=download,
+                download_name=entry.get("filename", "reel.mp4"),
+            )
         # Fallback: redirect the browser straight to a presigned R2 URL instead of
         # proxying every byte through this host (proxying costs host bandwidth on
         # every view — the dominant ongoing bandwidth drain on a metered plan).
@@ -1065,11 +1071,12 @@ def create_app(testing: bool = False) -> Flask:
         # The browser handles Range/seeking against R2 directly.
         if storage.is_cloud() and entry.get("reel_s3_key"):
             try:
+                disposition = "attachment" if download else "inline"
                 url = storage.presigned_url(
                     entry["reel_s3_key"],
                     content_type="video/mp4",
                     content_disposition=(
-                        f'inline; filename="{entry.get("filename", "reel.mp4")}"'
+                        f'{disposition}; filename="{entry.get("filename", "reel.mp4")}"'
                     ),
                 )
                 return redirect(url)
