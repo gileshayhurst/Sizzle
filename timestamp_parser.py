@@ -24,11 +24,3 @@ def parse_scored_timestamps(response: str) -> list[tuple[str, int]] | None:
                 score = 5
         result.append((rng, score))
     return result or None
-
-
-def parse_timestamps(response: str) -> list[str] | None:
-    """Backward-compatible: return just the ranges, dropping any scores."""
-    scored = parse_scored_timestamps(response)
-    if scored is None:
-        return None
-    return [rng for rng, _ in scored]

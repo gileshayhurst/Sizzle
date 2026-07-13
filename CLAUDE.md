@@ -29,10 +29,6 @@ The Bright Studio conversion is complete — the app is fully on this light syst
 # Start the generator service (port 5001)
 .\venv\Scripts\python.exe -c "from generator_app import create_app; create_app().run(debug=True, port=5001)"
 
-# Run the legacy CLI tool
-.\venv\Scripts\python.exe sizzle.py <videos_folder> --prompt words here
-.\venv\Scripts\python.exe sizzle.py <videos_folder> --prompt words here --output custom_name.mp4
-
 # Generate synthetic test data (MP4+TXT pairs, 5 business categories)
 .\venv\Scripts\python.exe create_test_data.py <output_folder>
 ```
@@ -130,13 +126,9 @@ Switches between local filesystem and S3/R2 based on `APP_MODE` env var. Both ba
 - **`shared.py`** — `parse_transcript_lines(raw_text)`: parses `[M:SS] Speaker: text` lines into dicts with `raw`, `timestamp`, `text`, `seconds`, `minute_bucket`. Used by both `app.py` and `generator_app.py`.
 - **`loader.py`** — `scan_videos()`: finds `.mp4 .mov .avi .mkv .webm` files in a folder, sorted alphabetically.
 - **`transcriber.py`** — `transcribe_video()`: runs the faster-whisper `base` model (CTranslate2, `compute_type="int8"`) with `word_timestamps=True`, splits segments on terminal punctuation via `_split_into_sentences()`. Output format: `[M:SS] Speaker: text`. Transcripts cached as `{video}.txt`; delete the `.txt` to force re-transcription. `transcribe_video(video_path, model=...)` accepts a pre-constructed model.
-- **`claude_client.py`** — `query_claude(transcript, prompt)`: sends transcript + prompt to `claude-opus-4-7`. System prompt instructs Claude to return 2–4 `M:SS-M:SS` ranges (or `none`), starting as late and ending as early as possible.
-- **`timestamp_parser.py`** — `parse_timestamps()`: extracts `M:SS-M:SS` ranges from Claude's response with a regex.
+- **`claude_client.py`** — `query_claude(transcript, prompt)`: sends transcript + prompt to `claude-opus-4-8` with the transcript block prompt-cached (`cache_control: ephemeral`). System prompt instructs Claude to return every relevant `M:SS-M:SS` range scored `|1..10` (or `none`), starting as late and ending as early as possible.
+- **`timestamp_parser.py`** — `parse_scored_timestamps()`: extracts `M:SS-M:SS|score` pairs from Claude's response with a regex; missing scores default to 5, out-of-range scores clamp to 1..10.
 - **`video_editor.py`** — `extract_clip()`: re-encodes to H.264/AAC with fade-out (required — stream copy produces P/B-frame starts that freeze on playback). `stitch_clips()`: concat demuxer with `-c copy` (safe because clips are I-frame-aligned). `get_video_dimensions()`, `parse_timestamp_to_seconds()`.
-
-### CLI tool (legacy) — `sizzle.py`
-
-Orchestrates the same lower-level modules directly without Flask. Loads Whisper once up front, iterates videos, calls Claude, extracts clips. Still functional but not the active development target.
 
 ## Persistence files (project root, gitignored)
 

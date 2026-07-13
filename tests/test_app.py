@@ -532,11 +532,6 @@ def test_parse_scored_timestamps_commas_and_whitespace():
     ]
 
 
-def test_parse_timestamps_still_returns_ranges_only():
-    from timestamp_parser import parse_timestamps
-    assert parse_timestamps("0:05-0:20|9\n1:00-1:10|7") == ["0:05-0:20", "1:00-1:10"]
-
-
 def test_analyze_missing_prompt_returns_400(client, tmp_path):
     resp = client.post("/analyze", json={"folder": str(tmp_path)})
     assert resp.status_code == 400
