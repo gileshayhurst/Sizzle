@@ -32,3 +32,13 @@ app_out.txt
 gen_err.txt
 gen_out.txt
 pytest_output.txt
+
+# Local test/demo media folders (videos are ignored globally above; this also
+# hides their transcripts and keeps git status clean)
+NOBU/
+FORVEN VIDEOS/
+chicken_tutorials/
+test_videos/
+
+# npm workspace — exists only to vendor mediabunny into static/vendor/
+node_modules/
