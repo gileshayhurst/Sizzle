@@ -9,7 +9,7 @@ Frontend/UX work is governed by two root docs — read them before touching `tem
 - **[PRODUCT.md](PRODUCT.md)** — strategic: register (`product`), users (paying market-research clients), purpose, brand personality, anti-references, design principles, WCAG AA.
 - **[DESIGN.md](DESIGN.md)** — visual system, matched to the parent **Forven / HumanLens** platform. North Star: **"The Bright Studio"** (light chrome, dark video stage, single warm **Studio Amber** accent). Tokens, type scale, component states, and named rules live here; `.impeccable/design.json` is the machine-readable sidecar.
 
-An active redesign is converting the app from the outgoing dark navy theme to this light system, surface by surface. New/edited UI must follow DESIGN.md (not the legacy dark styles it may sit next to).
+The Bright Studio conversion is complete — the app is fully on this light system. New/edited UI must follow DESIGN.md.
 
 ## Commands
 
