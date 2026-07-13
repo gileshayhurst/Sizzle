@@ -33,7 +33,20 @@ def query_claude(transcript: str, prompt: str) -> str:
         messages=[
             {
                 "role": "user",
-                "content": f"Transcript:\n{transcript}\n\nPrompt: {prompt}"
+                "content": [
+                    {
+                        # Stable prefix: cached across repeated analyzes of the
+                        # same folder (additive analyze re-sends this verbatim).
+                        "type": "text",
+                        "text": f"Transcript:\n{transcript}",
+                        "cache_control": {"type": "ephemeral"},
+                    },
+                    {
+                        # Varying suffix: must stay after the breakpoint.
+                        "type": "text",
+                        "text": f"\n\nPrompt: {prompt}",
+                    },
+                ],
             }
         ]
     )
