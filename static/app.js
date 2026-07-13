@@ -858,6 +858,15 @@ async function _postAnalyze(prompt) {
   }
 }
 
+// Shared message strip under the analyze bar. isNotice=true renders it as a
+// neutral status (e.g. zero matches) instead of a red error.
+function _showAnalyzeMsg(msg, isNotice = false) {
+  const el = $('analyze-error');
+  el.textContent = msg;
+  el.classList.toggle('notice', isNotice);
+  el.classList.remove('hidden');
+}
+
 // Turn an error from the analyze flow into a user-facing message.
 function _analyzeErrorMessage(err) {
   if (err.message === 'Failed to fetch') {
@@ -885,8 +894,7 @@ async function runAnalyze() {
     const { resp, data } = await _postAnalyze(prompt);
 
     if (!resp.ok) {
-      $('analyze-error').textContent = data.error || 'Analyze failed';
-      $('analyze-error').classList.remove('hidden');
+      _showAnalyzeMsg(data.error || 'Analyze failed');
       return;
     }
 
@@ -908,11 +916,13 @@ async function runAnalyze() {
       _saveSelections();
       _savePool();
     }
+    if (state.poolOrdered.length === 0) {
+      _showAnalyzeMsg('No matching moments found. Try rephrasing what you’re looking for.', true);
+    }
     $('analyze-add-row').classList.remove('hidden');
 
   } catch (err) {
-    $('analyze-error').textContent = _analyzeErrorMessage(err);
-    $('analyze-error').classList.remove('hidden');
+    _showAnalyzeMsg(_analyzeErrorMessage(err));
   } finally {
     $('btn-analyze').textContent = 'Analyze';
     $('btn-analyze').disabled = false;
@@ -933,9 +943,14 @@ async function runAddAnalyze() {
     const { resp, data } = await _postAnalyze(prompt);
 
     if (!resp.ok) {
-      $('analyze-error').textContent = data.error || 'Analyze failed';
-      $('analyze-error').classList.remove('hidden');
+      _showAnalyzeMsg(data.error || 'Analyze failed');
       return;
+    }
+
+    const newSegmentCount = Object.values(data.segments || {})
+      .reduce((n, segs) => n + segs.length, 0);
+    if (newSegmentCount === 0) {
+      _showAnalyzeMsg('No new moments matched that prompt. Your current selection is unchanged.', true);
     }
 
     const fileOrder = state.files.map(f => f.name);
@@ -971,8 +986,7 @@ async function runAddAnalyze() {
     _savePool();
 
   } catch (err) {
-    $('analyze-error').textContent = _analyzeErrorMessage(err);
-    $('analyze-error').classList.remove('hidden');
+    _showAnalyzeMsg(_analyzeErrorMessage(err));
   } finally {
     $('btn-analyze-add').textContent = '+ Add to selection';
     $('btn-analyze-add').disabled = false;

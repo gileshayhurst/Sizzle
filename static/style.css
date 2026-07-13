@@ -185,7 +185,10 @@ body {
   color: var(--muted); background: transparent; border: none; font-family: inherit; font-weight: 500;
   transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
 }
-.mode-btn.active { background: var(--amber); color: #fff; }
+/* Amber-tint pill + amber-ink text (same treatment as .nav-tab.active): 4.68:1 AA.
+   Never white on bright --amber — that's 2.97:1 (DESIGN.md: bright amber is not
+   a white-text fill). */
+.mode-btn.active { background: var(--amber-tint); color: var(--amber-ink); font-weight: 600; }
 
 /* TAB PANELS */
 .tab-panel { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
@@ -276,6 +279,8 @@ body {
   outline: none; border-color: var(--amber); box-shadow: 0 0 0 3px rgba(224,123,57,.25);
 }
 .error-msg { color: var(--danger); font-size: 12px; }
+/* Neutral status variant (e.g. "no matching moments") — informative, not a failure */
+.error-msg.notice { color: var(--body); }
 
 /* RECENT FOLDERS */
 .recent-folders-section { margin-top: 8px; padding-top: 18px; border-top: 1px solid var(--border); }
@@ -312,8 +317,10 @@ body {
   animation: progress-indeterminate 1.2s ease-in-out infinite;
 }
 @keyframes progress-indeterminate {
-  from { margin-left: -40%; }
-  to   { margin-left: 100%; }
+  /* translateX % is relative to the bar's own 40% width: -100% of self = one
+     bar-width off the left edge, 250% of self = the full track width. */
+  from { transform: translateX(-100%); }
+  to   { transform: translateX(250%); }
 }
 
 .log-box {
