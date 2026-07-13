@@ -419,6 +419,32 @@ function _clearSelections() {
 // ─── DOM refs ─────────────────────────────────────────────────────────────────
 const $ = id => document.getElementById(id);
 
+// ─── Modal a11y: open/close with focus management + Escape ──────────────────
+// Modals never stack, so a single return-focus slot suffices.
+let _modalReturnFocus = null;
+
+function _openModal(overlayId, focusId) {
+  _modalReturnFocus = document.activeElement;
+  $(overlayId).classList.remove('hidden');
+  const target = $(focusId);
+  if (target) target.focus();
+}
+
+function _closeModal(overlayId) {
+  $(overlayId).classList.add('hidden');
+  if (_modalReturnFocus && document.contains(_modalReturnFocus)) _modalReturnFocus.focus();
+  _modalReturnFocus = null;
+}
+
+// Escape closes whichever modal is open (routed through each modal's own
+// close/cancel handler so cleanup logic stays in one place).
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Escape') return;
+  if (!$('library-player-overlay').classList.contains('hidden')) $('btn-close-player').click();
+  else if (!$('not-downloaded-modal').classList.contains('hidden')) $('btn-not-downloaded-close').click();
+  else if (!$('loading-folder-modal').classList.contains('hidden')) $('btn-loading-folder-cancel').click();
+});
+
 // ─── "Not downloaded" modal ───────────────────────────────────────────────────
 let _modalEntry = null;
 
@@ -428,11 +454,11 @@ function _showNotDownloadedModal(entry) {
   $('not-downloaded-body').textContent =
     `"${entry.filename}" has not been saved to your local machine.`;
   $('btn-not-downloaded-save').textContent = `Save to ${folderName}`;
-  $('not-downloaded-modal').classList.remove('hidden');
+  _openModal('not-downloaded-modal', 'btn-not-downloaded-close');
 }
 
 $('btn-not-downloaded-close').addEventListener('click', () => {
-  $('not-downloaded-modal').classList.add('hidden');
+  _closeModal('not-downloaded-modal');
   _modalEntry = null;
 });
 
@@ -440,14 +466,14 @@ $('btn-not-downloaded-view').addEventListener('click', () => {
   if (_modalEntry) {
     window.open(`${GENERATOR_URL}/library-video/${_modalEntry.id}`, '_blank');
   }
-  $('not-downloaded-modal').classList.add('hidden');
+  _closeModal('not-downloaded-modal');
   _modalEntry = null;
 });
 
 $('btn-not-downloaded-save').addEventListener('click', async () => {
   if (!_modalEntry) return;
   const entry = _modalEntry;
-  $('not-downloaded-modal').classList.add('hidden');
+  _closeModal('not-downloaded-modal');
   _modalEntry = null;
 
   let handle = await _idbLoad('sizzle_output_dir_handle').catch(() => null);
@@ -540,12 +566,12 @@ function _showLoadingModal(name) {
   bar.style.width = '';               // let the .indeterminate width apply
   bar.classList.add('indeterminate');
   $('loading-folder-status').textContent = 'Opening folder…';
-  $('loading-folder-modal').classList.remove('hidden');
+  _openModal('loading-folder-modal', 'btn-loading-folder-cancel');
   return _loadingCtx;
 }
 
 function _closeLoadingModal() {
-  $('loading-folder-modal').classList.add('hidden');
+  _closeModal('loading-folder-modal');
   $('loading-folder-bar').classList.remove('indeterminate');
   _loadingCtx = null;
 }
@@ -1093,7 +1119,7 @@ function renderCheckboxMode(fileObj) {
   const scroll = $('transcript-scroll');
   scroll.innerHTML = '';
   if (!fileObj || fileObj.lines.length === 0) {
-    scroll.textContent = 'No transcript available.';
+    scroll.textContent = 'No transcript for this video yet — re-open the folder to transcribe it, or pick another file from the sidebar.';
     return;
   }
 
@@ -1268,7 +1294,7 @@ function renderHighlightMode(fileObj) {
 
   scroll.innerHTML = '';
   if (!fileObj || fileObj.lines.length === 0) {
-    scroll.textContent = 'No transcript available.';
+    scroll.textContent = 'No transcript for this video yet — re-open the folder to transcribe it, or pick another file from the sidebar.';
     return;
   }
 
@@ -1920,7 +1946,7 @@ function renderLibrary() {
   if (entries.length === 0) {
     const empty = document.createElement('div');
     empty.className = 'library-empty';
-    empty.textContent = 'No reels generated yet.';
+    empty.textContent = 'No reels yet. Open a folder in the Create tab, describe the moments you need, and generate your first reel — it will appear here.';
     grid.appendChild(empty);
     return;
   }
@@ -2232,7 +2258,7 @@ function openLibraryPlayer(entry) {
     `${displayName} — "${entry.prompt}"`;
   // Show the overlay before calling load() — browsers defer loading media in
   // display:none elements, so the video must be visible before we trigger load.
-  $('library-player-overlay').classList.remove('hidden');
+  _openModal('library-player-overlay', 'btn-close-player');
   $('library-video').src = src;
   $('library-video').load();
 }
@@ -2240,7 +2266,7 @@ function openLibraryPlayer(entry) {
 $('btn-close-player').addEventListener('click', () => {
   $('library-video').pause();
   $('library-video').src = '';
-  $('library-player-overlay').classList.add('hidden');
+  _closeModal('library-player-overlay');
 });
 
 // Load recent folders on startup
