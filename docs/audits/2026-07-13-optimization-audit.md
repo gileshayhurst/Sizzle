@@ -98,10 +98,69 @@ Rule. The Bright Studio system is applied consistently and reads native to Forve
 2. `/impeccable harden` — items 2, 4, 6 (zero-match state, dialog semantics, empty states).
 3. `/impeccable adapt` — item 12 (narrow topbar).
 
-## Part 2 — Code health
+## Part 2 — Code health (ponytail-audit, report only)
 
-(filled by Task 4)
+Scope: the Python modules and `static/app.js`. Ranked biggest cut first; one
+line per finding — what to cut, what replaces it. Correctness/perf are out of
+scope here (see Part 1 for UI issues).
 
-## Part 3 — Repo hygiene flags
+1. `delete:` **sizzle.py legacy CLI (119 lines) and its private helpers** —
+   `loader.load_transcripts()` and `timestamp_parser.parse_timestamps()` exist
+   only for sizzle.py (plus their own tests). Retiring the CLI removes ~160
+   source lines and ~80 test lines. Replacement: nothing — the web app covers
+   the workflow. **User decision**: CLAUDE.md calls it "still functional but
+   not the active development target." [sizzle.py, loader.py:6, timestamp_parser.py:29]
+2. `delete:` **`storage.read_file_bytes()`** — zero callers and zero tests
+   since `/library-video` switched from byte-proxying to redirects; CLAUDE.md
+   already documents it as caller-less. 12 lines. Replacement: nothing (git
+   history keeps it if ORB ever forces the proxy rollback). [storage.py:158-169]
+3. `delete:` **`mp4-muxer` npm dependency** — package.json lists it but it was
+   never vendored or imported; the browser encoder uses mediabunny alone (which
+   muxes itself). Replacement: nothing. [package.json]
+4. `shrink:` **`runAnalyze` / `runAddAnalyze` share ~30 lines of busy-state /
+   error / finally scaffolding** — extract a `_withAnalyzeBusy(btn, input,
+   idleLabel, fn)` wrapper next time either changes. [app.js:869-981]
+5. `delete:` **unused z-index tokens** — `--z-sticky`, `--z-toast`,
+   `--z-tooltip` are defined but never referenced. 3 lines; keep only if
+   toasts/tooltips are actually planned. [style.css:90-94]
+6. `shrink:` **`storage.load_library()` hand-rolls the same missing/corrupt
+   JSON handling as `read_json()`** for a different local path — worth folding
+   only if the local library path ever unifies with `library_key()`. Low
+   value; note only. [storage.py:229-239]
 
-(filled by Task 4)
+**The headline file: `static/app.js` (2,709 lines).** Not a delete — it works
+and is well-commented — but it bundles seven responsibilities: state +
+localStorage persistence, folder picker / cloud upload, transcript rendering +
+selection modes, slider/priority math, generation (server + browser paths),
+library UI, and prompt history. Don't split proactively; when a section is
+next touched, that's the moment to lift it out (natural seams: the pool/slider
+math and the library UI are the most self-contained).
+
+`net: ~-280 lines, -1 dep possible (mp4-muxer); plus ~-240 more if sizzle.py is retired.`
+
+## Part 3 — Repo hygiene flags (nothing deleted — flagged for user decision)
+
+Untracked root-level items as of 2026-07-13 (`git status --short`), grouped by
+recommended action:
+
+**Delete candidates (scratch/debris):**
+- `_fix_gen_escape.py` — one-off fix script
+- `transcribe_output.py` — scratch transcription script
+- `set` — stray file, likely a shell-redirection accident
+- `ChickenVideos.txt`, `WingReactions2.txt`, `riverside_grocery.txt`,
+  `NOBU.txt`, `NOBU2.txt`, `NOBU3.txt`, `NOBU_short.txt` — transcript/scratch
+  text files at repo root
+
+**Add to .gitignore (intentional local data, shouldn't show as untracked):**
+- `NOBU/`, `FORVEN VIDEOS/`, `chicken_tutorials/`, `test_videos/` — local media
+  folders used for testing
+- `node_modules/` — plus `package.json` / `package-lock.json`: these exist only
+  to vendor mediabunny into `static/vendor/`; either gitignore node_modules and
+  commit package.json (dropping `mp4-muxer`, per Part 2 #3), or delete all
+  three if re-vendoring isn't expected
+
+**Commit (project documents currently untracked):**
+- 8 plan files under `docs/superpowers/plans/` and 2 specs under
+  `docs/superpowers/specs/` from May–July are untracked while newer ones are
+  committed — commit them for a consistent history, or gitignore the
+  directories deliberately.
