@@ -71,19 +71,25 @@ function _parseVtt(vtt) {
   return cues;
 }
 
-// Draw one caption line, bottom-centre, white text on a translucent box.
+// Draw up to two caption lines, bottom-centre, white text on a translucent box.
+// Cue text may contain a '\n' (two-line cue from captions.build_webvtt).
 function _drawCaption(ctx, text, width, height, fontSize) {
+  const lines = String(text).split('\n').slice(0, 2);
   ctx.font = `bold ${fontSize}px sans-serif`;
   ctx.textAlign = 'center';
-  ctx.textBaseline = 'bottom';
-  const metrics = ctx.measureText(text);
+  ctx.textBaseline = 'alphabetic';
   const padX = fontSize * 0.5, padY = fontSize * 0.3;
-  const boxW = Math.min(width * 0.9, metrics.width + padX * 2);
-  const y = height - fontSize;
+  const lineH = Math.round(fontSize * 1.25);
+  const widest = Math.max(...lines.map(l => ctx.measureText(l).width));
+  const boxW = Math.min(width * 0.9, widest + padX * 2);
+  const boxH = lineH * lines.length + padY * 2;
+  const boxTop = height - fontSize * 0.6 - boxH;   // small margin from the bottom
   ctx.fillStyle = 'rgba(0,0,0,0.55)';
-  ctx.fillRect((width - boxW) / 2, y - fontSize - padY, boxW, fontSize + padY * 2);
+  ctx.fillRect((width - boxW) / 2, boxTop, boxW, boxH);
   ctx.fillStyle = '#fff';
-  ctx.fillText(text, width / 2, y);
+  lines.forEach((l, i) => {
+    ctx.fillText(l, width / 2, boxTop + padY + lineH * i + fontSize);
+  });
 }
 
 // ── Title card: draw text with fade-in on the shared canvas + silent audio ──────

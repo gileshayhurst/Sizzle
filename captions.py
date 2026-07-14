@@ -10,6 +10,46 @@ WEBVTT_MIME = "text/vtt"
 # module never imports the Flask app.
 _DEFAULT_TITLE_CARD_DURATION = 5.0
 
+# Broadcast-style caption sizing: at most two lines of LINE_MAX_CHARS on screen,
+# so a long utterance becomes a sequence of short cues instead of one wall of
+# text. MAX_CUE_SEC caps a single cue so a trailing clip gap can't leave the last
+# caption lingering.
+LINE_MAX_CHARS = 42
+MAX_CUE_SEC = 6.0
+
+
+def _wrap_lines(words, max_chars):
+    """Greedy word-wrap into lines of <= max_chars (a word longer than max_chars
+    becomes its own over-long line rather than being split mid-word)."""
+    lines, cur, cur_len = [], [], 0
+    for w in words:
+        add = len(w) + (1 if cur else 0)
+        if cur and cur_len + add > max_chars:
+            lines.append(" ".join(cur))
+            cur, cur_len = [], 0
+            add = len(w)
+        cur.append(w)
+        cur_len += add
+    if cur:
+        lines.append(" ".join(cur))
+    return lines
+
+
+def _chunk_line(text):
+    """Split one transcript line into ordered cue strings, each <= two lines of
+    <= LINE_MAX_CHARS joined by '\\n'. Empty/whitespace input -> []."""
+    words = (text or "").split()
+    if not words:
+        return []
+    lines = _wrap_lines(words, LINE_MAX_CHARS)
+    return ["\n".join(lines[i:i + 2]) for i in range(0, len(lines), 2)]
+
+
+def _vlen(cue):
+    """Visible characters in a cue (excludes the joining newline) — used so the
+    line break never skews a chunk's proportional time share."""
+    return len(cue) - cue.count("\n")
+
 
 def collect_caption_lines(all_lines, selected_raws, seg_start, seg_end):
     """Selected respondent lines whose source time falls in [seg_start, seg_end).
@@ -56,17 +96,34 @@ def build_webvtt(segments, title_card_duration: float = _DEFAULT_TITLE_CARD_DURA
         clip_end = clip_start + clip_dur
         lines = seg.get("caption_lines", [])
         for i, line in enumerate(lines):
-            cue_start = clip_start + (line["seconds"] - seg["start_sec"])
+            # The line's on-screen window: from its source time to the next
+            # selected line's start (same segment) or the clip end.
+            win_start = clip_start + (line["seconds"] - seg["start_sec"])
             if i + 1 < len(lines):
-                cue_end = clip_start + (lines[i + 1]["seconds"] - seg["start_sec"])
+                win_end = clip_start + (lines[i + 1]["seconds"] - seg["start_sec"])
             else:
-                cue_end = clip_end
-            cue_start = max(clip_start, min(cue_start, clip_end))
-            cue_end = max(cue_start, min(cue_end, clip_end))
-            text = (line["text"] or "").strip()
-            if not text or cue_end <= cue_start:
+                win_end = clip_end
+            win_start = max(clip_start, min(win_start, clip_end))
+            win_end = max(win_start, min(win_end, clip_end))
+
+            chunks = _chunk_line(line.get("text"))
+            if not chunks or win_end <= win_start:
                 continue
-            cues.append((cue_start, cue_end, text))
+
+            # Distribute the window across chunks proportionally to their length,
+            # anchoring each chunk to its slot; MAX_CUE_SEC only ends a cue early
+            # (a gap until the next chunk's start), never shifts later chunks.
+            window = win_end - win_start
+            total = sum(_vlen(c) for c in chunks) or 1
+            acc = 0
+            for c in chunks:
+                cue_start = win_start + window * (acc / total)
+                acc += _vlen(c)
+                nominal_end = win_start + window * (acc / total)
+                cue_end = min(nominal_end, cue_start + MAX_CUE_SEC)
+                if cue_end <= cue_start:
+                    continue
+                cues.append((cue_start, cue_end, c))
         reel_t = clip_end
 
     if not cues:
