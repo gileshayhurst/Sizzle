@@ -1131,6 +1131,29 @@ def create_app(testing: bool = False) -> Flask:
                 return jsonify({"error": f"cloud fetch failed: {exc}"}), 502
         return jsonify({"error": "file not found on disk"}), 404
 
+    @app.get("/library-captions/<entry_id>")
+    def serve_library_captions(entry_id):
+        entries = _load_library()
+        entry = next((e for e in entries if e["id"] == entry_id), None)
+        if not entry:
+            return jsonify({"error": "not found"}), 404
+        # Local sidecar first (works until the container restarts).
+        fname = entry.get("captions_filename")
+        if fname:
+            sidecar = Path(entry["path"]).with_name(fname)
+            if sidecar.is_file():
+                return app.response_class(
+                    sidecar.read_text(encoding="utf-8"), mimetype=WEBVTT_MIME)
+        # Cloud: the VTT is tiny text — proxy it directly (unlike metered video).
+        key = entry.get("captions_key")
+        if key and storage.is_cloud():
+            try:
+                data = storage.read_file_bytes(key)
+                return app.response_class(data, mimetype=WEBVTT_MIME)
+            except Exception:
+                return jsonify({"error": "captions not found"}), 404
+        return jsonify({"error": "no captions"}), 404
+
     @app.get("/library")
     def get_library():
         entries = _load_library()

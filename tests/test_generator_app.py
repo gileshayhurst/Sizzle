@@ -390,6 +390,34 @@ def test_library_video_download_flag_sets_attachment(client, tmp_path):
     assert not without_flag.headers.get("Content-Disposition", "").startswith("attachment")
 
 
+def test_library_captions_serves_local_sidecar(tmp_path, monkeypatch):
+    import generator_app
+    reel = tmp_path / "reel.mp4"
+    reel.write_bytes(b"x")
+    (tmp_path / "reel.vtt").write_text("WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nhi\n",
+                                       encoding="utf-8")
+    app = generator_app.create_app(testing=True)
+    monkeypatch.setattr(generator_app, "_load_library", lambda: [
+        {"id": "e1", "path": str(reel), "filename": "reel.mp4",
+         "captions_filename": "reel.vtt"},
+    ])
+    c = app.test_client()
+    resp = c.get("/library-captions/e1")
+    assert resp.status_code == 200
+    assert resp.mimetype == "text/vtt"
+    assert b"WEBVTT" in resp.data
+
+
+def test_library_captions_404_when_no_captions(monkeypatch):
+    import generator_app
+    app = generator_app.create_app(testing=True)
+    monkeypatch.setattr(generator_app, "_load_library", lambda: [
+        {"id": "e2", "path": "", "filename": "reel.mp4"},  # no caption fields
+    ])
+    resp = app.test_client().get("/library-captions/e2")
+    assert resp.status_code == 404
+
+
 def test_library_video_cloud_sanitizes_filename_in_disposition():
     """The cloud presigned-URL Content-Disposition must not let a filename break
     out of the quoted token or inject a header (", \\, CR, LF stripped)."""
