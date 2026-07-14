@@ -246,6 +246,23 @@ window.ReelEncoder = {
     }
     log('✓ Reel uploaded to cloud storage');
 
+    // ── Upload the caption track (if the plan produced one) ─────────────────
+    let captionsKey = null;
+    if (plan.captions_vtt && plan.captions_put_url) {
+      const capResp = await fetch(plan.captions_put_url, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'text/vtt' },
+        body: plan.captions_vtt,
+        signal,
+      });
+      if (capResp.ok) {
+        captionsKey = plan.captions_key;
+        log('✓ Captions uploaded');
+      } else {
+        log(`· Captions upload skipped (${capResp.status})`);
+      }
+    }
+
     // ── Record the reel in the shared library ───────────────────────────────────
     const libResp = await fetch(`${generatorUrl}/library`, {
       method: 'POST',
@@ -257,6 +274,7 @@ window.ReelEncoder = {
         duration_seconds: Math.round(totalDurationSec),
         clip_count: segments.length,
         segment_starts: segmentStarts,
+        captions_key: captionsKey,
       }),
       signal,
     });

@@ -975,6 +975,14 @@ def create_app(testing: bool = False) -> Flask:
             if not segments:
                 return jsonify({"error": "No segments found in selections"}), 422
 
+            captions_vtt = build_webvtt(segments)
+            captions_key = None
+            captions_put_url = None
+            if captions_vtt:
+                stem = Path(output_filename).stem
+                captions_key = f"{session_key}/{stem}.vtt"
+                captions_put_url = storage.presigned_put_url(captions_key, expires=7200)
+
             # Probe dimensions from the first video's presigned URL (cheap, ~0.1s)
             try:
                 width, height = get_video_dimensions(segments[0]["ffmpeg_input"])
@@ -992,6 +1000,9 @@ def create_app(testing: bool = False) -> Flask:
                 "height": height,
                 "reel_key": reel_key,
                 "presigned_put_url": presigned_put,
+                "captions_vtt": captions_vtt,
+                "captions_key": captions_key,
+                "captions_put_url": captions_put_url,
                 "segments": [
                     {
                         "video": seg["video_name"],
@@ -1027,6 +1038,9 @@ def create_app(testing: bool = False) -> Flask:
             "created_at": datetime.now().isoformat(timespec="seconds"),
             "reel_s3_key": f"{session_key}/{output_filename}",
         }
+        captions_key = (body.get("captions_key") or "").strip()
+        if captions_key:
+            entry["captions_key"] = captions_key
         _library_add(entry)
         return jsonify({"id": entry["id"]})
 

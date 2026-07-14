@@ -108,6 +108,41 @@ def test_plan_returns_segment_list_with_correct_shape(cloud_client, tmp_path):
     assert seg["title_lines"][2] == "Segment 1 / 1"
 
 
+def test_plan_returns_captions_fields(cloud_client, tmp_path):
+    session_key = "sessions/test456"
+    transcript = "[0:10] Speaker: This is great content.\n[0:25] Speaker: End."
+    raw_line = "[0:10] Speaker: This is great content."
+
+    txt_path = tmp_path / "interview.txt"
+    txt_path.write_text(transcript, encoding="utf-8")
+
+    def fake_download(key, local_path):
+        if key.endswith(".txt"):
+            Path(local_path).write_text(transcript, encoding="utf-8")
+
+    presigned_get = "https://r2.example.com/interview.webm?sig=xyz"
+
+    with patch("generator_app.storage.list_keys",
+               return_value=[f"{session_key}/interview.webm", f"{session_key}/interview.txt"]), \
+         patch("generator_app.storage.download_file", side_effect=fake_download), \
+         patch("generator_app.storage.presigned_url", return_value=presigned_get), \
+         patch("generator_app.storage.presigned_put_url", return_value="https://r2.example.com/put"), \
+         patch("generator_app.get_video_duration", return_value=60.0), \
+         patch("generator_app.get_video_dimensions", return_value=(1280, 720)):
+
+        resp = cloud_client.post("/plan", json={
+            "session_key": session_key,
+            "selections": {"interview.webm": [raw_line]},
+            "output_filename": "reel.mp4",
+        })
+
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["captions_key"].endswith(".vtt")
+    assert data["captions_vtt"].startswith("WEBVTT")
+    assert "captions_put_url" in data
+
+
 # ─── POST /library ────────────────────────────────────────────────────────────
 
 def test_library_post_returns_400_without_required_fields(cloud_client):
@@ -143,6 +178,19 @@ def test_library_post_creates_entry_with_correct_reel_s3_key(cloud_client):
     assert entry["source_folder"] == "abc123/"
     assert "created_at" in entry
     assert "id" in entry
+
+
+def test_library_records_captions_key(cloud_client, monkeypatch):
+    import generator_app
+    captured = {}
+    monkeypatch.setattr(generator_app, "_library_add", lambda e: captured.setdefault("e", e))
+    resp = cloud_client.post("/library", json={
+        "session_key": "sessions/abc",
+        "output_filename": "reel.mp4",
+        "captions_key": "sessions/abc/reel.vtt",
+    })
+    assert resp.status_code == 200
+    assert captured["e"]["captions_key"] == "sessions/abc/reel.vtt"
 
 
 def test_library_post_returns_same_id_as_entry(cloud_client):
