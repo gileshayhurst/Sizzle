@@ -36,6 +36,7 @@ from flask_sock import Sock
 from loader import scan_videos
 from video_editor import check_ffmpeg, extract_clip, parse_timestamp_to_seconds, stitch_clips, stitch_clips_to_pipe
 from shared import parse_transcript_lines as _parse_transcript_lines, filter_generated_reels as _filter_generated_reels
+from captions import build_webvtt, collect_caption_lines, WEBVTT_MIME
 import storage
 
 LIBRARY_PATH = Path(__file__).parent / "sizzle_library.json"
@@ -339,14 +340,15 @@ def _build_segment_list(
         all_lines = _parse_transcript_lines(txt_path.read_text(encoding="utf-8"))
         ffmpeg_input = video_urls.get(vp.name, str(vp)) if video_urls else str(vp)
         duration = get_video_duration(ffmpeg_input)
-        segs = _group_lines_into_segments(all_lines, set(selected_raws), video_duration=duration)
+        selected_set = set(selected_raws)
+        segs = _group_lines_into_segments(all_lines, selected_set, video_duration=duration)
         if segs:
-            grouped.append((vp, segs, ffmpeg_input))
+            grouped.append((vp, segs, ffmpeg_input, all_lines, selected_set))
 
-    total_segs = sum(len(segs) for _, segs, _ in grouped)
+    total_segs = sum(len(segs) for _, segs, _, _, _ in grouped)
     result = []
     seg_num = 0
-    for vp, segs, ffmpeg_input in grouped:
+    for vp, segs, ffmpeg_input, all_lines, selected_set in grouped:
         for start_sec, end_sec in segs:
             seg_num += 1
             result.append({
@@ -355,6 +357,8 @@ def _build_segment_list(
                 "ffmpeg_input": ffmpeg_input,
                 "start_sec": start_sec,
                 "end_sec": end_sec,
+                "caption_lines": collect_caption_lines(
+                    all_lines, selected_set, start_sec, end_sec),
                 "title_lines": [
                     vp.stem,
                     f"from {_format_seconds(start_sec)}",
@@ -727,6 +731,30 @@ def _run_generation_impl(job_id: str, folder: str,
         # Only record the S3 key when the upload actually succeeded; otherwise
         # the library endpoint would redirect to a non-existent R2 object.
         library_entry["reel_s3_key"] = f"{session_key}/{output_filename}"
+
+    # ── Captions: derive a WebVTT track from the same segments ───────────
+    vtt = build_webvtt(segments)
+    if vtt:
+        stem = Path(output_filename).stem
+        if storage.is_cloud() and session_key:
+            captions_key = f"{session_key}/{stem}.vtt"
+            try:
+                # upload_bytes, not upload_file/upload_stream: the reel goes via
+                # upload_stream (an invariant the cloud tests guard); captions are
+                # a small in-memory text payload, so skip the temp-file round-trip.
+                storage.upload_bytes(
+                    captions_key, vtt.encode("utf-8"), WEBVTT_MIME)
+                library_entry["captions_key"] = captions_key
+            except Exception as exc:
+                _append_log(job_id, f"· Captions upload skipped: {exc}")
+        else:
+            try:
+                sidecar = Path(output_path).with_suffix(".vtt")
+                sidecar.write_text(vtt, encoding="utf-8")
+                library_entry["captions_filename"] = sidecar.name
+            except Exception as exc:
+                _append_log(job_id, f"· Captions sidecar skipped: {exc}")
+
     _library_add(library_entry)
 
     # Schedule cleanup of the cloud session temp dir 1 hour after generation.

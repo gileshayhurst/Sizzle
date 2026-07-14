@@ -78,6 +78,30 @@ def test_download_retrieves_file(monkeypatch, tmp_path):
     assert out.read_bytes() == b"clip bytes"
 
 
+# ── upload_bytes ───────────────────────────────────────────────────────────────
+
+def test_upload_bytes_writes_file_local(monkeypatch, tmp_path):
+    s = reload_storage(monkeypatch, tmp_path)
+    s.upload_bytes("sessions/abc/reel.vtt", b"WEBVTT\n", "text/vtt")
+    dest = tmp_path / "sessions" / "abc" / "reel.vtt"
+    assert dest.read_bytes() == b"WEBVTT\n"
+
+
+def test_upload_bytes_puts_object_with_content_type_cloud(monkeypatch, tmp_path):
+    s = reload_storage(monkeypatch, tmp_path, mode="cloud")
+    monkeypatch.setenv("S3_BUCKET", "test-bucket")
+    monkeypatch.setenv("S3_ACCESS_KEY", "key")
+    monkeypatch.setenv("S3_SECRET_KEY", "secret")
+    mock_s3 = MagicMock()
+    with patch("storage._s3", return_value=mock_s3), \
+         patch("storage._bucket", return_value="test-bucket"):
+        s.upload_bytes("sessions/abc/reel.vtt", b"WEBVTT\n", "text/vtt")
+    mock_s3.put_object.assert_called_once_with(
+        Bucket="test-bucket", Key="sessions/abc/reel.vtt",
+        Body=b"WEBVTT\n", ContentType="text/vtt",
+    )
+
+
 # ── read_json / write_json (local backend) ────────────────────────────────────
 
 def test_write_then_read_json(monkeypatch, tmp_path):

@@ -1422,3 +1422,63 @@ def test_build_segment_list_uses_video_urls_for_ffmpeg_input(tmp_path):
         result = _build_segment_list([vp], {"video.webm": ["[0:05] Speaker: Hi there."]},
                                      video_urls={"video.webm": presigned})
     assert result[0]["ffmpeg_input"] == presigned
+
+
+# ─── Captions (Task 2) ────────────────────────────────────────────────────────
+
+def test_build_segment_list_attaches_caption_lines(tmp_path):
+    import generator_app
+    from pathlib import Path
+
+    vid = tmp_path / "clip.mp4"
+    vid.write_bytes(b"")
+    (tmp_path / "clip.txt").write_text(
+        "[0:10] Guest: first selected line\n"
+        "[0:12] Guest: second selected line\n"
+        "[0:20] Guest: unselected\n",
+        encoding="utf-8",
+    )
+    selections = {"clip.mp4": [
+        "[0:10] Guest: first selected line",
+        "[0:12] Guest: second selected line",
+    ]}
+
+    import unittest.mock as m
+    with m.patch("generator_app.get_video_duration", return_value=60.0):
+        segs = generator_app._build_segment_list([Path(vid)], selections)
+
+    assert len(segs) == 1
+    cl = segs[0]["caption_lines"]
+    assert [c["text"] for c in cl] == ["first selected line", "second selected line"]
+    assert [c["seconds"] for c in cl] == [10.0, 12.0]
+
+
+def test_local_generation_writes_vtt_sidecar(client, tmp_path):
+    video = tmp_path / "clip.mp4"
+    video.touch()
+    txt = tmp_path / "clip.txt"
+    txt.write_text("[0:00] Speaker: Hello world\n", encoding="utf-8")
+
+    captured = {}
+
+    def fake_add(entry):
+        captured["entry"] = entry
+
+    with patch("generator_app._library_add", side_effect=fake_add), \
+         patch("generator_app.make_title_card"), \
+         patch("generator_app.extract_clip"), \
+         patch("generator_app.stitch_clips"), \
+         patch("generator_app.check_ffmpeg"), \
+         patch("generator_app.get_video_dimensions", return_value=(1920, 1080)):
+        resp = client.post("/generate", json={
+            "folder": str(tmp_path),
+            "prompt": "test",
+            "output_filename": "reel.mp4",
+            "selections": {"clip.mp4": ["[0:00] Speaker: Hello world"]},
+        })
+        assert resp.status_code == 200
+
+    sidecar = tmp_path / "reel.vtt"
+    assert sidecar.exists()
+    assert sidecar.read_text(encoding="utf-8").startswith("WEBVTT")
+    assert captured["entry"]["captions_filename"] == "reel.vtt"
