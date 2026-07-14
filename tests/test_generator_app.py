@@ -1510,3 +1510,41 @@ def test_local_generation_writes_vtt_sidecar(client, tmp_path):
     assert sidecar.exists()
     assert sidecar.read_text(encoding="utf-8").startswith("WEBVTT")
     assert captured["entry"]["captions_filename"] == "reel.vtt"
+
+
+def test_download_captioned_runs_ffmpeg_subtitles(tmp_path, monkeypatch):
+    import generator_app, subprocess, unittest.mock as m
+    reel = tmp_path / "reel.mp4"; reel.write_bytes(b"x")
+    (tmp_path / "reel.vtt").write_text("WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nhi\n",
+                                       encoding="utf-8")
+    app = generator_app.create_app(testing=True)
+    monkeypatch.setattr(generator_app, "_load_library", lambda: [
+        {"id": "e1", "path": str(reel), "filename": "reel.mp4",
+         "captions_filename": "reel.vtt"},
+    ])
+
+    calls = {}
+    def fake_run(cmd, *a, **k):
+        calls["cmd"] = cmd
+        # Emulate ffmpeg producing the output file (last arg).
+        Path(cmd[-1]).write_bytes(b"captioned")
+        return subprocess.CompletedProcess(cmd, 0, b"", b"")
+
+    monkeypatch.setattr(generator_app.subprocess, "run", fake_run)
+    resp = app.test_client().post("/library/e1/download-captioned")
+    assert resp.status_code == 200
+    assert resp.headers["Content-Type"].startswith("video/mp4")
+    # ffmpeg invoked with a subtitles filter referencing the VTT
+    joined = " ".join(calls["cmd"])
+    assert "subtitles" in joined
+    assert "-vf" in calls["cmd"]
+
+
+def test_download_captioned_404_without_captions(monkeypatch):
+    import generator_app
+    app = generator_app.create_app(testing=True)
+    monkeypatch.setattr(generator_app, "_load_library", lambda: [
+        {"id": "e2", "path": "/x/reel.mp4", "filename": "reel.mp4"},
+    ])
+    resp = app.test_client().post("/library/e2/download-captioned")
+    assert resp.status_code == 404

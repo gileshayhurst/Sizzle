@@ -1154,6 +1154,45 @@ def create_app(testing: bool = False) -> Flask:
                 return jsonify({"error": "captions not found"}), 404
         return jsonify({"error": "no captions"}), 404
 
+    @app.post("/library/<entry_id>/download-captioned")
+    def download_captioned(entry_id):
+        """Burn the reel's VTT into a downloadable MP4 (local mode only).
+
+        Cloud mode burns in the browser via ReelEncoder.burnCaptions — the Render
+        free tier deliberately does not re-encode video server-side.
+        """
+        if storage.is_cloud():
+            return jsonify({"error": "cloud burn-in runs in the browser"}), 400
+        entries = _load_library()
+        entry = next((e for e in entries if e["id"] == entry_id), None)
+        if not entry:
+            return jsonify({"error": "not found"}), 404
+        reel = Path(entry["path"])
+        fname = entry.get("captions_filename")
+        vtt = Path(reel).with_name(fname) if fname else None
+        if not reel.is_file() or not vtt or not vtt.is_file():
+            return jsonify({"error": "reel or captions missing"}), 404
+
+        out_dir = Path(tempfile.mkdtemp(prefix="sizzle_cap_"))
+        out_path = out_dir / f"{reel.stem}_captioned.mp4"
+        # ffmpeg's subtitles filter needs a POSIX-style path with the colon after
+        # the Windows drive letter escaped, quoted inside the filter string.
+        vtt_arg = str(vtt).replace("\\", "/").replace(":", "\\:")
+        style = "FontName=Arial,FontSize=22,PrimaryColour=&H00FFFFFF,BorderStyle=3,Outline=1,Shadow=0,BackColour=&H80000000"
+        cmd = [
+            "ffmpeg", "-y", "-i", str(reel),
+            "-vf", f"subtitles='{vtt_arg}':force_style='{style}'",
+            "-c:a", "copy", str(out_path),
+        ]
+        proc = subprocess.run(cmd, capture_output=True)
+        if proc.returncode != 0 or not out_path.is_file():
+            return jsonify({"error": "burn-in failed"}), 500
+        return send_file(
+            str(out_path), mimetype="video/mp4",
+            as_attachment=True,
+            download_name=f"{reel.stem}_captioned.mp4",
+        )
+
     @app.get("/library")
     def get_library():
         entries = _load_library()
