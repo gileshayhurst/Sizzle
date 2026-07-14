@@ -419,19 +419,39 @@ function _clearSelections() {
 // ─── DOM refs ─────────────────────────────────────────────────────────────────
 const $ = id => document.getElementById(id);
 
-// ─── Modal a11y: open/close with focus management + Escape ──────────────────
-// Modals never stack, so a single return-focus slot suffices.
+// ─── Modal a11y: open/close with focus management, Escape, and Tab trap ──────
+// Modals never stack, so a single return-focus slot + one trap handler suffice.
 let _modalReturnFocus = null;
+let _modalTrapHandler = null;
+
+const _FOCUSABLE = 'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])';
 
 function _openModal(overlayId, focusId) {
   _modalReturnFocus = document.activeElement;
-  $(overlayId).classList.remove('hidden');
+  const overlay = $(overlayId);
+  overlay.classList.remove('hidden');
   const target = $(focusId);
   if (target) target.focus();
+
+  // Trap Tab within the dialog so keyboard focus can't wander to the still-present
+  // background controls (aria-modal="true" promises this; the browser doesn't).
+  _modalTrapHandler = (e) => {
+    if (e.key !== 'Tab') return;
+    const items = [...overlay.querySelectorAll(_FOCUSABLE)].filter(el => el.offsetParent !== null);
+    if (items.length === 0) return;
+    const first = items[0], last = items[items.length - 1];
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+  };
+  document.addEventListener('keydown', _modalTrapHandler);
 }
 
 function _closeModal(overlayId) {
   $(overlayId).classList.add('hidden');
+  if (_modalTrapHandler) {
+    document.removeEventListener('keydown', _modalTrapHandler);
+    _modalTrapHandler = null;
+  }
   if (_modalReturnFocus && document.contains(_modalReturnFocus)) _modalReturnFocus.focus();
   _modalReturnFocus = null;
 }
@@ -661,7 +681,7 @@ function _pollSessionDownload(ctx, folder, displayName, fail) {
 
     if (job.total > 0) {
       const pct = Math.round((job.done / job.total) * 100);
-      $('loading-folder-bar').style.width = pct + '%';
+      setBar('loading-folder-bar', pct);
       $('loading-folder-status').textContent =
         `Downloading transcripts… ${job.done} of ${job.total}`;
     }
@@ -811,6 +831,24 @@ function appendLog(boxId, msg) {
   div.textContent = msg;
   box.appendChild(div);
   box.scrollTop = box.scrollHeight;
+}
+
+// Set a determinate progress bar's width AND its aria-valuenow together, so
+// screen readers announce real progress (WCAG 4.1.3). pct is 0–100.
+function setBar(id, pct) {
+  const bar = $(id);
+  const clamped = Math.max(0, Math.min(100, pct));
+  bar.style.width = clamped + '%';
+  bar.setAttribute('aria-valuenow', Math.round(clamped));
+}
+
+// Announce a concise milestone to assistive tech via the polite live region.
+// Clearing first guarantees a repeated message (e.g. two errors) is re-read.
+function announce(msg) {
+  const el = $('sr-status');
+  if (!el) return;
+  el.textContent = '';
+  requestAnimationFrame(() => { el.textContent = msg; });
 }
 
 // Parse a fetch Response as JSON without ever throwing "unexpected end of JSON
@@ -1503,7 +1541,10 @@ async function submitGenerate(mode, selections) {
 
   showScreen('screen-generating');
   $('gen-log').innerHTML = '';
-  $('gen-bar').style.width = '0%';
+  setBar('gen-bar', 0);
+  $('gen-error').classList.add('hidden');
+  $('btn-cancel-gen').textContent = 'Cancel';
+  announce('Generating your reel…');
   $('topbar-controls').classList.add('hidden');
 
   // In cloud mode, try the browser encode path if WebCodecs is available. This
@@ -1522,7 +1563,7 @@ async function submitGenerate(mode, selections) {
       }
       appendLog('gen-log', `⚠ Browser encode failed (${err.message}) — retrying on server…`);
       $('gen-log').innerHTML = '';
-      $('gen-bar').style.width = '0%';
+      setBar('gen-bar', 0);
     }
   }
 
@@ -1547,15 +1588,13 @@ async function _submitGenerateServer(mode, selections, prompt, outputFilename) {
     });
     jobData = await resp.json();
   } catch (err) {
-    appendLog('gen-log', `✗ Could not reach generator service: ${err.message}`);
-    $('topbar-controls').classList.remove('hidden');
+    _showGenError(`Could not reach generator service: ${err.message}`);
     return;
   }
 
   const { job_id, error } = jobData;
   if (!resp.ok) {
-    appendLog('gen-log', `✗ ${error || 'Failed to start generation'}`);
-    $('topbar-controls').classList.remove('hidden');
+    _showGenError(error || 'Failed to start generation');
     return;
   }
 
@@ -1596,14 +1635,14 @@ async function _submitGenerateBrowser(mode, selections, prompt, outputFilename) 
   const plan = await planResp.json();
   plan.prompt = prompt;
 
-  $('gen-bar').style.width = '5%';
+  setBar('gen-bar', 5);
 
   // ReelEncoder.generate drives the encode, R2 upload, and library record.
   const result = await window.ReelEncoder.generate(plan, {
     onLog: (msg) => appendLog('gen-log', msg),
     onProgress: (done, tot) => {
       const pct = tot > 0 ? Math.round((done / tot) * 100) : 0;
-      $('gen-bar').style.width = Math.max(pct, 5) + '%';
+      setBar('gen-bar', Math.max(pct, 5));
     },
     signal: controller.signal,
     generatorUrl: GENERATOR_URL,
@@ -1613,33 +1652,15 @@ async function _submitGenerateBrowser(mode, selections, prompt, outputFilename) 
 
   // result: { entry_id, filename, duration_seconds, clip_count, segment_starts }
   _genTerminated = true;
-  $('gen-bar').style.width = '100%';
+  setBar('gen-bar', 100);
   state.resultJobId = null; // no server job — playback goes via library-video
   _clearSelections();
+  announce('Your reel is ready.');
 
   showResult({ ...result, download_url: null });
 
   // Auto-save (uses entry_id when jobId is null — see _autoSaveReelResult).
-  if (result.entry_id) {
-    const openBtn = $('btn-open-folder');
-    openBtn.textContent = 'Saving…';
-    openBtn.disabled = true;
-    _autoSaveReelResult(null, result.filename, result.entry_id)
-      .then(saved => {
-        openBtn.disabled = false;
-        if (saved) {
-          openBtn.textContent = `✓ Saved to ${saved.folderName}`;
-          openBtn.dataset.savedPath = saved.localFolderPath || '';
-          openBtn.dataset.savedFilename = result.filename;
-        } else {
-          openBtn.textContent = 'Download';
-        }
-      })
-      .catch(() => {
-        openBtn.disabled = false;
-        openBtn.textContent = 'Download';
-      });
-  }
+  if (result.entry_id) _runAutoSave(null, result.filename, result.entry_id);
 }
 
 function watchGeneration(jobId) {
@@ -1658,7 +1679,7 @@ function watchGeneration(jobId) {
       appendLog('gen-log', msg.message);
     } else if (msg.type === 'progress') {
       const pct = msg.total > 0 ? Math.round((msg.done / msg.total) * 100) : 0;
-      $('gen-bar').style.width = Math.max(pct, 5) + '%';
+      setBar('gen-bar', Math.max(pct, 5));
     } else if (msg.type === 'done') {
       _genWs = null;
       _handleGenerationTerminal(jobId, msg.status, msg.result, msg.error);
@@ -1704,33 +1725,16 @@ function _handleGenerationTerminal(jobId, status, result, error) {
   _stopGenerationPolling();
 
   if (status === 'done') {
-    $('gen-bar').style.width = '100%';
+    setBar('gen-bar', 100);
     state.resultJobId = jobId;
     _clearSelections();
+    announce('Your reel is ready.');
     showResult(result);
     if (APP_MODE === 'cloud' && result && result.entry_id) {
-      const openBtn = $('btn-open-folder');
-      openBtn.textContent = 'Saving…';
-      openBtn.disabled = true;
-      _autoSaveReelResult(jobId, result.filename, result.entry_id)
-        .then(saved => {
-          openBtn.disabled = false;
-          if (saved) {
-            openBtn.textContent = `✓ Saved to ${saved.folderName}`;
-            openBtn.dataset.savedPath = saved.localFolderPath || '';
-            openBtn.dataset.savedFilename = result.filename;
-          } else {
-            openBtn.textContent = 'Download';
-          }
-        })
-        .catch(() => {
-          openBtn.disabled = false;
-          openBtn.textContent = 'Download';
-        });
+      _runAutoSave(jobId, result.filename, result.entry_id);
     }
   } else if (status === 'error') {
-    appendLog('gen-log', `✗ Error: ${error}`);
-    $('topbar-controls').classList.remove('hidden');
+    _showGenError(error);
   } else if (status === 'cancelled') {
     showScreen('screen-workspace');
     $('topbar-controls').classList.remove('hidden');
@@ -1759,16 +1763,12 @@ function _startGenerationPolling(jobId) {
       resp = await fetch(`${GENERATOR_URL}/status/${jobId}`);
     } catch {
       if (++missCount >= 5) {
-        _stopGenerationPolling();
-        appendLog('gen-log', '✗ Lost contact with the generator service. It may still be finishing — check the Library shortly.');
-        $('topbar-controls').classList.remove('hidden');
+        _showGenError('Lost contact with the generator service. It may still be finishing — check the Library shortly.');
       }
       return;
     }
     if (resp.status === 404) {
-      _stopGenerationPolling();
-      appendLog('gen-log', '✗ Generation job is no longer available on the server.');
-      $('topbar-controls').classList.remove('hidden');
+      _showGenError('Generation job is no longer available on the server.');
       return;
     }
     if (!resp.ok) { missCount++; return; }
@@ -1784,13 +1784,75 @@ function _startGenerationPolling(jobId) {
     }
     if (data.total > 0) {
       const pct = Math.round((data.done / data.total) * 100);
-      $('gen-bar').style.width = Math.max(pct, 5) + '%';
+      setBar('gen-bar', Math.max(pct, 5));
     }
 
     if (data.status === 'done' || data.status === 'error' || data.status === 'cancelled') {
       _handleGenerationTerminal(jobId, data.status, data.result, data.error);
     }
   }, 2500);
+}
+
+// Result-screen save-status pill. Split from the Open Folder button so "it's
+// saved" reads as status and "open it" reads as an action. `kind` drives the
+// color class; the text always carries a word (never color alone — WCAG 1.4.1).
+const _SAVE_ICONS = {
+  saved:  '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 12.5l4.2 4.2L19 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  failed: '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 8v5m0 3h.01" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="12" r="8.25" stroke="currentColor" stroke-width="1.6"/></svg>',
+};
+function _setSaveStatus(kind, text) {
+  const pill = $('result-save-pill');
+  pill.classList.remove('saved', 'failed', 'hidden');
+  if (kind === 'hidden') { pill.classList.add('hidden'); pill.replaceChildren(); return; }
+  if (kind === 'saved' || kind === 'failed') pill.classList.add(kind);
+  pill.innerHTML = _SAVE_ICONS[kind] || '';   // trusted constant markup only
+  const span = document.createElement('span');
+  span.textContent = text;                    // folder name via textContent, never innerHTML
+  pill.appendChild(span);
+}
+
+// Shared auto-save flow for the result screen — drives the save pill and the
+// Open Folder / Download button together. Used by both the browser-encode and
+// server-generation success paths so their end state is identical.
+function _runAutoSave(jobId, filename, entryId) {
+  _setSaveStatus('saving', 'Saving…');
+  const openBtn = $('btn-open-folder');
+  openBtn.disabled = true;
+  return _autoSaveReelResult(jobId, filename, entryId)
+    .then(saved => {
+      openBtn.disabled = false;
+      if (saved) {
+        _setSaveStatus('saved', `Saved to ${saved.folderName}`);
+        openBtn.textContent = 'Open Folder';
+        openBtn.style.display = '';
+        openBtn.dataset.savedPath = saved.localFolderPath || '';
+        openBtn.dataset.savedFilename = filename;
+      } else {
+        _setSaveStatus('failed', 'Not saved');
+        openBtn.textContent = 'Download';
+        openBtn.style.display = state.resultDownloadUrl ? '' : 'none';
+      }
+    })
+    .catch(() => {
+      openBtn.disabled = false;
+      _setSaveStatus('failed', 'Not saved');
+      openBtn.textContent = 'Download';
+      openBtn.style.display = state.resultDownloadUrl ? '' : 'none';
+    });
+}
+
+// Surface a generation failure on the generating screen instead of leaving the
+// user staring at a frozen progress bar. The Cancel button becomes the way back.
+function _showGenError(msg) {
+  _genTerminated = true;
+  _stopGenerationPolling();
+  const box = $('gen-error');
+  box.textContent = `Couldn't finish this reel: ${msg || 'unknown error'}`;
+  box.classList.remove('hidden');
+  appendLog('gen-log', `✗ ${msg || 'unknown error'}`);
+  announce('Reel generation failed.');
+  $('btn-cancel-gen').textContent = 'Back to editing';
+  $('topbar-controls').classList.remove('hidden');
 }
 
 function showResult(result) {
@@ -1830,16 +1892,20 @@ function showResult(result) {
   }
 
   $('result-filename').textContent = result.filename;
-  const mins = Math.floor(result.duration_seconds / 60);
-  const secs = result.duration_seconds % 60;
-  const savedLabel = APP_MODE === 'cloud' ? 'uploaded to cloud' : 'saved to folder';
-  $('result-info').textContent =
-    `${mins}:${String(secs).padStart(2,'0')} · ${result.clip_count} clips · ${savedLabel}`;
+  const dur = Math.max(0, Math.round(result.duration_seconds || 0));
+  const mins = Math.floor(dur / 60);
+  const secs = dur % 60;
+  $('result-duration').textContent = `${mins}:${String(secs).padStart(2,'0')}`;
+  const n = result.clip_count || 0;
+  $('result-clipcount').textContent = `${n} clip${n === 1 ? '' : 's'}`;
 
   // In cloud mode the "Open Folder" button becomes a download link (there is no
   // local folder to open).  If the R2 upload failed, hide the button entirely.
   const openBtn = $('btn-open-folder');
   if (APP_MODE === 'cloud') {
+    // Cloud auto-save (when entry_id exists) drives the pill/button via
+    // _runAutoSave; until then show the download fallback and no save claim.
+    _setSaveStatus('hidden');
     if (state.resultDownloadUrl) {
       openBtn.textContent = 'Download';
       openBtn.style.display = '';
@@ -1847,6 +1913,9 @@ function showResult(result) {
       openBtn.style.display = 'none';
     }
   } else {
+    // Local mode: the server wrote the reel to the folder during generation,
+    // so it is already saved by the time we land here.
+    _setSaveStatus('saved', 'Saved to folder');
     openBtn.textContent = 'Open Folder';
     openBtn.style.display = '';
   }
@@ -2599,7 +2668,7 @@ $('folder-badge').addEventListener('click', async (e) => {
       // Bytes go browser → R2 and never transit this host, so large videos
       // can't hit the host's request body-size limit or its metered bandwidth.
       $('transcribe-subtitle').textContent = `Uploading ${selectedFiles.length} files…`;
-      $('transcribe-bar').style.width = '0%';
+      setBar('transcribe-bar', 0);
       $('transcribe-log').textContent = '';
       showScreen('screen-transcribing');
 
@@ -2615,7 +2684,7 @@ $('folder-badge').addEventListener('click', async (e) => {
           throw new Error(`Failed to upload ${file.name}: ${resp.status}`);
         }
         const pct = Math.round(((i + 1) / selectedFiles.length) * 100);
-        $('transcribe-bar').style.width = pct + '%';
+        setBar('transcribe-bar', pct);
         $('transcribe-log').textContent = `✓ ${file.name} (${i + 1} / ${selectedFiles.length})`;
       }
 
