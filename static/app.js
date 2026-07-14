@@ -1811,6 +1811,24 @@ function showResult(result) {
   $('result-source').src = src;
   $('result-video').load();
 
+  // Captions: show the CC toggle only when this reel actually has a track.
+  // /library-captions returns 200 (local sidecar or cloud key) or 404, so one
+  // tiny GET decides it — simpler than threading a flag through both the cloud
+  // (reel-encoder) and local (server job) result paths.
+  const resTrack = $('result-track');
+  const resCc = $('btn-result-cc');
+  resTrack.removeAttribute('src');
+  resCc.classList.add('hidden');
+  if (result.entry_id) {
+    const capUrl = `${GENERATOR_URL}/library-captions/${result.entry_id}`;
+    fetch(capUrl).then(r => {
+      if (!r.ok) return;
+      resTrack.src = capUrl;
+      resCc.classList.remove('hidden');
+      _applyCcState('result-video', 'btn-result-cc', _captionsOn());
+    }).catch(() => {});
+  }
+
   $('result-filename').textContent = result.filename;
   const mins = Math.floor(result.duration_seconds / 60);
   const secs = result.duration_seconds % 60;
@@ -2260,13 +2278,24 @@ function _captionsOn() {
   return localStorage.getItem('sizzle_captions_on') === '1';
 }
 
-function _applyCcState(on) {
-  const track = $('library-video').textTracks[0];
+function _applyCcState(videoId, btnId, on) {
+  const track = $(videoId).textTracks[0];
   if (track) track.mode = on ? 'showing' : 'hidden';
-  const btn = $('btn-lib-cc');
+  const btn = $(btnId);
   btn.classList.toggle('active', on);
   btn.setAttribute('aria-pressed', on ? 'true' : 'false');
 }
+
+// Wire a CC button to the shared `sizzle_captions_on` preference so the choice
+// is remembered and consistent across the result screen and the library player.
+function _wireCcButton(btnId, videoId) {
+  $(btnId).addEventListener('click', () => {
+    const next = !_captionsOn();
+    localStorage.setItem('sizzle_captions_on', next ? '1' : '0');
+    _applyCcState(videoId, btnId, next);
+  });
+}
+_wireCcButton('btn-result-cc', 'result-video');
 
 async function _downloadCaptioned(entry, btn) {
   const orig = btn.textContent;
@@ -2339,14 +2368,10 @@ function openLibraryPlayer(entry) {
 
   // The text track exists once the <track> is in the DOM; apply the remembered
   // on/off state so CC is consistent across reels.
-  if (hasCaptions) _applyCcState(_captionsOn());
+  if (hasCaptions) _applyCcState('library-video', 'btn-lib-cc', _captionsOn());
 }
 
-$('btn-lib-cc').addEventListener('click', () => {
-  const next = !_captionsOn();
-  localStorage.setItem('sizzle_captions_on', next ? '1' : '0');
-  _applyCcState(next);
-});
+_wireCcButton('btn-lib-cc', 'library-video');
 
 $('btn-close-player').addEventListener('click', () => {
   $('library-video').pause();

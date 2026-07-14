@@ -204,8 +204,9 @@
     <div id="screen-result" class="screen hidden">
       <div class="result-layout">
         <div class="video-wrap">
-          <video id="result-video" controls>
+          <video id="result-video" controls crossorigin="anonymous">
             <source id="result-source" src="" type="video/mp4">
+            <track id="result-track" kind="captions" label="Captions" srclang="en">
           </video>
         </div>
         <div class="result-controls">
@@ -217,6 +218,7 @@
             <div class="seg-skip-controls">
               <button id="btn-prev-seg" class="seg-skip-btn" title="Previous segment">← Prev</button>
               <button id="btn-next-seg" class="seg-skip-btn" title="Next segment">Next →</button>
+              <button id="btn-result-cc" class="cc-btn hidden" type="button" aria-pressed="false" title="Toggle captions">CC</button>
             </div>
             <button id="btn-new-reel" class="btn-primary">+ New Reel</button>
             <button id="btn-open-folder" class="btn-secondary">Open Folder</button>
