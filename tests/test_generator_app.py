@@ -390,6 +390,34 @@ def test_library_video_download_flag_sets_attachment(client, tmp_path):
     assert not without_flag.headers.get("Content-Disposition", "").startswith("attachment")
 
 
+def test_library_captions_serves_local_sidecar(tmp_path, monkeypatch):
+    import generator_app
+    reel = tmp_path / "reel.mp4"
+    reel.write_bytes(b"x")
+    (tmp_path / "reel.vtt").write_text("WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nhi\n",
+                                       encoding="utf-8")
+    app = generator_app.create_app(testing=True)
+    monkeypatch.setattr(generator_app, "_load_library", lambda: [
+        {"id": "e1", "path": str(reel), "filename": "reel.mp4",
+         "captions_filename": "reel.vtt"},
+    ])
+    c = app.test_client()
+    resp = c.get("/library-captions/e1")
+    assert resp.status_code == 200
+    assert resp.mimetype == "text/vtt"
+    assert b"WEBVTT" in resp.data
+
+
+def test_library_captions_404_when_no_captions(monkeypatch):
+    import generator_app
+    app = generator_app.create_app(testing=True)
+    monkeypatch.setattr(generator_app, "_load_library", lambda: [
+        {"id": "e2", "path": "", "filename": "reel.mp4"},  # no caption fields
+    ])
+    resp = app.test_client().get("/library-captions/e2")
+    assert resp.status_code == 404
+
+
 def test_library_video_cloud_sanitizes_filename_in_disposition():
     """The cloud presigned-URL Content-Disposition must not let a filename break
     out of the quoted token or inject a header (", \\, CR, LF stripped)."""
@@ -1422,3 +1450,101 @@ def test_build_segment_list_uses_video_urls_for_ffmpeg_input(tmp_path):
         result = _build_segment_list([vp], {"video.webm": ["[0:05] Speaker: Hi there."]},
                                      video_urls={"video.webm": presigned})
     assert result[0]["ffmpeg_input"] == presigned
+
+
+# ─── Captions (Task 2) ────────────────────────────────────────────────────────
+
+def test_build_segment_list_attaches_caption_lines(tmp_path):
+    import generator_app
+    from pathlib import Path
+
+    vid = tmp_path / "clip.mp4"
+    vid.write_bytes(b"")
+    (tmp_path / "clip.txt").write_text(
+        "[0:10] Guest: first selected line\n"
+        "[0:12] Guest: second selected line\n"
+        "[0:20] Guest: unselected\n",
+        encoding="utf-8",
+    )
+    selections = {"clip.mp4": [
+        "[0:10] Guest: first selected line",
+        "[0:12] Guest: second selected line",
+    ]}
+
+    import unittest.mock as m
+    with m.patch("generator_app.get_video_duration", return_value=60.0):
+        segs = generator_app._build_segment_list([Path(vid)], selections)
+
+    assert len(segs) == 1
+    cl = segs[0]["caption_lines"]
+    assert [c["text"] for c in cl] == ["first selected line", "second selected line"]
+    assert [c["seconds"] for c in cl] == [10.0, 12.0]
+
+
+def test_local_generation_writes_vtt_sidecar(client, tmp_path):
+    video = tmp_path / "clip.mp4"
+    video.touch()
+    txt = tmp_path / "clip.txt"
+    txt.write_text("[0:00] Speaker: Hello world\n", encoding="utf-8")
+
+    captured = {}
+
+    def fake_add(entry):
+        captured["entry"] = entry
+
+    with patch("generator_app._library_add", side_effect=fake_add), \
+         patch("generator_app.make_title_card"), \
+         patch("generator_app.extract_clip"), \
+         patch("generator_app.stitch_clips"), \
+         patch("generator_app.check_ffmpeg"), \
+         patch("generator_app.get_video_dimensions", return_value=(1920, 1080)):
+        resp = client.post("/generate", json={
+            "folder": str(tmp_path),
+            "prompt": "test",
+            "output_filename": "reel.mp4",
+            "selections": {"clip.mp4": ["[0:00] Speaker: Hello world"]},
+        })
+        assert resp.status_code == 200
+
+    sidecar = tmp_path / "reel.vtt"
+    assert sidecar.exists()
+    assert sidecar.read_text(encoding="utf-8").startswith("WEBVTT")
+    assert captured["entry"]["captions_filename"] == "reel.vtt"
+
+
+def test_download_captioned_runs_ffmpeg_subtitles(tmp_path, monkeypatch):
+    import generator_app, subprocess, unittest.mock as m
+    reel = tmp_path / "reel.mp4"; reel.write_bytes(b"x")
+    (tmp_path / "reel.vtt").write_text("WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nhi\n",
+                                       encoding="utf-8")
+    app = generator_app.create_app(testing=True)
+    monkeypatch.setattr(generator_app, "_load_library", lambda: [
+        {"id": "e1", "path": str(reel), "filename": "reel.mp4",
+         "captions_filename": "reel.vtt"},
+    ])
+
+    calls = {}
+    def fake_run(cmd, *a, **k):
+        calls["cmd"] = cmd
+        # Emulate ffmpeg producing the output file (last arg).
+        Path(cmd[-1]).write_bytes(b"captioned")
+        return subprocess.CompletedProcess(cmd, 0, b"", b"")
+
+    monkeypatch.setattr(generator_app.subprocess, "run", fake_run)
+    resp = app.test_client().post("/library/e1/download-captioned")
+    assert resp.status_code == 200
+    assert resp.headers["Content-Type"].startswith("video/mp4")
+    # ffmpeg invoked with a subtitles filter referencing the VTT
+    joined = " ".join(calls["cmd"])
+    assert "subtitles" in joined
+    assert "-vf" in calls["cmd"]
+
+
+def test_download_captioned_404_without_captions(monkeypatch):
+    import generator_app
+    app = generator_app.create_app(testing=True)
+    monkeypatch.setattr(generator_app, "_load_library", lambda: [
+        {"id": "e2", "path": "/x/reel.mp4", "filename": "reel.mp4"},
+    ])
+    resp = app.test_client().post("/library/e2/download-captioned")
+    assert resp.status_code == 404

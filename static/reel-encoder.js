@@ -52,6 +52,40 @@ function _fadeOutGain(relSec, clipDurationSec) {
   return Math.max(0, 1.0 - (relSec - fadeStart) / CLIP_FADE_OUT_SEC);
 }
 
+// Parse a WebVTT string into [{start, end, text}] (seconds). Minimal parser:
+// handles 'HH:MM:SS.mmm' and 'MM:SS.mmm' cue timings, ignores styling blocks.
+function _parseVtt(vtt) {
+  const cues = [];
+  const toSec = t => {
+    const parts = t.trim().split(':').map(parseFloat);
+    return parts.length === 3 ? parts[0] * 3600 + parts[1] * 60 + parts[2]
+                              : parts[0] * 60 + parts[1];
+  };
+  for (const block of vtt.split(/\n\n+/)) {
+    const line = block.split('\n').find(l => l.includes('-->'));
+    if (!line) continue;
+    const [a, b] = line.split('-->');
+    const text = block.split('\n').slice(block.split('\n').indexOf(line) + 1).join('\n').trim();
+    if (text) cues.push({ start: toSec(a), end: toSec(b), text });
+  }
+  return cues;
+}
+
+// Draw one caption line, bottom-centre, white text on a translucent box.
+function _drawCaption(ctx, text, width, height, fontSize) {
+  ctx.font = `bold ${fontSize}px sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'bottom';
+  const metrics = ctx.measureText(text);
+  const padX = fontSize * 0.5, padY = fontSize * 0.3;
+  const boxW = Math.min(width * 0.9, metrics.width + padX * 2);
+  const y = height - fontSize;
+  ctx.fillStyle = 'rgba(0,0,0,0.55)';
+  ctx.fillRect((width - boxW) / 2, y - fontSize - padY, boxW, fontSize + padY * 2);
+  ctx.fillStyle = '#fff';
+  ctx.fillText(text, width / 2, y);
+}
+
 // ── Title card: draw text with fade-in on the shared canvas + silent audio ──────
 async function _encodeTitleCard(titleLines, width, height, ctx, videoSource, audioSource, startTs, signal) {
   const totalFrames = Math.round(TITLE_CARD_DURATION_SEC * FPS);
@@ -246,6 +280,23 @@ window.ReelEncoder = {
     }
     log('✓ Reel uploaded to cloud storage');
 
+    // ── Upload the caption track (if the plan produced one) ─────────────────
+    let captionsKey = null;
+    if (plan.captions_vtt && plan.captions_put_url) {
+      const capResp = await fetch(plan.captions_put_url, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'text/vtt' },
+        body: plan.captions_vtt,
+        signal,
+      });
+      if (capResp.ok) {
+        captionsKey = plan.captions_key;
+        log('✓ Captions uploaded');
+      } else {
+        log(`· Captions upload skipped (${capResp.status})`);
+      }
+    }
+
     // ── Record the reel in the shared library ───────────────────────────────────
     const libResp = await fetch(`${generatorUrl}/library`, {
       method: 'POST',
@@ -257,6 +308,7 @@ window.ReelEncoder = {
         duration_seconds: Math.round(totalDurationSec),
         clip_count: segments.length,
         segment_starts: segmentStarts,
+        captions_key: captionsKey,
       }),
       signal,
     });
@@ -271,5 +323,63 @@ window.ReelEncoder = {
       clip_count: segments.length,
       segment_starts: segmentStarts,
     };
+  },
+
+  async burnCaptions(reelUrl, vttText, { onLog, onProgress, signal } = {}) {
+    const log = onLog || console.log;
+    const progress = onProgress || (() => {});
+    const cues = _parseVtt(vttText);
+
+    const input = new Input({ formats: ALL_FORMATS, source: new UrlSource(reelUrl) });
+    const videoTrack = await input.getPrimaryVideoTrack();
+    const audioTrack = await input.getPrimaryAudioTrack();
+    const width = videoTrack.displayWidth, height = videoTrack.displayHeight;
+
+    if (!(await canEncodeVideo('avc', { width, height, bitrate: VIDEO_BITRATE }))) {
+      throw new Error('Browser cannot encode H.264 at this resolution');
+    }
+
+    const target = new BufferTarget();
+    const output = new Output({ format: new Mp4OutputFormat({ fastStart: 'in-memory' }), target });
+    const canvas = new OffscreenCanvas(width, height);
+    const ctx = canvas.getContext('2d', { alpha: false });
+    const videoSource = new CanvasSource(canvas, { codec: 'avc', bitrate: VIDEO_BITRATE });
+    const audioSource = new AudioBufferSource({
+      codec: 'aac', bitrate: AUDIO_BITRATE,
+      transform: { numberOfChannels: CHANNELS, sampleRate: SAMPLE_RATE },
+    });
+    output.addVideoTrack(videoSource, { frameRate: FPS });
+    output.addAudioTrack(audioSource);
+    await output.start();
+
+    const fontSize = Math.max(20, Math.floor(height / 22));
+    try {
+      const durationSec = await input.computeDuration();
+      const totalFrames = Math.max(1, Math.round(durationSec * FPS));
+      const sink = new CanvasSink(videoTrack, { width, height, fit: 'contain', poolSize: 2 });
+      let f = 0;
+      for await (const { canvas: frame, timestamp } of sink.canvases(0)) {
+        _throwIfAborted(signal);
+        ctx.drawImage(frame, 0, 0, width, height);
+        const cue = cues.find(c => timestamp >= c.start && timestamp < c.end);
+        if (cue) _drawCaption(ctx, cue.text, width, height, fontSize);
+        await videoSource.add(f / FPS, 1 / FPS);
+        if (++f % 15 === 0) progress(f, totalFrames);
+        if (f >= totalFrames) break;
+      }
+      if (audioTrack) {
+        const asink = new AudioBufferSink(audioTrack);
+        for await (const { buffer } of asink.buffers()) {
+          _throwIfAborted(signal);
+          await audioSource.add(buffer);
+        }
+      }
+      await output.finalize();
+    } catch (err) {
+      try { await output.cancel(); } catch { /* torn down */ }
+      throw err;
+    }
+    log('✓ Captions burned in');
+    return new Blob([target.buffer], { type: 'video/mp4' });
   },
 };

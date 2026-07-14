@@ -96,6 +96,8 @@ Flask factory pattern: `create_app(testing=False)`. Uses `flask-cors` and `flask
 - **`GET /library-video/<id>`** — serves the local temp file when present, else **redirects** to a presigned R2 GET URL that forces `Content-Type: video/mp4` (via S3 `ResponseContentType`). That forced media type, plus R2 CORS now allowing `GET` (see `set_cors.py`), satisfies Chrome's ORB. This replaced an earlier Flask byte-proxy that dodged `ERR_BLOCKED_BY_ORB` but streamed every playback through the host, burning metered bandwidth per view. If ORB ever regresses, revert this endpoint to the proxy.
 - **`DELETE /library/<id>`** — removes library entry; `?delete_file=true` also deletes the file from disk.
 - **`PATCH /library/<id>`** — edits `title` and `notes` fields on a library entry.
+- **`GET /library-captions/<id>`** — serves the reel's WebVTT track (`text/vtt`): local `.vtt` sidecar first, else proxies the cloud `captions_key` bytes (the VTT is tiny text, unlike metered video). Used by the library player's `<track>` and by the cloud burn-in path.
+- **`POST /library/<id>/download-captioned`** — **local mode only** (cloud returns 400). Burns the reel's VTT into a downloadable MP4 via ffmpeg's `subtitles` filter (`-vf subtitles=…:force_style=…`, audio `-c copy`) and streams it as an attachment. Cloud burns in-browser instead (see `reel-encoder.js`).
 - **`POST /open-folder`** — launches Windows Explorer to a folder (no-op on Linux).
 
 **Generation pipeline** (`_run_generation`):
@@ -116,7 +118,8 @@ Switches between local filesystem and S3/R2 based on `APP_MODE` env var. Both ba
 - `download_file(key, local_path)` — retrieves file from storage
 - `read_json(key)` / `write_json(key, data)` — read/write JSON
 - `list_keys(prefix)` — list all keys under a prefix
-- `read_file_bytes(key)` — read raw bytes (general-purpose primitive; no current caller since `/library-video` switched from proxying to redirecting)
+- `read_file_bytes(key)` — read raw bytes (used by `/library-captions` cloud path to proxy the VTT)
+- `upload_bytes(key, data, content_type=...)` — write an in-memory bytes payload (used to upload the caption VTT without a temp-file round-trip; does **not** call `upload_file`, so the cloud "reel goes via `upload_stream`" test invariant stays intact)
 - `presigned_url(key)` / `presigned_put_url(key)` — generate presigned S3 URLs (cloud only)
 - `new_session_key()` — returns `sessions/<uuid>` prefix for upload sessions
 - `library_key()` — returns `library/sizzle_library.json`
@@ -124,6 +127,7 @@ Switches between local filesystem and S3/R2 based on `APP_MODE` env var. Both ba
 ### Shared lower-level modules
 
 - **`shared.py`** — `parse_transcript_lines(raw_text)`: parses `[M:SS] Speaker: text` lines into dicts with `raw`, `timestamp`, `text`, `seconds`, `minute_bucket`. Used by both `app.py` and `generator_app.py`.
+- **`captions.py`** — pure WebVTT builder (no Flask/ffmpeg imports). `collect_caption_lines(all_lines, selected_raws, seg_start, seg_end)` returns the selected respondent lines in a segment's range (interviewer lines excluded). `build_webvtt(segments, title_card_duration=5.0)` walks the reel timeline (each segment = 5s title card + clip) and re-times each caption cue to `seg_start + title_card_duration + (line.seconds - clip_start)`, clamping to the clip end; returns `None` if there are no cues. Captions are **derived from the selected transcript lines, not AI-generated**. Used by `generator_app._run_generation` (server VTT) and the `/plan` cloud path.
 - **`loader.py`** — `scan_videos()`: finds `.mp4 .mov .avi .mkv .webm` files in a folder, sorted alphabetically.
 - **`transcriber.py`** — `transcribe_video()`: runs the faster-whisper `base` model (CTranslate2, `compute_type="int8"`) with `word_timestamps=True`, splits segments on terminal punctuation via `_split_into_sentences()`. Output format: `[M:SS] Speaker: text`. Transcripts cached as `{video}.txt`; delete the `.txt` to force re-transcription. `transcribe_video(video_path, model=...)` accepts a pre-constructed model.
 - **`claude_client.py`** — `query_claude(transcript, prompt)`: sends transcript + prompt to `claude-opus-4-8` with the transcript block prompt-cached (`cache_control: ephemeral`). System prompt instructs Claude to return every relevant `M:SS-M:SS` range scored `|1..10` (or `none`), starting as late and ending as early as possible.
@@ -132,7 +136,7 @@ Switches between local filesystem and S3/R2 based on `APP_MODE` env var. Both ba
 
 ## Persistence files (project root, gitignored)
 
-- `sizzle_library.json` — generated reel entries: `id`, `path`, `filename`, `title`, `notes`, `prompt`, `duration_seconds`, `clip_count`, `segment_starts`, `created_at`, `reel_s3_key` (cloud only)
+- `sizzle_library.json` — generated reel entries: `id`, `path`, `filename`, `title`, `notes`, `prompt`, `duration_seconds`, `clip_count`, `segment_starts`, `created_at`, `reel_s3_key` (cloud only), `captions_filename` (local `.vtt` sidecar name) / `captions_key` (cloud VTT object key) — both optional, present only when the reel has captions
 - `recent_folders.json` — last 5 opened folders: `path`, `video_count`, `last_opened`
 - `prompt_history.json` — recent prompts (last 10) and saved templates: `{recent: [], templates: [{name, text}]}`
 
@@ -145,3 +149,4 @@ Switches between local filesystem and S3/R2 based on `APP_MODE` env var. Both ba
 - **Title card ffmpeg quirk:** The `drawtext` filter uses `textfile=` (content written to side-car `.txt` files) and a relative `fontfile=` path with `cwd=tmp_dir`. This avoids Windows drive-letter colons inside filter option strings (ffmpeg 8.x on Windows treats `:` as an option separator even inside quoted values).
 - **Library video playback:** `/library-video/<id>` redirects to a presigned R2 URL with a forced `video/mp4` Content-Type (not a Flask byte-proxy) to keep playback off the host's metered bandwidth. This relies on R2 CORS allowing `GET` (`set_cors.py`) and the forced media type to satisfy Chrome's ORB. If playback breaks with `ERR_BLOCKED_BY_ORB`, the safe rollback is to proxy the bytes through Flask again.
 - **Test suite runs in `testing=True` mode** which executes generation synchronously so mock patches don't leak across tests.
+- **Captions are soft by default, burned only on download.** Generation writes a WebVTT track alongside the reel (local `.vtt` sidecar; cloud object at `captions_key`). The library player shows a **CC toggle** whose on/off choice is remembered in `localStorage` (`sizzle_captions_on`) — it flips the `<track>`'s `textTracks[0].mode`. "Download with captions" hard-burns them: local mode via the server ffmpeg route, cloud mode in-browser via `ReelEncoder.burnCaptions` (`static/reel-encoder.js` — mediabunny `CanvasSink` decode + per-frame `_drawCaption`, re-encode with `CanvasSource`). The Render free tier deliberately does **not** re-encode server-side, which is why cloud burn-in runs in the browser.

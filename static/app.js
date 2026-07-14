@@ -2018,6 +2018,16 @@ function _renderCardBody(body, card, entry, dateStr) {
   deleteBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M5 7h14M10 7V5h4v2M7.5 7l.8 12h7.4l.8-12" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 
   iconRow.appendChild(downloadBtn);
+  if (entry.captions_key || entry.captions_filename) {
+    const capBtn = document.createElement('button');
+    capBtn.className = 'reel-btn-icon';
+    capBtn.title = 'Download with captions';
+    capBtn.setAttribute('aria-label', 'Download with captions');
+    capBtn.textContent = 'CC↓';
+    capBtn.style.cssText = 'font-size:11px;font-weight:700';
+    capBtn.addEventListener('click', () => _downloadCaptioned(entry, capBtn));
+    iconRow.appendChild(capBtn);
+  }
   iconRow.appendChild(editBtn);
   iconRow.appendChild(deleteBtn);
   nameRow.appendChild(nameEl);
@@ -2246,6 +2256,58 @@ function _showEditForm(body, card, entry, dateStr) {
   });
 }
 
+function _captionsOn() {
+  return localStorage.getItem('sizzle_captions_on') === '1';
+}
+
+function _applyCcState(on) {
+  const track = $('library-video').textTracks[0];
+  if (track) track.mode = on ? 'showing' : 'hidden';
+  const btn = $('btn-lib-cc');
+  btn.classList.toggle('active', on);
+  btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+}
+
+async function _downloadCaptioned(entry, btn) {
+  const orig = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '…';
+  try {
+    if (APP_MODE === 'cloud' && window.ReelEncoder?.isSupported()) {
+      // Fetch the reel URL + VTT, burn in-browser, download the blob.
+      const vtt = await fetch(`${GENERATOR_URL}/library-captions/${entry.id}`).then(r => r.text());
+      const reelUrl = `${GENERATOR_URL}/library-video/${entry.id}`;
+      const blob = await window.ReelEncoder.burnCaptions(reelUrl, vtt, {
+        onLog: () => {},
+        onProgress: (d, t) => { btn.textContent = `${Math.round((d / t) * 100)}%`; },
+      });
+      _downloadBlob(blob, `${(entry.title || entry.filename).replace(/\.mp4$/, '')}_captioned.mp4`);
+    } else {
+      // Local mode: server ffmpeg burn-in, streamed as an attachment.
+      const resp = await fetch(`${GENERATOR_URL}/library/${entry.id}/download-captioned`, { method: 'POST' });
+      if (!resp.ok) throw new Error(`Burn-in failed (${resp.status})`);
+      const blob = await resp.blob();
+      _downloadBlob(blob, `${(entry.title || entry.filename).replace(/\.mp4$/, '')}_captioned.mp4`);
+    }
+  } catch (err) {
+    alert(`Could not create captioned download: ${err.message}`);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = orig;
+  }
+}
+
+function _downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
 function openLibraryPlayer(entry) {
   state.librarySegmentStarts = entry.segment_starts || [];
   // Always route through the generator's /library-video endpoint so the
@@ -2256,12 +2318,35 @@ function openLibraryPlayer(entry) {
   const displayName = entry.title || entry.filename;
   $('library-player-meta').textContent =
     `${displayName} — "${entry.prompt}"`;
+
+  // Captions: only wire the track + CC button when this reel has a caption file.
+  const hasCaptions = !!(entry.captions_key || entry.captions_filename);
+  const trackEl = $('library-track');
+  const ccBtn = $('btn-lib-cc');
+  if (hasCaptions) {
+    trackEl.src = `${GENERATOR_URL}/library-captions/${entry.id}`;
+    ccBtn.classList.remove('hidden');
+  } else {
+    trackEl.removeAttribute('src');
+    ccBtn.classList.add('hidden');
+  }
+
   // Show the overlay before calling load() — browsers defer loading media in
   // display:none elements, so the video must be visible before we trigger load.
   _openModal('library-player-overlay', 'btn-close-player');
   $('library-video').src = src;
   $('library-video').load();
+
+  // The text track exists once the <track> is in the DOM; apply the remembered
+  // on/off state so CC is consistent across reels.
+  if (hasCaptions) _applyCcState(_captionsOn());
 }
+
+$('btn-lib-cc').addEventListener('click', () => {
+  const next = !_captionsOn();
+  localStorage.setItem('sizzle_captions_on', next ? '1' : '0');
+  _applyCcState(next);
+});
 
 $('btn-close-player').addEventListener('click', () => {
   $('library-video').pause();

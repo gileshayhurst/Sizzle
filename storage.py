@@ -169,6 +169,22 @@ def read_file_bytes(key: str) -> bytes:
         return (_data_root() / key).read_bytes()
 
 
+def upload_bytes(key: str, data: bytes, content_type: str = "application/octet-stream") -> None:
+    """Write an in-memory byte payload to storage at the given key.
+
+    The in-memory counterpart to read_file_bytes: for small payloads already in
+    memory (e.g. a generated WebVTT track) where writing a temp file first, only
+    to hand it to upload_file, would be wasteful. content_type is honoured in
+    cloud mode; local mode just writes the bytes.
+    """
+    if is_cloud():
+        _s3().put_object(Bucket=_bucket(), Key=key, Body=data, ContentType=content_type)
+    else:
+        dest = _data_root() / key
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(data)
+
+
 def presigned_url(key: str, expires: int = 3600,
                   content_type: str = None,
                   content_disposition: str = None) -> str:

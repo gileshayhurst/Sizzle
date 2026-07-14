@@ -36,6 +36,7 @@ from flask_sock import Sock
 from loader import scan_videos
 from video_editor import check_ffmpeg, extract_clip, parse_timestamp_to_seconds, stitch_clips, stitch_clips_to_pipe
 from shared import parse_transcript_lines as _parse_transcript_lines, filter_generated_reels as _filter_generated_reels
+from captions import build_webvtt, collect_caption_lines, WEBVTT_MIME
 import storage
 
 LIBRARY_PATH = Path(__file__).parent / "sizzle_library.json"
@@ -339,14 +340,15 @@ def _build_segment_list(
         all_lines = _parse_transcript_lines(txt_path.read_text(encoding="utf-8"))
         ffmpeg_input = video_urls.get(vp.name, str(vp)) if video_urls else str(vp)
         duration = get_video_duration(ffmpeg_input)
-        segs = _group_lines_into_segments(all_lines, set(selected_raws), video_duration=duration)
+        selected_set = set(selected_raws)
+        segs = _group_lines_into_segments(all_lines, selected_set, video_duration=duration)
         if segs:
-            grouped.append((vp, segs, ffmpeg_input))
+            grouped.append((vp, segs, ffmpeg_input, all_lines, selected_set))
 
-    total_segs = sum(len(segs) for _, segs, _ in grouped)
+    total_segs = sum(len(segs) for _, segs, _, _, _ in grouped)
     result = []
     seg_num = 0
-    for vp, segs, ffmpeg_input in grouped:
+    for vp, segs, ffmpeg_input, all_lines, selected_set in grouped:
         for start_sec, end_sec in segs:
             seg_num += 1
             result.append({
@@ -355,6 +357,8 @@ def _build_segment_list(
                 "ffmpeg_input": ffmpeg_input,
                 "start_sec": start_sec,
                 "end_sec": end_sec,
+                "caption_lines": collect_caption_lines(
+                    all_lines, selected_set, start_sec, end_sec),
                 "title_lines": [
                     vp.stem,
                     f"from {_format_seconds(start_sec)}",
@@ -727,6 +731,30 @@ def _run_generation_impl(job_id: str, folder: str,
         # Only record the S3 key when the upload actually succeeded; otherwise
         # the library endpoint would redirect to a non-existent R2 object.
         library_entry["reel_s3_key"] = f"{session_key}/{output_filename}"
+
+    # ── Captions: derive a WebVTT track from the same segments ───────────
+    vtt = build_webvtt(segments)
+    if vtt:
+        stem = Path(output_filename).stem
+        if storage.is_cloud() and session_key:
+            captions_key = f"{session_key}/{stem}.vtt"
+            try:
+                # upload_bytes, not upload_file/upload_stream: the reel goes via
+                # upload_stream (an invariant the cloud tests guard); captions are
+                # a small in-memory text payload, so skip the temp-file round-trip.
+                storage.upload_bytes(
+                    captions_key, vtt.encode("utf-8"), WEBVTT_MIME)
+                library_entry["captions_key"] = captions_key
+            except Exception as exc:
+                _append_log(job_id, f"· Captions upload skipped: {exc}")
+        else:
+            try:
+                sidecar = Path(output_path).with_suffix(".vtt")
+                sidecar.write_text(vtt, encoding="utf-8")
+                library_entry["captions_filename"] = sidecar.name
+            except Exception as exc:
+                _append_log(job_id, f"· Captions sidecar skipped: {exc}")
+
     _library_add(library_entry)
 
     # Schedule cleanup of the cloud session temp dir 1 hour after generation.
@@ -947,6 +975,14 @@ def create_app(testing: bool = False) -> Flask:
             if not segments:
                 return jsonify({"error": "No segments found in selections"}), 422
 
+            captions_vtt = build_webvtt(segments)
+            captions_key = None
+            captions_put_url = None
+            if captions_vtt:
+                stem = Path(output_filename).stem
+                captions_key = f"{session_key}/{stem}.vtt"
+                captions_put_url = storage.presigned_put_url(captions_key, expires=7200)
+
             # Probe dimensions from the first video's presigned URL (cheap, ~0.1s)
             try:
                 width, height = get_video_dimensions(segments[0]["ffmpeg_input"])
@@ -964,6 +1000,9 @@ def create_app(testing: bool = False) -> Flask:
                 "height": height,
                 "reel_key": reel_key,
                 "presigned_put_url": presigned_put,
+                "captions_vtt": captions_vtt,
+                "captions_key": captions_key,
+                "captions_put_url": captions_put_url,
                 "segments": [
                     {
                         "video": seg["video_name"],
@@ -999,6 +1038,9 @@ def create_app(testing: bool = False) -> Flask:
             "created_at": datetime.now().isoformat(timespec="seconds"),
             "reel_s3_key": f"{session_key}/{output_filename}",
         }
+        captions_key = (body.get("captions_key") or "").strip()
+        if captions_key:
+            entry["captions_key"] = captions_key
         _library_add(entry)
         return jsonify({"id": entry["id"]})
 
@@ -1088,6 +1130,68 @@ def create_app(testing: bool = False) -> Flask:
             except Exception as exc:
                 return jsonify({"error": f"cloud fetch failed: {exc}"}), 502
         return jsonify({"error": "file not found on disk"}), 404
+
+    @app.get("/library-captions/<entry_id>")
+    def serve_library_captions(entry_id):
+        entries = _load_library()
+        entry = next((e for e in entries if e["id"] == entry_id), None)
+        if not entry:
+            return jsonify({"error": "not found"}), 404
+        # Local sidecar first (works until the container restarts).
+        fname = entry.get("captions_filename")
+        if fname:
+            sidecar = Path(entry["path"]).with_name(fname)
+            if sidecar.is_file():
+                return app.response_class(
+                    sidecar.read_text(encoding="utf-8"), mimetype=WEBVTT_MIME)
+        # Cloud: the VTT is tiny text — proxy it directly (unlike metered video).
+        key = entry.get("captions_key")
+        if key and storage.is_cloud():
+            try:
+                data = storage.read_file_bytes(key)
+                return app.response_class(data, mimetype=WEBVTT_MIME)
+            except Exception:
+                return jsonify({"error": "captions not found"}), 404
+        return jsonify({"error": "no captions"}), 404
+
+    @app.post("/library/<entry_id>/download-captioned")
+    def download_captioned(entry_id):
+        """Burn the reel's VTT into a downloadable MP4 (local mode only).
+
+        Cloud mode burns in the browser via ReelEncoder.burnCaptions — the Render
+        free tier deliberately does not re-encode video server-side.
+        """
+        if storage.is_cloud():
+            return jsonify({"error": "cloud burn-in runs in the browser"}), 400
+        entries = _load_library()
+        entry = next((e for e in entries if e["id"] == entry_id), None)
+        if not entry:
+            return jsonify({"error": "not found"}), 404
+        reel = Path(entry["path"])
+        fname = entry.get("captions_filename")
+        vtt = Path(reel).with_name(fname) if fname else None
+        if not reel.is_file() or not vtt or not vtt.is_file():
+            return jsonify({"error": "reel or captions missing"}), 404
+
+        out_dir = Path(tempfile.mkdtemp(prefix="sizzle_cap_"))
+        out_path = out_dir / f"{reel.stem}_captioned.mp4"
+        # ffmpeg's subtitles filter needs a POSIX-style path with the colon after
+        # the Windows drive letter escaped, quoted inside the filter string.
+        vtt_arg = str(vtt).replace("\\", "/").replace(":", "\\:")
+        style = "FontName=Arial,FontSize=22,PrimaryColour=&H00FFFFFF,BorderStyle=3,Outline=1,Shadow=0,BackColour=&H80000000"
+        cmd = [
+            "ffmpeg", "-y", "-i", str(reel),
+            "-vf", f"subtitles='{vtt_arg}':force_style='{style}'",
+            "-c:a", "copy", str(out_path),
+        ]
+        proc = subprocess.run(cmd, capture_output=True)
+        if proc.returncode != 0 or not out_path.is_file():
+            return jsonify({"error": "burn-in failed"}), 500
+        return send_file(
+            str(out_path), mimetype="video/mp4",
+            as_attachment=True,
+            download_name=f"{reel.stem}_captioned.mp4",
+        )
 
     @app.get("/library")
     def get_library():
