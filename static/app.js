@@ -2246,6 +2246,18 @@ function _showEditForm(body, card, entry, dateStr) {
   });
 }
 
+function _captionsOn() {
+  return localStorage.getItem('sizzle_captions_on') === '1';
+}
+
+function _applyCcState(on) {
+  const track = $('library-video').textTracks[0];
+  if (track) track.mode = on ? 'showing' : 'hidden';
+  const btn = $('btn-lib-cc');
+  btn.classList.toggle('active', on);
+  btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+}
+
 function openLibraryPlayer(entry) {
   state.librarySegmentStarts = entry.segment_starts || [];
   // Always route through the generator's /library-video endpoint so the
@@ -2256,12 +2268,35 @@ function openLibraryPlayer(entry) {
   const displayName = entry.title || entry.filename;
   $('library-player-meta').textContent =
     `${displayName} — "${entry.prompt}"`;
+
+  // Captions: only wire the track + CC button when this reel has a caption file.
+  const hasCaptions = !!(entry.captions_key || entry.captions_filename);
+  const trackEl = $('library-track');
+  const ccBtn = $('btn-lib-cc');
+  if (hasCaptions) {
+    trackEl.src = `${GENERATOR_URL}/library-captions/${entry.id}`;
+    ccBtn.classList.remove('hidden');
+  } else {
+    trackEl.removeAttribute('src');
+    ccBtn.classList.add('hidden');
+  }
+
   // Show the overlay before calling load() — browsers defer loading media in
   // display:none elements, so the video must be visible before we trigger load.
   _openModal('library-player-overlay', 'btn-close-player');
   $('library-video').src = src;
   $('library-video').load();
+
+  // The text track exists once the <track> is in the DOM; apply the remembered
+  // on/off state so CC is consistent across reels.
+  if (hasCaptions) _applyCcState(_captionsOn());
 }
+
+$('btn-lib-cc').addEventListener('click', () => {
+  const next = !_captionsOn();
+  localStorage.setItem('sizzle_captions_on', next ? '1' : '0');
+  _applyCcState(next);
+});
 
 $('btn-close-player').addEventListener('click', () => {
   $('library-video').pause();

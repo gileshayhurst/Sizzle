@@ -672,6 +672,25 @@ body {
   color: var(--ink);
 }
 
+/* Captions toggle — ghost by default, amber-tint pill when on (mode-btn pattern).
+   "CC" label keeps state non-color-only (WCAG 1.4.1). */
+.cc-btn {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--body);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  padding: 7px 14px;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  font-family: inherit;
+  transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+.cc-btn:hover { border-color: var(--border-strong); color: var(--ink); }
+.cc-btn.active { background: var(--amber-tint); border-color: var(--amber-border); color: var(--amber-ink); }
+.cc-btn:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(224,123,57,.22); }
+
 /* ── Folder switcher dropdown ───────────────────────────────────────────── */
 .folder-badge {
   cursor: pointer;
