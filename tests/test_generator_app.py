@@ -288,6 +288,44 @@ def test_group_lines_into_segments_drops_segment_that_cannot_reach_minimum():
     assert result == []
 
 
+def test_group_lines_into_segments_caps_trailing_dead_air():
+    """A selection followed by a long gap ends near the speech, not the next line."""
+    from generator_app import _group_lines_into_segments, SPEAKING_RATE, TAIL_BUFFER
+    lines = [
+        {"raw": "a", "seconds": 41.0,
+         "text": "one two three four five six seven eight nine ten eleven twelve"},
+        {"raw": "b", "seconds": 59.0, "text": "next speaker"},  # 18s later, unselected
+    ]
+    result = _group_lines_into_segments(lines, {"a"})
+    expected_end = 41.0 + 12 / SPEAKING_RATE + TAIL_BUFFER
+    assert result == [(41.0, expected_end)]
+    assert expected_end < 59.0  # dead air trimmed rather than running to next line
+
+
+def test_group_lines_into_segments_long_line_keeps_full_speech():
+    """A long final line before a big gap keeps its full estimated speech length."""
+    from generator_app import _group_lines_into_segments, SPEAKING_RATE, TAIL_BUFFER
+    lines = [
+        {"raw": "a", "seconds": 10.0, "text": " ".join(["word"] * 30)},
+        {"raw": "b", "seconds": 60.0, "text": "next"},  # 50s gap
+    ]
+    result = _group_lines_into_segments(lines, {"a"})
+    expected_end = 10.0 + 30 / SPEAKING_RATE + TAIL_BUFFER
+    assert result == [(10.0, expected_end)]
+    assert expected_end - 10.0 > 15.0  # scales with word count, not a fixed cap
+
+
+def test_group_lines_into_segments_floor_applies_after_cap():
+    """A very short selected line is still extended to the MIN_CLIP_SECONDS floor."""
+    from generator_app import _group_lines_into_segments, MIN_CLIP_SECONDS
+    lines = [
+        {"raw": "a", "seconds": 10.0, "text": "yes"},  # cap would end ~11.5
+        {"raw": "b", "seconds": 10.3, "text": "next"},  # boundary only 0.3s away
+    ]
+    result = _group_lines_into_segments(lines, {"a"})
+    assert result == [(10.0, 10.0 + MIN_CLIP_SECONDS)]
+
+
 def test_get_video_duration_returns_seconds():
     from generator_app import get_video_duration
     from unittest.mock import patch, MagicMock
@@ -936,7 +974,9 @@ def test_duration_seconds_includes_title_card_time(client, tmp_path):
     durations were summed, understating reel length by N_segments * 5 seconds.
     """
     (tmp_path / "vid.mp4").touch()
-    # Single selected line: seconds=5, end_sec=5+10=15, clip_duration=10s
+    # Single selected line at 0:05. Trailing dead-air cap ends the clip at the
+    # estimated speech end (1 word → 5 + 0.5 + 1.0 = 6.5s → 1.5s content), then
+    # the 5s title card is added: int(1.5 + 5) = 6s.
     (tmp_path / "vid.txt").write_text("[0:05] Speaker: Hello.", encoding="utf-8")
 
     from generator_app import _jobs
@@ -961,10 +1001,12 @@ def test_duration_seconds_includes_title_card_time(client, tmp_path):
 
     result = _jobs[job_id]["result"]
     assert result is not None
-    # 1 segment: 10 s content + 5 s title card = 15 s total
-    assert result["duration_seconds"] == 15, (
+    # 1 segment: 1.5s capped content + 5s title card = int(6.5) = 6s.
+    # (Without the title card the sum would be int(1.5) = 1 — so 6 still proves
+    # the card time is included.)
+    assert result["duration_seconds"] == 6, (
         f"duration_seconds={result['duration_seconds']}; "
-        "expected 15 (10s content + 5s title card)"
+        "expected 6 (1.5s capped content + 5s title card)"
     )
 
 
@@ -1138,10 +1180,11 @@ def test_duration_seconds_excludes_rolled_back_title_card(client, tmp_path):
     result = _jobs[job_id]["result"]
     assert result is not None, f"Job should complete, got: {_jobs[job_id]}"
 
-    # Segment 1: 10s content (5→15s) + 5s title card = 15s
+    # Segment 1: "First." (1 word) capped to 1.5s content + 5s title card = 6.5s
     # Segment 2: card created then rolled back (clip failed) → 0s net
-    # Total expected: 15s (NOT 20s — the rolled-back card must not be counted)
-    assert result["duration_seconds"] == 15, (
+    # Total expected: int(6.5) = 6s. If the rolled-back card were counted it
+    # would add 5 → int(11.5) = 11, so 6 proves it is excluded.
+    assert result["duration_seconds"] == 6, (
         f"duration_seconds={result['duration_seconds']}; "
         "rolled-back title card must not add to duration"
     )
