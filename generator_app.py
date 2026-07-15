@@ -29,8 +29,10 @@ if not shutil.which("ffmpeg") and _sys.platform == "win32":
         os.environ["PATH"] = str(_bin) + os.pathsep + os.environ.get("PATH", "")
         break
 
-from flask import Flask, jsonify, redirect, request, send_file
+from flask import Flask, g, jsonify, redirect, request, send_file
 from flask_cors import CORS
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 from flask_sock import Sock
 
 from loader import scan_videos
@@ -851,8 +853,20 @@ def create_app(testing: bool = False) -> Flask:
     app.before_request(auth.require_auth)
 
     def _uid():
-        from flask import g
         return getattr(g, "user_id", None)
+
+    # ponytail: in-memory limiter storage — per-instance, resets on restart.
+    # Fine on Render's single free-tier instance; move to Redis if it scales out.
+    # Disabled in local mode (single-user desktop) so limits never interfere.
+    limiter = Limiter(
+        key_func=lambda: _uid() or get_remote_address(),
+        app=app, default_limits=["600 per hour"],
+    )
+    app.config["RATELIMIT_ENABLED"] = storage.is_cloud()
+    app.limiter = limiter
+
+    # Cap request bodies the host buffers. Reel bytes go browser->R2, not here.
+    app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024
 
     sock = Sock(app)
 
@@ -869,6 +883,7 @@ def create_app(testing: bool = False) -> Flask:
         _job_ws_impl(ws, job_id)
 
     @app.post("/generate")
+    @limiter.limit("10 per minute;100 per hour")
     def generate():
         body = request.get_json() or {}
         prompt = body.get("prompt", "").strip()
@@ -973,6 +988,7 @@ def create_app(testing: bool = False) -> Flask:
         return jsonify({"job_id": job_id})
 
     @app.post("/plan")
+    @limiter.limit("20 per minute")
     def plan():
         """Return the ordered segment plan + presigned URLs for browser-side encoding."""
         if not storage.is_cloud():

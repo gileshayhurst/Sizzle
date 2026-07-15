@@ -446,6 +446,10 @@ def create_app(testing: bool = False) -> Flask:
     app.config["RATELIMIT_ENABLED"] = storage.is_cloud()
     app.limiter = limiter
 
+    # 50 MB cap on request bodies the host actually buffers. Large video bytes go
+    # browser->R2 via presigned PUT and never hit this host (see /upload/prepare).
+    app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024
+
     @app.post("/login")
     @limiter.limit("5 per minute")
     def login():
