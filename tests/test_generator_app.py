@@ -435,7 +435,7 @@ def test_library_captions_serves_local_sidecar(tmp_path, monkeypatch):
     (tmp_path / "reel.vtt").write_text("WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nhi\n",
                                        encoding="utf-8")
     app = generator_app.create_app(testing=True)
-    monkeypatch.setattr(generator_app, "_load_library", lambda: [
+    monkeypatch.setattr(generator_app, "_load_library", lambda user_id=None: [
         {"id": "e1", "path": str(reel), "filename": "reel.mp4",
          "captions_filename": "reel.vtt"},
     ])
@@ -449,7 +449,7 @@ def test_library_captions_serves_local_sidecar(tmp_path, monkeypatch):
 def test_library_captions_404_when_no_captions(monkeypatch):
     import generator_app
     app = generator_app.create_app(testing=True)
-    monkeypatch.setattr(generator_app, "_load_library", lambda: [
+    monkeypatch.setattr(generator_app, "_load_library", lambda user_id=None: [
         {"id": "e2", "path": "", "filename": "reel.mp4"},  # no caption fields
     ])
     resp = app.test_client().get("/library-captions/e2")
@@ -805,7 +805,7 @@ def test_library_delete_removes_entry(client, tmp_path, monkeypatch):
     initial_entries = [{"id": "abc123", "filename": "x.mp4"}]
     saved = []
     with patch("storage.load_library", return_value=list(initial_entries)), \
-         patch.object(gen_module, "_save_library", side_effect=lambda entries: saved.extend(entries)):
+         patch.object(gen_module, "_save_library", side_effect=lambda entries, user_id=None: saved.extend(entries)):
         resp = client.delete("/library/abc123")
     assert resp.status_code == 200
     assert resp.get_json()["ok"] is True
@@ -1569,7 +1569,7 @@ def test_download_captioned_runs_ffmpeg_subtitles(tmp_path, monkeypatch):
     (tmp_path / "reel.vtt").write_text("WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nhi\n",
                                        encoding="utf-8")
     app = generator_app.create_app(testing=True)
-    monkeypatch.setattr(generator_app, "_load_library", lambda: [
+    monkeypatch.setattr(generator_app, "_load_library", lambda user_id=None: [
         {"id": "e1", "path": str(reel), "filename": "reel.mp4",
          "captions_filename": "reel.vtt"},
     ])
@@ -1594,7 +1594,7 @@ def test_download_captioned_runs_ffmpeg_subtitles(tmp_path, monkeypatch):
 def test_download_captioned_404_without_captions(monkeypatch):
     import generator_app
     app = generator_app.create_app(testing=True)
-    monkeypatch.setattr(generator_app, "_load_library", lambda: [
+    monkeypatch.setattr(generator_app, "_load_library", lambda user_id=None: [
         {"id": "e2", "path": "/x/reel.mp4", "filename": "reel.mp4"},
     ])
     resp = app.test_client().post("/library/e2/download-captioned")

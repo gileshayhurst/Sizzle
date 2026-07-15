@@ -187,7 +187,7 @@ def test_library_post_creates_entry_with_correct_reel_s3_key(cloud_client):
 def test_library_records_captions_key(cloud_client, monkeypatch):
     import generator_app
     captured = {}
-    monkeypatch.setattr(generator_app, "_library_add", lambda e: captured.setdefault("e", e))
+    monkeypatch.setattr(generator_app, "_library_add", lambda e, user_id=None: captured.setdefault("e", e))
     resp = cloud_client.post("/library", json={
         "session_key": "sessions/abc",
         "output_filename": "reel.mp4",
