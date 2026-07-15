@@ -36,3 +36,7 @@ services:
         sync: false
       - key: S3_ENDPOINT_URL
         sync: false
+      # Comma-separated frontend origin(s) allowed for cross-origin requests.
+      # Leave unset to keep CORS permissive (e.g. local/dev).
+      - key: ALLOWED_ORIGINS
+        sync: false

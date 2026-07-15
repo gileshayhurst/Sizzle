@@ -31,6 +31,8 @@ if not shutil.which("ffmpeg") and _sys.platform == "win32":
 
 from flask import Flask, jsonify, redirect, request, send_file
 from flask_cors import CORS
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 from flask_sock import Sock
 
 from loader import scan_videos
@@ -842,8 +844,21 @@ def _job_ws_impl(ws, job_id):
 
 def create_app(testing: bool = False) -> Flask:
     app = Flask(__name__)
-    CORS(app)
+    # Restrict cross-origin access to the configured frontend origin(s) in cloud
+    # mode; stay permissive for local dev when ALLOWED_ORIGINS is unset.
+    _origins = [o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "").split(",") if o.strip()]
+    if _origins:
+        CORS(app, origins=_origins, allow_headers=["Content-Type"])
+    else:
+        CORS(app)
     app.config["TESTING"] = testing
+
+    # ponytail: in-memory limiter storage — per-instance, resets on restart.
+    # Keyed by client IP; enabled only in cloud (local desktop app is unmetered).
+    limiter = Limiter(key_func=get_remote_address, app=app,
+                      default_limits=["600 per hour"])
+    app.config["RATELIMIT_ENABLED"] = storage.is_cloud()
+    app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024
 
     sock = Sock(app)
 
@@ -852,6 +867,7 @@ def create_app(testing: bool = False) -> Flask:
         _job_ws_impl(ws, job_id)
 
     @app.post("/generate")
+    @limiter.limit("10 per minute;100 per hour")
     def generate():
         body = request.get_json() or {}
         prompt = body.get("prompt", "").strip()
@@ -868,6 +884,8 @@ def create_app(testing: bool = False) -> Flask:
         if storage.is_cloud():
             if not session_key:
                 return jsonify({"error": "session_key required in cloud mode"}), 400
+            if not session_key.startswith("sessions/"):
+                return jsonify({"error": "forbidden"}), 403
             tmp_session_dir = tempfile.mkdtemp(prefix="sizzle_gen_")
             _tmp_dir_to_cleanup = None  # intentionally no immediate cleanup
 
@@ -951,6 +969,7 @@ def create_app(testing: bool = False) -> Flask:
         return jsonify({"job_id": job_id})
 
     @app.post("/plan")
+    @limiter.limit("20 per minute")
     def plan():
         """Return the ordered segment plan + presigned URLs for browser-side encoding."""
         if not storage.is_cloud():
@@ -960,6 +979,8 @@ def create_app(testing: bool = False) -> Flask:
         session_key = (body.get("session_key") or "").strip()
         if not session_key:
             return jsonify({"error": "session_key required"}), 400
+        if not session_key.startswith("sessions/"):
+            return jsonify({"error": "forbidden"}), 403
 
         VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
         selections = body.get("selections", {})

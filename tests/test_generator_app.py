@@ -1430,7 +1430,9 @@ def test_cloud_temp_dir_cleanup_scheduled(client, tmp_path):
 
     assert resp.status_code == 200
     assert len(timers_started) >= 1
-    assert timers_started[0] == 3600   # 1 hour
+    # A 1-hour cleanup timer must be scheduled. (Not necessarily first in the
+    # list — flask-limiter's in-memory storage also schedules short-lived timers.)
+    assert 3600 in timers_started   # 1 hour
 
 
 # ─── _build_segment_list ─────────────────────────────────────────────────────

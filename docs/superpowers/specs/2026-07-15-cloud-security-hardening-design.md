@@ -1,6 +1,34 @@
 # Cloud Security Hardening — Design Spec
 **Date:** 2026-07-15
 
+> ## ⚠️ STATUS: AUTH + TENANCY DEFERRED (2026-07-15)
+>
+> This spec describes the **full** vision: per-client login, per-user libraries,
+> and prefix-scoped sessions. It was implemented and merged, then **rolled back
+> by owner decision** — the product should keep its original flow (no login
+> screen, no gating) for now. This document is retained as the blueprint for
+> switching it on later.
+>
+> **What is currently LIVE on `master`** (the login-free, backend-only subset):
+> - **Rate limiting** (flask-limiter, keyed by client IP, cloud-only) on
+>   `/analyze`, `/upload`, `/upload/prepare`, `/generate`, `/plan`.
+> - **`MAX_CONTENT_LENGTH`** 50 MB body cap on both services.
+> - **CORS** restricted to `ALLOWED_ORIGINS` on the generator (permissive if unset).
+> - **Path-traversal guard** (`_valid_session_folder` in `app.py` / the
+>   `sessions/` prefix check in `generator_app.py`) — closes audit finding #5
+>   without needing a user identity.
+>
+> **What is NOT live (deferred, described below):** Bearer-token auth wall
+> (`auth.py`), the `/login` endpoint, operator user provisioning
+> (`manage_users.py`), per-user libraries, and prefix-scoped *per-user* sessions
+> (audit findings #1, #3, and the per-tenant half of #4). All of this is
+> preserved in git history under the reverted merge
+> `Merge harden/cloud-security …` and its revert commit — re-apply by following
+> the implementation plan at
+> [../plans/2026-07-15-cloud-security-hardening.md](../plans/2026-07-15-cloud-security-hardening.md)
+> (Phases 1 and 2). Findings #2 and the traversal part of #5 are already covered
+> by the live subset above.
+
 ## Overview
 
 The cloud deployment (`APP_MODE=cloud`, two public Render services `sizzle-app` and
