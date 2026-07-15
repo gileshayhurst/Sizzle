@@ -13,15 +13,11 @@ def cloud_client(monkeypatch, tmp_path):
     monkeypatch.setenv("S3_ACCESS_KEY", "key")
     monkeypatch.setenv("S3_SECRET_KEY", "secret")
     monkeypatch.setenv("S3_ENDPOINT_URL", "http://localhost:9000")
-    monkeypatch.setenv("SIZZLE_SECRET_KEY", "test-secret")
-    import importlib, storage, auth, generator_app
+    import importlib, storage, generator_app
     importlib.reload(storage)
-    importlib.reload(auth)
     importlib.reload(generator_app)
     app = generator_app.create_app(testing=True)
     with app.test_client() as c:
-        token = auth.make_token("testuser")
-        c.environ_base["HTTP_AUTHORIZATION"] = f"Bearer {token}"
         yield c
     # Restore module state for other test files
     monkeypatch.delenv("APP_MODE", raising=False)
@@ -54,7 +50,7 @@ def test_plan_returns_400_without_session_key(cloud_client):
 
 
 def test_plan_returns_422_when_no_segments_found(cloud_client, tmp_path):
-    session_key = "users/testuser/sessions/test123"
+    session_key = "sessions/test123"
     # list_keys returns nothing
     with patch("generator_app.storage.list_keys", return_value=[]):
         resp = cloud_client.post("/plan", json={
@@ -66,7 +62,7 @@ def test_plan_returns_422_when_no_segments_found(cloud_client, tmp_path):
 
 def test_plan_returns_segment_list_with_correct_shape(cloud_client, tmp_path):
     import importlib, generator_app
-    session_key = "users/testuser/sessions/test456"
+    session_key = "sessions/test456"
     transcript = "[0:10] Speaker: This is great content.\n[0:25] Speaker: End."
     raw_line = "[0:10] Speaker: This is great content."
 
@@ -113,7 +109,7 @@ def test_plan_returns_segment_list_with_correct_shape(cloud_client, tmp_path):
 
 
 def test_plan_returns_captions_fields(cloud_client, tmp_path):
-    session_key = "users/testuser/sessions/test456"
+    session_key = "sessions/test456"
     transcript = "[0:10] Speaker: This is great content.\n[0:25] Speaker: End."
     raw_line = "[0:10] Speaker: This is great content."
 
@@ -187,7 +183,7 @@ def test_library_post_creates_entry_with_correct_reel_s3_key(cloud_client):
 def test_library_records_captions_key(cloud_client, monkeypatch):
     import generator_app
     captured = {}
-    monkeypatch.setattr(generator_app, "_library_add", lambda e, user_id=None: captured.setdefault("e", e))
+    monkeypatch.setattr(generator_app, "_library_add", lambda e: captured.setdefault("e", e))
     resp = cloud_client.post("/library", json={
         "session_key": "sessions/abc",
         "output_filename": "reel.mp4",

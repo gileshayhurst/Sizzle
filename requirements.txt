@@ -2,7 +2,6 @@ anthropic
 pytest
 flask>=2.0
 flask-cors
-flask-limiter
 flask-sock
 boto3
 faster-whisper

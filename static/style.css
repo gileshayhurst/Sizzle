@@ -1162,24 +1162,3 @@ body {
   font-size: 12px;
   color: var(--muted);
 }
-
-/* ─── Login overlay (cloud mode) ─────────────────────────────────────────── */
-.login-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 1000;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 24px;
-  background: var(--canvas);
-}
-.login-card {
-  width: 100%;
-  max-width: 380px;
-}
-.login-card .folder-path-input {
-  width: 100%;
-  margin-bottom: 12px;
-  box-sizing: border-box;
-}

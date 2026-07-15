@@ -435,7 +435,7 @@ def test_library_captions_serves_local_sidecar(tmp_path, monkeypatch):
     (tmp_path / "reel.vtt").write_text("WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nhi\n",
                                        encoding="utf-8")
     app = generator_app.create_app(testing=True)
-    monkeypatch.setattr(generator_app, "_load_library", lambda user_id=None: [
+    monkeypatch.setattr(generator_app, "_load_library", lambda: [
         {"id": "e1", "path": str(reel), "filename": "reel.mp4",
          "captions_filename": "reel.vtt"},
     ])
@@ -449,18 +449,16 @@ def test_library_captions_serves_local_sidecar(tmp_path, monkeypatch):
 def test_library_captions_404_when_no_captions(monkeypatch):
     import generator_app
     app = generator_app.create_app(testing=True)
-    monkeypatch.setattr(generator_app, "_load_library", lambda user_id=None: [
+    monkeypatch.setattr(generator_app, "_load_library", lambda: [
         {"id": "e2", "path": "", "filename": "reel.mp4"},  # no caption fields
     ])
     resp = app.test_client().get("/library-captions/e2")
     assert resp.status_code == 404
 
 
-def test_library_video_cloud_sanitizes_filename_in_disposition(monkeypatch):
+def test_library_video_cloud_sanitizes_filename_in_disposition():
     """The cloud presigned-URL Content-Disposition must not let a filename break
     out of the quoted token or inject a header (", \\, CR, LF stripped)."""
-    monkeypatch.setenv("SIZZLE_SECRET_KEY", "test-secret")
-    import auth
     entry = {
         "id": "dl-test-2",
         "filename": 'evil".mp4\r\nX-Injected: 1',
@@ -475,8 +473,6 @@ def test_library_video_cloud_sanitizes_filename_in_disposition(monkeypatch):
 
     from generator_app import create_app
     client = create_app(testing=True).test_client()
-    token = auth.make_token("testuser")
-    client.environ_base["HTTP_AUTHORIZATION"] = f"Bearer {token}"
     with patch("generator_app._load_library", return_value=[entry]), \
          patch("generator_app.storage.is_cloud", return_value=True), \
          patch("generator_app.storage.presigned_url", side_effect=fake_presigned):
@@ -805,7 +801,7 @@ def test_library_delete_removes_entry(client, tmp_path, monkeypatch):
     initial_entries = [{"id": "abc123", "filename": "x.mp4"}]
     saved = []
     with patch("storage.load_library", return_value=list(initial_entries)), \
-         patch.object(gen_module, "_save_library", side_effect=lambda entries, user_id=None: saved.extend(entries)):
+         patch.object(gen_module, "_save_library", side_effect=lambda entries: saved.extend(entries)):
         resp = client.delete("/library/abc123")
     assert resp.status_code == 200
     assert resp.get_json()["ok"] is True
@@ -1359,7 +1355,7 @@ def test_generation_result_includes_entry_id(tmp_path, client):
 
     captured_entry = {}
 
-    def fake_add(entry, user_id=None):
+    def fake_add(entry):
         captured_entry.update(entry)
 
     with patch("generator_app._library_add", side_effect=fake_add), \
@@ -1382,13 +1378,9 @@ def test_generation_result_includes_entry_id(tmp_path, client):
     assert result["entry_id"] == captured_entry["id"]
 
 
-def test_cloud_temp_dir_cleanup_scheduled(client, tmp_path, monkeypatch):
+def test_cloud_temp_dir_cleanup_scheduled(client, tmp_path):
     """In cloud mode, a deferred cleanup timer must be started after generation."""
-    monkeypatch.setenv("SIZZLE_SECRET_KEY", "test-secret")
-    import auth
-    token = auth.make_token("testuser")
-    client.environ_base["HTTP_AUTHORIZATION"] = f"Bearer {token}"
-    session_key = "users/testuser/sessions/test"
+    session_key = "sessions/test"
     txt_content = "[0:05] Speaker: Hi."
 
     timers_started = []
@@ -1540,7 +1532,7 @@ def test_local_generation_writes_vtt_sidecar(client, tmp_path):
 
     captured = {}
 
-    def fake_add(entry, user_id=None):
+    def fake_add(entry):
         captured["entry"] = entry
 
     with patch("generator_app._library_add", side_effect=fake_add), \
@@ -1569,7 +1561,7 @@ def test_download_captioned_runs_ffmpeg_subtitles(tmp_path, monkeypatch):
     (tmp_path / "reel.vtt").write_text("WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nhi\n",
                                        encoding="utf-8")
     app = generator_app.create_app(testing=True)
-    monkeypatch.setattr(generator_app, "_load_library", lambda user_id=None: [
+    monkeypatch.setattr(generator_app, "_load_library", lambda: [
         {"id": "e1", "path": str(reel), "filename": "reel.mp4",
          "captions_filename": "reel.vtt"},
     ])
@@ -1594,7 +1586,7 @@ def test_download_captioned_runs_ffmpeg_subtitles(tmp_path, monkeypatch):
 def test_download_captioned_404_without_captions(monkeypatch):
     import generator_app
     app = generator_app.create_app(testing=True)
-    monkeypatch.setattr(generator_app, "_load_library", lambda user_id=None: [
+    monkeypatch.setattr(generator_app, "_load_library", lambda: [
         {"id": "e2", "path": "/x/reel.mp4", "filename": "reel.mp4"},
     ])
     resp = app.test_client().post("/library/e2/download-captioned")

@@ -4,14 +4,10 @@ from unittest.mock import patch
 
 
 @pytest.fixture
-def client(monkeypatch):
-    monkeypatch.setenv("SIZZLE_SECRET_KEY", "test-secret")
+def client():
     from app import create_app
-    import auth
     app = create_app(testing=True)
     with app.test_client() as c:
-        token = auth.make_token("testuser")
-        c.environ_base["HTTP_AUTHORIZATION"] = f"Bearer {token}"
         yield c
 
 
@@ -110,8 +106,7 @@ def test_upload_cloud_mode_calls_storage_upload(tmp_path, monkeypatch):
     monkeypatch.setenv("S3_BUCKET", "test-bucket")
     monkeypatch.setenv("S3_ACCESS_KEY", "key")
     monkeypatch.setenv("S3_SECRET_KEY", "secret")
-    monkeypatch.setenv("SIZZLE_SECRET_KEY", "test-secret")
-    import importlib, storage, app as app_mod, auth
+    import importlib, storage, app as app_mod
     importlib.reload(storage)
     importlib.reload(app_mod)
 
@@ -121,16 +116,14 @@ def test_upload_cloud_mode_calls_storage_upload(tmp_path, monkeypatch):
     def fake_upload(local_path, key):
         uploaded_keys.append(key)
 
-    token = auth.make_token("testuser")
     with flask_app.test_client() as c, \
          patch("app.storage.upload_file", side_effect=fake_upload):
-        c.environ_base["HTTP_AUTHORIZATION"] = f"Bearer {token}"
         data = {"files": (io.BytesIO(b"fake mp4"), "video1.mp4")}
         resp = c.post("/upload", data=data, content_type="multipart/form-data")
 
     assert resp.status_code == 200
     body = resp.get_json()
-    assert body["session_key"].startswith("users/testuser/sessions/")
+    assert body["session_key"].startswith("sessions/")
     # upload_file must have been called with the correct S3 key
     assert any("video1.mp4" in k for k in uploaded_keys)
 

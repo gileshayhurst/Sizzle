@@ -1,60 +1,6 @@
 const GENERATOR_URL = (window.__CONFIG__ || {}).generatorUrl || 'http://localhost:5001';
 const APP_MODE      = (window.__CONFIG__ || {}).mode || 'local';
 
-// ─── Auth (cloud mode only) ─────────────────────────────────────────────────
-// Local mode is a trusted single-user desktop app — no token, no login screen.
-let AUTH_TOKEN = (APP_MODE === 'cloud') ? sessionStorage.getItem('sizzle_token') : null;
-
-function authHeaders(extra) {
-  const h = Object.assign({}, extra || {});
-  if (AUTH_TOKEN) h['Authorization'] = 'Bearer ' + AUTH_TOKEN;
-  return h;
-}
-
-// Single choke point: every fetch in the app goes through here so the Bearer
-// header is always attached and a 401 bounces the user back to login.
-const _rawFetch = window.fetch.bind(window);
-window.fetch = function (url, opts) {
-  opts = opts || {};
-  opts.headers = authHeaders(opts.headers);
-  return _rawFetch(url, opts).then(r => {
-    if (r.status === 401 && APP_MODE === 'cloud') {
-      AUTH_TOKEN = null;
-      sessionStorage.removeItem('sizzle_token');
-      showLoginScreen();
-    }
-    return r;
-  });
-};
-
-// Append the token to a generator WebSocket URL (WS can't send headers).
-function withWsToken(base) {
-  return AUTH_TOKEN
-    ? base + (base.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(AUTH_TOKEN)
-    : base;
-}
-
-async function doLogin(userId, password) {
-  const r = await _rawFetch('/login', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ user_id: userId, password }),
-  });
-  if (!r.ok) return false;
-  AUTH_TOKEN = (await r.json()).token;
-  sessionStorage.setItem('sizzle_token', AUTH_TOKEN);
-  return true;
-}
-
-function showLoginScreen() {
-  const el = document.getElementById('screen-login');
-  if (el) el.classList.remove('hidden');
-}
-function hideLoginScreen() {
-  const el = document.getElementById('screen-login');
-  if (el) el.classList.add('hidden');
-}
-
 // ─── State ────────────────────────────────────────────────────────────────────
 const state = {
   folder: null,
@@ -1718,7 +1664,7 @@ async function _submitGenerateBrowser(mode, selections, prompt, outputFilename) 
 }
 
 function watchGeneration(jobId) {
-  const wsUrl = withWsToken(GENERATOR_URL.replace(/^http/, 'ws') + `/ws/job/${jobId}`);
+  const wsUrl = GENERATOR_URL.replace(/^http/, 'ws') + `/ws/job/${jobId}`;
   _genTerminated = false;
   _genWs = new WebSocket(wsUrl);
 
@@ -2502,36 +2448,12 @@ $('btn-close-player').addEventListener('click', () => {
   _closeModal('library-player-overlay');
 });
 
-// Startup: in cloud mode without a token, gate on the login screen and defer the
-// bootstrap fetches (they hit protected endpoints). Local mode / authed → run now.
-function startApp() {
-  hideLoginScreen();
-  // Load recent folders on startup
-  loadRecentFolders();
-  // Wake the generator service (Render free tier sleeps after ~15 min idle) so
-  // it's usually up by the time the user opens a folder or generates a reel.
-  fetch(GENERATOR_URL + '/library').catch(() => {});
-}
+// Load recent folders on startup
+loadRecentFolders();
 
-if (APP_MODE === 'cloud' && !AUTH_TOKEN) {
-  showLoginScreen();
-} else {
-  startApp();
-}
-
-document.getElementById('login-btn')?.addEventListener('click', async () => {
-  const err = document.getElementById('login-error');
-  const ok = await doLogin(
-    document.getElementById('login-user').value.trim(),
-    document.getElementById('login-pass').value,
-  );
-  if (ok) { err.classList.add('hidden'); startApp(); }
-  else { err.classList.remove('hidden'); }
-});
-
-document.getElementById('login-pass')?.addEventListener('keydown', e => {
-  if (e.key === 'Enter') document.getElementById('login-btn').click();
-});
+// Wake the generator service (Render free tier sleeps after ~15 min idle) so
+// it's usually up by the time the user opens a folder or generates a reel.
+fetch(GENERATOR_URL + '/library').catch(() => {});
 
 // ─── Folder badge dropdown ────────────────────────────────────────────────────
 let _folderDropdown = null;

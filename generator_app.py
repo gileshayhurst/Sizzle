@@ -29,10 +29,8 @@ if not shutil.which("ffmpeg") and _sys.platform == "win32":
         os.environ["PATH"] = str(_bin) + os.pathsep + os.environ.get("PATH", "")
         break
 
-from flask import Flask, g, jsonify, redirect, request, send_file
+from flask import Flask, jsonify, redirect, request, send_file
 from flask_cors import CORS
-from flask_limiter import Limiter
-from flask_limiter.util import get_remote_address
 from flask_sock import Sock
 
 from loader import scan_videos
@@ -40,7 +38,6 @@ from video_editor import check_ffmpeg, extract_clip, parse_timestamp_to_seconds,
 from shared import parse_transcript_lines as _parse_transcript_lines, filter_generated_reels as _filter_generated_reels
 from captions import build_webvtt, collect_caption_lines, WEBVTT_MIME
 import storage
-import auth
 
 LIBRARY_PATH = Path(__file__).parent / "sizzle_library.json"
 
@@ -75,23 +72,23 @@ def _append_log(job_id: str, message: str) -> None:
 
 # ─── Library helpers ──────────────────────────────────────────────────────────
 
-def _load_library(user_id: str | None = None) -> list:
-    return storage.load_library(user_id)
+def _load_library() -> list:
+    return storage.load_library()
 
 
-def _save_library(entries: list, user_id: str | None = None) -> None:
+def _save_library(entries: list) -> None:
     if storage.is_cloud():
-        storage.write_json(storage.library_key(user_id), entries)
+        storage.write_json(storage.library_key(), entries)
         return
     with LIBRARY_PATH.open("w", encoding="utf-8") as f:
         json.dump(entries, f, indent=2, ensure_ascii=False)
 
 
-def _library_add(entry: dict, user_id: str | None = None) -> None:
+def _library_add(entry: dict) -> None:
     with _library_lock:
-        entries = _load_library(user_id)
+        entries = _load_library()
         entries.insert(0, entry)
-        _save_library(entries, user_id)
+        _save_library(entries)
 
 
 
@@ -395,8 +392,7 @@ def _run_generation(job_id: str, folder: str,
                     selections: dict, prompt: str, output_filename: str,
                     session_key: str = None,
                     video_paths: list = None,
-                    video_urls: dict = None,
-                    user_id: str = None) -> None:
+                    video_urls: dict = None) -> None:
     """Run a generation job, guaranteeing it always reaches a terminal state.
 
     The pipeline runs on a daemon thread whose only wrapper is a `finally` for
@@ -412,7 +408,6 @@ def _run_generation(job_id: str, folder: str,
             session_key=session_key,
             video_paths=video_paths,
             video_urls=video_urls,
-            user_id=user_id,
         )
     except Exception as exc:
         job = _jobs.get(job_id)
@@ -431,8 +426,7 @@ def _run_generation_impl(job_id: str, folder: str,
                     selections: dict, prompt: str, output_filename: str,
                     session_key: str = None,
                     video_paths: list = None,
-                    video_urls: dict = None,
-                    user_id: str = None) -> None:
+                    video_urls: dict = None) -> None:
     """Extract and stitch clips from selected transcript lines."""
     job = _jobs[job_id]
     if video_paths is None:
@@ -781,7 +775,7 @@ def _run_generation_impl(job_id: str, folder: str,
             except Exception as exc:
                 _append_log(job_id, f"· Captions sidecar skipped: {exc}")
 
-    _library_add(library_entry, user_id)
+    _library_add(library_entry)
 
     # Schedule cleanup of the cloud session temp dir 1 hour after generation.
     # The dir is kept alive so /video/<job_id> can serve the reel directly
@@ -848,48 +842,16 @@ def _job_ws_impl(ws, job_id):
 
 def create_app(testing: bool = False) -> Flask:
     app = Flask(__name__)
-    # Restrict cross-origin access to the configured frontend origin(s) in cloud
-    # mode; stay permissive for local dev when ALLOWED_ORIGINS is unset.
-    _origins = [o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "").split(",") if o.strip()]
-    if _origins:
-        CORS(app, origins=_origins, allow_headers=["Authorization", "Content-Type"])
-    else:
-        CORS(app)
+    CORS(app)
     app.config["TESTING"] = testing
-    app.before_request(auth.require_auth)
-
-    def _uid():
-        return getattr(g, "user_id", None)
-
-    # ponytail: in-memory limiter storage — per-instance, resets on restart.
-    # Fine on Render's single free-tier instance; move to Redis if it scales out.
-    # Disabled in local mode (single-user desktop) so limits never interfere.
-    limiter = Limiter(
-        key_func=lambda: _uid() or get_remote_address(),
-        app=app, default_limits=["600 per hour"],
-    )
-    app.config["RATELIMIT_ENABLED"] = storage.is_cloud()
-    app.limiter = limiter
-
-    # Cap request bodies the host buffers. Reel bytes go browser->R2, not here.
-    app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024
 
     sock = Sock(app)
 
     @sock.route("/ws/job/<job_id>")
     def job_ws(ws, job_id):
-        from flask import request as _req
-        if storage.is_cloud() and not auth.verify_token(_req.args.get("token")):
-            try:
-                ws.send(json.dumps({"type": "done", "status": "error",
-                                    "error": "authentication required", "result": None}))
-            except Exception:
-                pass
-            return
         _job_ws_impl(ws, job_id)
 
     @app.post("/generate")
-    @limiter.limit("10 per minute;100 per hour")
     def generate():
         body = request.get_json() or {}
         prompt = body.get("prompt", "").strip()
@@ -898,7 +860,6 @@ def create_app(testing: bool = False) -> Flask:
         output_filename = body.get("output_filename", "sizzle_reel.mp4").strip()
         output_filename = Path(output_filename).name
         session_key = body.get("session_key", "").strip() or None
-        gen_user_id = _uid()
 
         VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
         video_paths_for_gen = None
@@ -907,8 +868,6 @@ def create_app(testing: bool = False) -> Flask:
         if storage.is_cloud():
             if not session_key:
                 return jsonify({"error": "session_key required in cloud mode"}), 400
-            if not auth.owns_session(session_key):
-                return jsonify({"error": "forbidden"}), 403
             tmp_session_dir = tempfile.mkdtemp(prefix="sizzle_gen_")
             _tmp_dir_to_cleanup = None  # intentionally no immediate cleanup
 
@@ -968,7 +927,6 @@ def create_app(testing: bool = False) -> Flask:
                     session_key=session_key,
                     video_paths=video_paths_for_gen,
                     video_urls=video_urls_for_gen,
-                    user_id=gen_user_id,
                 )
             finally:
                 if _tmp_dir_to_cleanup:
@@ -981,7 +939,6 @@ def create_app(testing: bool = False) -> Flask:
                         session_key=session_key,
                         video_paths=video_paths_for_gen,
                         video_urls=video_urls_for_gen,
-                        user_id=gen_user_id,
                     )
                 finally:
                     if _tmp_dir_to_cleanup:
@@ -994,7 +951,6 @@ def create_app(testing: bool = False) -> Flask:
         return jsonify({"job_id": job_id})
 
     @app.post("/plan")
-    @limiter.limit("20 per minute")
     def plan():
         """Return the ordered segment plan + presigned URLs for browser-side encoding."""
         if not storage.is_cloud():
@@ -1004,8 +960,6 @@ def create_app(testing: bool = False) -> Flask:
         session_key = (body.get("session_key") or "").strip()
         if not session_key:
             return jsonify({"error": "session_key required"}), 400
-        if not auth.owns_session(session_key):
-            return jsonify({"error": "forbidden"}), 403
 
         VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
         selections = body.get("selections", {})
@@ -1107,7 +1061,7 @@ def create_app(testing: bool = False) -> Flask:
         captions_key = (body.get("captions_key") or "").strip()
         if captions_key:
             entry["captions_key"] = captions_key
-        _library_add(entry, _uid())
+        _library_add(entry)
         return jsonify({"id": entry["id"]})
 
     @app.get("/status/<job_id>")
@@ -1156,7 +1110,7 @@ def create_app(testing: bool = False) -> Flask:
 
     @app.get("/library-video/<entry_id>")
     def serve_library_video(entry_id):
-        entries = _load_library(_uid())
+        entries = _load_library()
         entry = next((e for e in entries if e["id"] == entry_id), None)
         if not entry:
             return jsonify({"error": "not found"}), 404
@@ -1199,7 +1153,7 @@ def create_app(testing: bool = False) -> Flask:
 
     @app.get("/library-captions/<entry_id>")
     def serve_library_captions(entry_id):
-        entries = _load_library(_uid())
+        entries = _load_library()
         entry = next((e for e in entries if e["id"] == entry_id), None)
         if not entry:
             return jsonify({"error": "not found"}), 404
@@ -1229,7 +1183,7 @@ def create_app(testing: bool = False) -> Flask:
         """
         if storage.is_cloud():
             return jsonify({"error": "cloud burn-in runs in the browser"}), 400
-        entries = _load_library(_uid())
+        entries = _load_library()
         entry = next((e for e in entries if e["id"] == entry_id), None)
         if not entry:
             return jsonify({"error": "not found"}), 404
@@ -1261,7 +1215,7 @@ def create_app(testing: bool = False) -> Flask:
 
     @app.get("/library")
     def get_library():
-        entries = _load_library(_uid())
+        entries = _load_library()
         # Playback is routed through /library-video/<id>, which serves the local
         # file when present and otherwise redirects to a presigned R2 URL (with a
         # forced video/mp4 Content-Type so Chrome's ORB permits the load). Keeping
@@ -1273,14 +1227,14 @@ def create_app(testing: bool = False) -> Flask:
         delete_file = request.args.get("delete_file") == "true"
         file_path_to_delete = None
         with _library_lock:
-            entries = _load_library(_uid())
+            entries = _load_library()
             entry = next((e for e in entries if e["id"] == entry_id), None)
             if entry is None:
                 return jsonify({"error": "not found"}), 404
             if delete_file:
                 file_path_to_delete = entry.get("path")
             entries = [e for e in entries if e["id"] != entry_id]
-            _save_library(entries, _uid())
+            _save_library(entries)
         if file_path_to_delete:
             try:
                 Path(file_path_to_delete).unlink(missing_ok=True)
@@ -1292,7 +1246,7 @@ def create_app(testing: bool = False) -> Flask:
     def edit_library_entry(entry_id):
         body = request.get_json() or {}
         with _library_lock:
-            entries = _load_library(_uid())
+            entries = _load_library()
             entry = next((e for e in entries if e["id"] == entry_id), None)
             if entry is None:
                 return jsonify({"error": "not found"}), 404
@@ -1300,7 +1254,7 @@ def create_app(testing: bool = False) -> Flask:
                 entry["title"] = str(body["title"])
             if "notes" in body:
                 entry["notes"] = str(body["notes"])
-            _save_library(entries, _uid())
+            _save_library(entries)
         return jsonify(entry)
 
     @app.post("/find-local-folder")

@@ -679,15 +679,10 @@ def _poll_job(client, job_id, timeout=5.0):
     return status
 
 
-def test_load_folder_uncached_cloud_session_returns_download_job(client, tmp_path, monkeypatch):
+def test_load_folder_uncached_cloud_session_returns_download_job(client, tmp_path):
     """Cloud mode + uncached session: /load-folder returns a session_download
     job immediately; the job finishes with the folder/files payload in result."""
     import app as app_module
-    import auth
-
-    monkeypatch.setenv("SIZZLE_SECRET_KEY", "test-secret")
-    token = auth.make_token("testuser")
-    client.environ_base["HTTP_AUTHORIZATION"] = f"Bearer {token}"
 
     app_module._cloud_session_dirs.clear()
     app_module._cloud_session_ready.clear()
@@ -697,10 +692,10 @@ def test_load_folder_uncached_cloud_session_returns_download_job(client, tmp_pat
 
     with patch("storage.is_cloud", return_value=True), \
          patch("storage.list_keys", return_value=[
-             "users/testuser/sessions/dl1/vid.mp4", "users/testuser/sessions/dl1/vid.txt"]), \
+             "sessions/dl1/vid.mp4", "sessions/dl1/vid.txt"]), \
          patch("storage.download_file", side_effect=fake_download), \
          patch("tempfile.mkdtemp", return_value=str(tmp_path)):
-        resp = client.post("/load-folder", json={"folder": "users/testuser/sessions/dl1"})
+        resp = client.post("/load-folder", json={"folder": "sessions/dl1"})
         assert resp.status_code == 200
         data = resp.get_json()
         assert data["job_type"] == "session_download"
@@ -716,16 +711,11 @@ def test_load_folder_uncached_cloud_session_returns_download_job(client, tmp_pat
     app_module._cloud_session_ready.clear()
 
 
-def test_session_download_cancel_cleans_cache_and_retry_succeeds(client, tmp_path, monkeypatch):
+def test_session_download_cancel_cleans_cache_and_retry_succeeds(client, tmp_path):
     """DELETE /jobs/<id> mid-download cancels the job, the session cache is
     cleaned, and a retried /load-folder re-downloads and completes."""
     import time
     import app as app_module
-    import auth
-
-    monkeypatch.setenv("SIZZLE_SECRET_KEY", "test-secret")
-    token = auth.make_token("testuser")
-    client.environ_base["HTTP_AUTHORIZATION"] = f"Bearer {token}"
 
     app_module._cloud_session_dirs.clear()
     app_module._cloud_session_ready.clear()
@@ -742,11 +732,11 @@ def test_session_download_cancel_cleans_cache_and_retry_succeeds(client, tmp_pat
 
     with patch("storage.is_cloud", return_value=True), \
          patch("storage.list_keys", return_value=[
-             "users/testuser/sessions/dl2/a.mp4", "users/testuser/sessions/dl2/a.txt",
-             "users/testuser/sessions/dl2/b.mp4", "users/testuser/sessions/dl2/b.txt"]), \
+             "sessions/dl2/a.mp4", "sessions/dl2/a.txt",
+             "sessions/dl2/b.mp4", "sessions/dl2/b.txt"]), \
          patch("storage.download_file", side_effect=slow_download), \
          patch("tempfile.mkdtemp", side_effect=lambda **kw: next(tmp_dirs)):
-        resp = client.post("/load-folder", json={"folder": "users/testuser/sessions/dl2"})
+        resp = client.post("/load-folder", json={"folder": "sessions/dl2"})
         job_id = resp.get_json()["job_id"]
         time.sleep(0.2)                  # let the thread reach the blocking download
         client.delete(f"/jobs/{job_id}")
@@ -758,14 +748,14 @@ def test_session_download_cancel_cleans_cache_and_retry_succeeds(client, tmp_pat
         # The thread cleans the cache after cancelling — wait for it.
         deadline = time.time() + 5
         while time.time() < deadline:
-            if "users/testuser/sessions/dl2" not in app_module._cloud_session_dirs:
+            if "sessions/dl2" not in app_module._cloud_session_dirs:
                 break
             time.sleep(0.05)
-        assert "users/testuser/sessions/dl2" not in app_module._cloud_session_dirs
-        assert "users/testuser/sessions/dl2" not in app_module._cloud_session_ready
+        assert "sessions/dl2" not in app_module._cloud_session_dirs
+        assert "sessions/dl2" not in app_module._cloud_session_ready
 
         # Retry: fresh job, downloads run instantly now, completes.
-        resp2 = client.post("/load-folder", json={"folder": "users/testuser/sessions/dl2"})
+        resp2 = client.post("/load-folder", json={"folder": "sessions/dl2"})
         job_id2 = resp2.get_json()["job_id"]
         assert job_id2 != job_id
         status2 = _poll_job(client, job_id2)
@@ -776,15 +766,10 @@ def test_session_download_cancel_cleans_cache_and_retry_succeeds(client, tmp_pat
     app_module._cloud_session_ready.clear()
 
 
-def test_load_folder_cached_cloud_session_stays_synchronous(client, tmp_path, monkeypatch):
+def test_load_folder_cached_cloud_session_stays_synchronous(client, tmp_path):
     """An already-downloaded session must not spawn a job — /load-folder answers
     synchronously with the file list, exactly as before."""
     import app as app_module
-    import auth
-
-    monkeypatch.setenv("SIZZLE_SECRET_KEY", "test-secret")
-    token = auth.make_token("testuser")
-    client.environ_base["HTTP_AUTHORIZATION"] = f"Bearer {token}"
 
     app_module._cloud_session_dirs.clear()
     app_module._cloud_session_ready.clear()
@@ -793,11 +778,11 @@ def test_load_folder_cached_cloud_session_stays_synchronous(client, tmp_path, mo
     (tmp_path / "vid.txt").write_text("[0:01] Speaker: hi", encoding="utf-8")
     ev = threading.Event()
     ev.set()
-    app_module._cloud_session_dirs["users/testuser/sessions/cached"] = str(tmp_path)
-    app_module._cloud_session_ready["users/testuser/sessions/cached"] = ev
+    app_module._cloud_session_dirs["sessions/cached"] = str(tmp_path)
+    app_module._cloud_session_ready["sessions/cached"] = ev
 
     with patch("storage.is_cloud", return_value=True):
-        resp = client.post("/load-folder", json={"folder": "users/testuser/sessions/cached"})
+        resp = client.post("/load-folder", json={"folder": "sessions/cached"})
 
     assert resp.status_code == 200
     data = resp.get_json()
