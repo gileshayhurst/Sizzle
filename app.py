@@ -27,6 +27,8 @@ if not shutil.which("ffmpeg") and _sys.platform == "win32":
         break
 
 from flask import Flask, g, jsonify, render_template, request, send_file
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 
 from claude_client import query_claude
 from loader import scan_videos
@@ -433,7 +435,19 @@ def create_app(testing: bool = False) -> Flask:
 
     app.before_request(auth.require_auth)
 
+    def _rate_key():
+        return getattr(g, "user_id", None) or get_remote_address()
+
+    # ponytail: in-memory limiter storage — per-instance, resets on restart.
+    # Fine on Render's single free-tier instance; move to Redis storage_uri if
+    # the service ever scales to multiple instances. Disabled in local mode
+    # (single-user desktop app) so limits never interfere there.
+    limiter = Limiter(key_func=_rate_key, app=app, default_limits=["600 per hour"])
+    app.config["RATELIMIT_ENABLED"] = storage.is_cloud()
+    app.limiter = limiter
+
     @app.post("/login")
+    @limiter.limit("5 per minute")
     def login():
         body = request.get_json(silent=True) or {}
         user_id = (body.get("user_id") or "").strip()
@@ -454,6 +468,7 @@ def create_app(testing: bool = False) -> Flask:
     _ALLOWED_UPLOAD_EXTENSIONS = _VIDEO_EXTENSIONS | {".txt"}
 
     @app.post("/upload")
+    @limiter.limit("30 per minute")
     def upload():
         """Cloud-mode endpoint: receive uploaded video and transcript files as a session.
 
@@ -510,6 +525,7 @@ def create_app(testing: bool = False) -> Flask:
         })
 
     @app.post("/upload/prepare")
+    @limiter.limit("30 per minute")
     def upload_prepare():
         """Cloud-mode: validate filenames and create an upload session.
 
@@ -781,6 +797,7 @@ def create_app(testing: bool = False) -> Flask:
         return jsonify({"files": files})
 
     @app.post("/analyze")
+    @limiter.limit("10 per minute;100 per hour")
     def analyze():
         body = request.get_json() or {}
         folder = body.get("folder", "").strip()
