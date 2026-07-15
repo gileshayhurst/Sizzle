@@ -35,6 +35,8 @@ from transcriber import transcribe_video
 from video_editor import parse_timestamp_to_seconds
 from shared import parse_transcript_lines as _parse_transcript_lines, filter_generated_reels as _filter_generated_reels
 import storage
+import auth
+import manage_users
 
 RECENT_FOLDERS_PATH = Path(__file__).parent / "recent_folders.json"
 PROMPT_HISTORY_PATH = Path(__file__).parent / "prompt_history.json"
@@ -428,6 +430,17 @@ def _scan_load_folder(folder: str) -> tuple[dict | None, str | None]:
 def create_app(testing: bool = False) -> Flask:
     app = Flask(__name__)
     app.config["TESTING"] = testing
+
+    app.before_request(auth.require_auth)
+
+    @app.post("/login")
+    def login():
+        body = request.get_json(silent=True) or {}
+        user_id = (body.get("user_id") or "").strip()
+        password = body.get("password") or ""
+        if not user_id or not password or not manage_users.verify_user(user_id, password):
+            return jsonify({"error": "invalid credentials"}), 401
+        return jsonify({"token": auth.make_token(user_id)})
 
     @app.get("/")
     def index():
