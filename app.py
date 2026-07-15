@@ -26,7 +26,9 @@ if not shutil.which("ffmpeg") and _sys.platform == "win32":
         os.environ["PATH"] = str(_bin) + os.pathsep + os.environ.get("PATH", "")
         break
 
-from flask import Flask, jsonify, render_template, request, send_file
+from flask import Flask, g, jsonify, render_template, request, send_file
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 
 from claude_client import query_claude
 from loader import scan_videos
@@ -35,6 +37,8 @@ from transcriber import transcribe_video
 from video_editor import parse_timestamp_to_seconds
 from shared import parse_transcript_lines as _parse_transcript_lines, filter_generated_reels as _filter_generated_reels
 import storage
+import auth
+import manage_users
 
 RECENT_FOLDERS_PATH = Path(__file__).parent / "recent_folders.json"
 PROMPT_HISTORY_PATH = Path(__file__).parent / "prompt_history.json"
@@ -429,6 +433,33 @@ def create_app(testing: bool = False) -> Flask:
     app = Flask(__name__)
     app.config["TESTING"] = testing
 
+    app.before_request(auth.require_auth)
+
+    def _rate_key():
+        return getattr(g, "user_id", None) or get_remote_address()
+
+    # ponytail: in-memory limiter storage — per-instance, resets on restart.
+    # Fine on Render's single free-tier instance; move to Redis storage_uri if
+    # the service ever scales to multiple instances. Disabled in local mode
+    # (single-user desktop app) so limits never interfere there.
+    limiter = Limiter(key_func=_rate_key, app=app, default_limits=["600 per hour"])
+    app.config["RATELIMIT_ENABLED"] = storage.is_cloud()
+    app.limiter = limiter
+
+    # 50 MB cap on request bodies the host actually buffers. Large video bytes go
+    # browser->R2 via presigned PUT and never hit this host (see /upload/prepare).
+    app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024
+
+    @app.post("/login")
+    @limiter.limit("5 per minute")
+    def login():
+        body = request.get_json(silent=True) or {}
+        user_id = (body.get("user_id") or "").strip()
+        password = body.get("password") or ""
+        if not user_id or not password or not manage_users.verify_user(user_id, password):
+            return jsonify({"error": "invalid credentials"}), 401
+        return jsonify({"token": auth.make_token(user_id)})
+
     @app.get("/")
     def index():
         return render_template(
@@ -441,6 +472,7 @@ def create_app(testing: bool = False) -> Flask:
     _ALLOWED_UPLOAD_EXTENSIONS = _VIDEO_EXTENSIONS | {".txt"}
 
     @app.post("/upload")
+    @limiter.limit("30 per minute")
     def upload():
         """Cloud-mode endpoint: receive uploaded video and transcript files as a session.
 
@@ -464,7 +496,7 @@ def create_app(testing: bool = False) -> Flask:
         if not has_video:
             return jsonify({"error": "At least one video file is required."}), 400
 
-        session_key = storage.new_session_key()
+        session_key = storage.new_session_key(getattr(g, "user_id", None))
 
         # Determine local session directory
         if storage.is_cloud():
@@ -497,6 +529,7 @@ def create_app(testing: bool = False) -> Flask:
         })
 
     @app.post("/upload/prepare")
+    @limiter.limit("30 per minute")
     def upload_prepare():
         """Cloud-mode: validate filenames and create an upload session.
 
@@ -531,7 +564,7 @@ def create_app(testing: bool = False) -> Flask:
         if not has_video:
             return jsonify({"error": "At least one video file is required."}), 400
 
-        session_key = storage.new_session_key()
+        session_key = storage.new_session_key(getattr(g, "user_id", None))
         uploads = {
             name: storage.presigned_put_url(f"{session_key}/{Path(name).name}", expires=7200)
             for name in filenames
@@ -582,6 +615,8 @@ def create_app(testing: bool = False) -> Flask:
     @app.post("/load-folder")
     def load_folder():
         folder = (request.get_json() or {}).get("folder", "").strip()
+        if storage.is_cloud() and not auth.owns_session(folder):
+            return jsonify({"error": "forbidden"}), 403
         if storage.is_cloud() and folder and not Path(folder).exists():
             session_key = folder
             with _cloud_session_lock:
@@ -737,6 +772,8 @@ def create_app(testing: bool = False) -> Flask:
     @app.get("/transcripts")
     def get_transcripts():
         folder = request.args.get("folder", "").strip()
+        if storage.is_cloud() and not auth.owns_session(folder):
+            return jsonify({"error": "forbidden"}), 403
         if storage.is_cloud() and folder and not Path(folder).exists():
             folder = _ensure_cloud_session(folder)
         if not folder or not Path(folder).exists():
@@ -764,12 +801,15 @@ def create_app(testing: bool = False) -> Flask:
         return jsonify({"files": files})
 
     @app.post("/analyze")
+    @limiter.limit("10 per minute;100 per hour")
     def analyze():
         body = request.get_json() or {}
         folder = body.get("folder", "").strip()
         prompt = body.get("prompt", "").strip()
         if not prompt:
             return jsonify({"error": "prompt is required"}), 400
+        if storage.is_cloud() and not auth.owns_session(folder):
+            return jsonify({"error": "forbidden"}), 403
         if storage.is_cloud() and folder and not Path(folder).exists():
             folder = _ensure_cloud_session(folder)
         if not folder or not Path(folder).exists():

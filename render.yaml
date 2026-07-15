@@ -19,6 +19,13 @@ services:
         sync: false
       - key: S3_ENDPOINT_URL
         sync: false
+      # Shared token-signing key — MUST be the same value on both services so
+      # each can validate tokens the other issued. Set in the Render dashboard.
+      - key: SIZZLE_SECRET_KEY
+        sync: false
+      # Comma-separated frontend origin(s) allowed for cross-origin requests.
+      - key: ALLOWED_ORIGINS
+        sync: false
 
   - type: web
     name: sizzle-generator
@@ -35,4 +42,10 @@ services:
       - key: S3_SECRET_KEY
         sync: false
       - key: S3_ENDPOINT_URL
+        sync: false
+      # Must match sizzle-app's SIZZLE_SECRET_KEY (shared token validation).
+      - key: SIZZLE_SECRET_KEY
+        sync: false
+      # Comma-separated frontend origin(s) allowed for cross-origin requests.
+      - key: ALLOWED_ORIGINS
         sync: false
