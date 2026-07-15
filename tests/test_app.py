@@ -679,10 +679,15 @@ def _poll_job(client, job_id, timeout=5.0):
     return status
 
 
-def test_load_folder_uncached_cloud_session_returns_download_job(client, tmp_path):
+def test_load_folder_uncached_cloud_session_returns_download_job(client, tmp_path, monkeypatch):
     """Cloud mode + uncached session: /load-folder returns a session_download
     job immediately; the job finishes with the folder/files payload in result."""
     import app as app_module
+    import auth
+
+    monkeypatch.setenv("SIZZLE_SECRET_KEY", "test-secret")
+    token = auth.make_token("testuser")
+    client.environ_base["HTTP_AUTHORIZATION"] = f"Bearer {token}"
 
     app_module._cloud_session_dirs.clear()
     app_module._cloud_session_ready.clear()
@@ -711,11 +716,16 @@ def test_load_folder_uncached_cloud_session_returns_download_job(client, tmp_pat
     app_module._cloud_session_ready.clear()
 
 
-def test_session_download_cancel_cleans_cache_and_retry_succeeds(client, tmp_path):
+def test_session_download_cancel_cleans_cache_and_retry_succeeds(client, tmp_path, monkeypatch):
     """DELETE /jobs/<id> mid-download cancels the job, the session cache is
     cleaned, and a retried /load-folder re-downloads and completes."""
     import time
     import app as app_module
+    import auth
+
+    monkeypatch.setenv("SIZZLE_SECRET_KEY", "test-secret")
+    token = auth.make_token("testuser")
+    client.environ_base["HTTP_AUTHORIZATION"] = f"Bearer {token}"
 
     app_module._cloud_session_dirs.clear()
     app_module._cloud_session_ready.clear()
@@ -766,10 +776,15 @@ def test_session_download_cancel_cleans_cache_and_retry_succeeds(client, tmp_pat
     app_module._cloud_session_ready.clear()
 
 
-def test_load_folder_cached_cloud_session_stays_synchronous(client, tmp_path):
+def test_load_folder_cached_cloud_session_stays_synchronous(client, tmp_path, monkeypatch):
     """An already-downloaded session must not spawn a job — /load-folder answers
     synchronously with the file list, exactly as before."""
     import app as app_module
+    import auth
+
+    monkeypatch.setenv("SIZZLE_SECRET_KEY", "test-secret")
+    token = auth.make_token("testuser")
+    client.environ_base["HTTP_AUTHORIZATION"] = f"Bearer {token}"
 
     app_module._cloud_session_dirs.clear()
     app_module._cloud_session_ready.clear()

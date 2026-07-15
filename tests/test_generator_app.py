@@ -456,9 +456,11 @@ def test_library_captions_404_when_no_captions(monkeypatch):
     assert resp.status_code == 404
 
 
-def test_library_video_cloud_sanitizes_filename_in_disposition():
+def test_library_video_cloud_sanitizes_filename_in_disposition(monkeypatch):
     """The cloud presigned-URL Content-Disposition must not let a filename break
     out of the quoted token or inject a header (", \\, CR, LF stripped)."""
+    monkeypatch.setenv("SIZZLE_SECRET_KEY", "test-secret")
+    import auth
     entry = {
         "id": "dl-test-2",
         "filename": 'evil".mp4\r\nX-Injected: 1',
@@ -473,6 +475,8 @@ def test_library_video_cloud_sanitizes_filename_in_disposition():
 
     from generator_app import create_app
     client = create_app(testing=True).test_client()
+    token = auth.make_token("testuser")
+    client.environ_base["HTTP_AUTHORIZATION"] = f"Bearer {token}"
     with patch("generator_app._load_library", return_value=[entry]), \
          patch("generator_app.storage.is_cloud", return_value=True), \
          patch("generator_app.storage.presigned_url", side_effect=fake_presigned):
@@ -1378,8 +1382,12 @@ def test_generation_result_includes_entry_id(tmp_path, client):
     assert result["entry_id"] == captured_entry["id"]
 
 
-def test_cloud_temp_dir_cleanup_scheduled(client, tmp_path):
+def test_cloud_temp_dir_cleanup_scheduled(client, tmp_path, monkeypatch):
     """In cloud mode, a deferred cleanup timer must be started after generation."""
+    monkeypatch.setenv("SIZZLE_SECRET_KEY", "test-secret")
+    import auth
+    token = auth.make_token("testuser")
+    client.environ_base["HTTP_AUTHORIZATION"] = f"Bearer {token}"
     session_key = "sessions/test"
     txt_content = "[0:05] Speaker: Hi."
 

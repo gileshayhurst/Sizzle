@@ -13,11 +13,15 @@ def cloud_client(monkeypatch, tmp_path):
     monkeypatch.setenv("S3_ACCESS_KEY", "key")
     monkeypatch.setenv("S3_SECRET_KEY", "secret")
     monkeypatch.setenv("S3_ENDPOINT_URL", "http://localhost:9000")
-    import importlib, storage, generator_app
+    monkeypatch.setenv("SIZZLE_SECRET_KEY", "test-secret")
+    import importlib, storage, auth, generator_app
     importlib.reload(storage)
+    importlib.reload(auth)
     importlib.reload(generator_app)
     app = generator_app.create_app(testing=True)
     with app.test_client() as c:
+        token = auth.make_token("testuser")
+        c.environ_base["HTTP_AUTHORIZATION"] = f"Bearer {token}"
         yield c
 
 
