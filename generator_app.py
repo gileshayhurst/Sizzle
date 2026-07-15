@@ -38,6 +38,7 @@ from video_editor import check_ffmpeg, extract_clip, parse_timestamp_to_seconds,
 from shared import parse_transcript_lines as _parse_transcript_lines, filter_generated_reels as _filter_generated_reels
 from captions import build_webvtt, collect_caption_lines, WEBVTT_MIME
 import storage
+import auth
 
 LIBRARY_PATH = Path(__file__).parent / "sizzle_library.json"
 
@@ -844,11 +845,20 @@ def create_app(testing: bool = False) -> Flask:
     app = Flask(__name__)
     CORS(app)
     app.config["TESTING"] = testing
+    app.before_request(auth.require_auth)
 
     sock = Sock(app)
 
     @sock.route("/ws/job/<job_id>")
     def job_ws(ws, job_id):
+        from flask import request as _req
+        if storage.is_cloud() and not auth.verify_token(_req.args.get("token")):
+            try:
+                ws.send(json.dumps({"type": "done", "status": "error",
+                                    "error": "authentication required", "result": None}))
+            except Exception:
+                pass
+            return
         _job_ws_impl(ws, job_id)
 
     @app.post("/generate")
