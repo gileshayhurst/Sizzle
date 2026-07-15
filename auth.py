@@ -44,3 +44,38 @@ def verify_token(token: str) -> str | None:
         return None
     uid = data.get("uid") if isinstance(data, dict) else None
     return uid or None
+
+
+# Paths reachable without a token (exact match on request.path).
+# "/" is the public page shell (no data) — it must load so the login form can
+# render; "/login" issues the token. Everything else requires auth in cloud mode.
+_ALLOWLIST = {"/", "/login"}
+
+
+def _bearer_token() -> str | None:
+    header = request.headers.get("Authorization", "")
+    if header.startswith("Bearer "):
+        return header[len("Bearer "):].strip()
+    return request.args.get("token")
+
+
+def require_auth():
+    """before_request callback. Returns None to allow, or a 401 response to block."""
+    if not storage.is_cloud():
+        return None
+    if request.path in _ALLOWLIST or request.path.startswith("/static/"):
+        return None
+    if request.method == "OPTIONS":
+        return None
+    uid = verify_token(_bearer_token())
+    if not uid:
+        return jsonify({"error": "authentication required"}), 401
+    g.user_id = uid
+    return None
+
+
+def current_user_prefix() -> str:
+    """`users/<uid>` in cloud (with a resolved g.user_id), else ''."""
+    if not storage.is_cloud():
+        return ""
+    return f"users/{g.user_id}"
