@@ -13,6 +13,7 @@ services:
       - S3_ACCESS_KEY=${S3_ACCESS_KEY}
       - S3_SECRET_KEY=${S3_SECRET_KEY}
       - S3_ENDPOINT_URL=${S3_ENDPOINT_URL}
+      - SIZZLE_SECRET_KEY=${SIZZLE_SECRET_KEY}
     depends_on:
       - generator
 
@@ -28,3 +29,4 @@ services:
       - S3_ACCESS_KEY=${S3_ACCESS_KEY}
       - S3_SECRET_KEY=${S3_SECRET_KEY}
       - S3_ENDPOINT_URL=${S3_ENDPOINT_URL}
+      - SIZZLE_SECRET_KEY=${SIZZLE_SECRET_KEY}
