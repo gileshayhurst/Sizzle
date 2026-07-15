@@ -14,6 +14,19 @@
   </script>
 </head>
 <body>
+
+<!-- LOGIN OVERLAY (cloud mode only; app.js shows/hides via #screen-login) -->
+<section id="screen-login" class="login-overlay hidden" aria-label="Sign in">
+  <div class="picker-card login-card">
+    <h2>Sign in</h2>
+    <p class="subtitle">Enter your client credentials to continue.</p>
+    <input id="login-user" class="folder-path-input" type="text" placeholder="Client ID" autocomplete="username" aria-label="Client ID">
+    <input id="login-pass" class="folder-path-input" type="password" placeholder="Password" autocomplete="current-password" aria-label="Password">
+    <div id="login-error" class="error-msg hidden" role="alert">Invalid credentials.</div>
+    <button id="login-btn" class="btn-primary picker-open-btn">Sign in</button>
+  </div>
+</section>
+
 <div id="app">
 
   <h1 class="sr-only">Sizzle Reel — AI video highlight extraction</h1>
