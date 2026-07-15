@@ -848,7 +848,13 @@ def _job_ws_impl(ws, job_id):
 
 def create_app(testing: bool = False) -> Flask:
     app = Flask(__name__)
-    CORS(app)
+    # Restrict cross-origin access to the configured frontend origin(s) in cloud
+    # mode; stay permissive for local dev when ALLOWED_ORIGINS is unset.
+    _origins = [o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "").split(",") if o.strip()]
+    if _origins:
+        CORS(app, origins=_origins, allow_headers=["Authorization", "Content-Type"])
+    else:
+        CORS(app)
     app.config["TESTING"] = testing
     app.before_request(auth.require_auth)
 
