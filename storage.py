@@ -55,13 +55,16 @@ def _bucket() -> str:
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
-def new_session_key() -> str:
-    """Return a fresh unique S3 prefix / local folder name for an upload session."""
-    return f"sessions/{uuid.uuid4().hex}"
+def new_session_key(user_id: str | None = None) -> str:
+    """Fresh unique upload-session prefix, scoped under the user in cloud tenancy."""
+    suffix = f"sessions/{uuid.uuid4().hex}"
+    return f"users/{user_id}/{suffix}" if user_id else suffix
 
 
-def library_key() -> str:
-    """S3 key / local relative path for the shared sizzle library JSON."""
+def library_key(user_id: str | None = None) -> str:
+    """Per-user library key in tenancy mode; legacy global key when user_id is None."""
+    if user_id:
+        return f"users/{user_id}/library.json"
     return "library/sizzle_library.json"
 
 
@@ -242,10 +245,10 @@ def upload_stream(key: str, readable) -> None:
     )
 
 
-def load_library() -> list:
-    """Load the sizzle library JSON. Returns [] on missing or corrupt."""
+def load_library(user_id: str | None = None) -> list:
+    """Load a library JSON (per-user in tenancy mode). Returns [] on missing/corrupt."""
     if is_cloud():
-        return read_json(library_key())
+        return read_json(library_key(user_id))
     path = _data_root() / "sizzle_library.json"
     if not path.exists():
         return []
