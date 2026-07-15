@@ -73,23 +73,23 @@ def _append_log(job_id: str, message: str) -> None:
 
 # ─── Library helpers ──────────────────────────────────────────────────────────
 
-def _load_library() -> list:
-    return storage.load_library()
+def _load_library(user_id: str | None = None) -> list:
+    return storage.load_library(user_id)
 
 
-def _save_library(entries: list) -> None:
+def _save_library(entries: list, user_id: str | None = None) -> None:
     if storage.is_cloud():
-        storage.write_json(storage.library_key(), entries)
+        storage.write_json(storage.library_key(user_id), entries)
         return
     with LIBRARY_PATH.open("w", encoding="utf-8") as f:
         json.dump(entries, f, indent=2, ensure_ascii=False)
 
 
-def _library_add(entry: dict) -> None:
+def _library_add(entry: dict, user_id: str | None = None) -> None:
     with _library_lock:
-        entries = _load_library()
+        entries = _load_library(user_id)
         entries.insert(0, entry)
-        _save_library(entries)
+        _save_library(entries, user_id)
 
 
 
@@ -847,6 +847,10 @@ def create_app(testing: bool = False) -> Flask:
     app.config["TESTING"] = testing
     app.before_request(auth.require_auth)
 
+    def _uid():
+        from flask import g
+        return getattr(g, "user_id", None)
+
     sock = Sock(app)
 
     @sock.route("/ws/job/<job_id>")
@@ -1071,7 +1075,7 @@ def create_app(testing: bool = False) -> Flask:
         captions_key = (body.get("captions_key") or "").strip()
         if captions_key:
             entry["captions_key"] = captions_key
-        _library_add(entry)
+        _library_add(entry, _uid())
         return jsonify({"id": entry["id"]})
 
     @app.get("/status/<job_id>")
@@ -1120,7 +1124,7 @@ def create_app(testing: bool = False) -> Flask:
 
     @app.get("/library-video/<entry_id>")
     def serve_library_video(entry_id):
-        entries = _load_library()
+        entries = _load_library(_uid())
         entry = next((e for e in entries if e["id"] == entry_id), None)
         if not entry:
             return jsonify({"error": "not found"}), 404
@@ -1163,7 +1167,7 @@ def create_app(testing: bool = False) -> Flask:
 
     @app.get("/library-captions/<entry_id>")
     def serve_library_captions(entry_id):
-        entries = _load_library()
+        entries = _load_library(_uid())
         entry = next((e for e in entries if e["id"] == entry_id), None)
         if not entry:
             return jsonify({"error": "not found"}), 404
@@ -1193,7 +1197,7 @@ def create_app(testing: bool = False) -> Flask:
         """
         if storage.is_cloud():
             return jsonify({"error": "cloud burn-in runs in the browser"}), 400
-        entries = _load_library()
+        entries = _load_library(_uid())
         entry = next((e for e in entries if e["id"] == entry_id), None)
         if not entry:
             return jsonify({"error": "not found"}), 404
@@ -1225,7 +1229,7 @@ def create_app(testing: bool = False) -> Flask:
 
     @app.get("/library")
     def get_library():
-        entries = _load_library()
+        entries = _load_library(_uid())
         # Playback is routed through /library-video/<id>, which serves the local
         # file when present and otherwise redirects to a presigned R2 URL (with a
         # forced video/mp4 Content-Type so Chrome's ORB permits the load). Keeping
@@ -1237,14 +1241,14 @@ def create_app(testing: bool = False) -> Flask:
         delete_file = request.args.get("delete_file") == "true"
         file_path_to_delete = None
         with _library_lock:
-            entries = _load_library()
+            entries = _load_library(_uid())
             entry = next((e for e in entries if e["id"] == entry_id), None)
             if entry is None:
                 return jsonify({"error": "not found"}), 404
             if delete_file:
                 file_path_to_delete = entry.get("path")
             entries = [e for e in entries if e["id"] != entry_id]
-            _save_library(entries)
+            _save_library(entries, _uid())
         if file_path_to_delete:
             try:
                 Path(file_path_to_delete).unlink(missing_ok=True)
@@ -1256,7 +1260,7 @@ def create_app(testing: bool = False) -> Flask:
     def edit_library_entry(entry_id):
         body = request.get_json() or {}
         with _library_lock:
-            entries = _load_library()
+            entries = _load_library(_uid())
             entry = next((e for e in entries if e["id"] == entry_id), None)
             if entry is None:
                 return jsonify({"error": "not found"}), 404
@@ -1264,7 +1268,7 @@ def create_app(testing: bool = False) -> Flask:
                 entry["title"] = str(body["title"])
             if "notes" in body:
                 entry["notes"] = str(body["notes"])
-            _save_library(entries)
+            _save_library(entries, _uid())
         return jsonify(entry)
 
     @app.post("/find-local-folder")
