@@ -130,7 +130,7 @@ def test_upload_cloud_mode_calls_storage_upload(tmp_path, monkeypatch):
 
     assert resp.status_code == 200
     body = resp.get_json()
-    assert body["session_key"].startswith("sessions/")
+    assert body["session_key"].startswith("users/testuser/sessions/")
     # upload_file must have been called with the correct S3 key
     assert any("video1.mp4" in k for k in uploaded_keys)
 

@@ -54,7 +54,7 @@ def test_plan_returns_400_without_session_key(cloud_client):
 
 
 def test_plan_returns_422_when_no_segments_found(cloud_client, tmp_path):
-    session_key = "sessions/test123"
+    session_key = "users/testuser/sessions/test123"
     # list_keys returns nothing
     with patch("generator_app.storage.list_keys", return_value=[]):
         resp = cloud_client.post("/plan", json={
@@ -66,7 +66,7 @@ def test_plan_returns_422_when_no_segments_found(cloud_client, tmp_path):
 
 def test_plan_returns_segment_list_with_correct_shape(cloud_client, tmp_path):
     import importlib, generator_app
-    session_key = "sessions/test456"
+    session_key = "users/testuser/sessions/test456"
     transcript = "[0:10] Speaker: This is great content.\n[0:25] Speaker: End."
     raw_line = "[0:10] Speaker: This is great content."
 
@@ -113,7 +113,7 @@ def test_plan_returns_segment_list_with_correct_shape(cloud_client, tmp_path):
 
 
 def test_plan_returns_captions_fields(cloud_client, tmp_path):
-    session_key = "sessions/test456"
+    session_key = "users/testuser/sessions/test456"
     transcript = "[0:10] Speaker: This is great content.\n[0:25] Speaker: End."
     raw_line = "[0:10] Speaker: This is great content."
 

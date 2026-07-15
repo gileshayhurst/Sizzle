@@ -886,6 +886,8 @@ def create_app(testing: bool = False) -> Flask:
         if storage.is_cloud():
             if not session_key:
                 return jsonify({"error": "session_key required in cloud mode"}), 400
+            if not auth.owns_session(session_key):
+                return jsonify({"error": "forbidden"}), 403
             tmp_session_dir = tempfile.mkdtemp(prefix="sizzle_gen_")
             _tmp_dir_to_cleanup = None  # intentionally no immediate cleanup
 
@@ -980,6 +982,8 @@ def create_app(testing: bool = False) -> Flask:
         session_key = (body.get("session_key") or "").strip()
         if not session_key:
             return jsonify({"error": "session_key required"}), 400
+        if not auth.owns_session(session_key):
+            return jsonify({"error": "forbidden"}), 403
 
         VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
         selections = body.get("selections", {})

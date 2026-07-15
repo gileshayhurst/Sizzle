@@ -26,7 +26,7 @@ if not shutil.which("ffmpeg") and _sys.platform == "win32":
         os.environ["PATH"] = str(_bin) + os.pathsep + os.environ.get("PATH", "")
         break
 
-from flask import Flask, jsonify, render_template, request, send_file
+from flask import Flask, g, jsonify, render_template, request, send_file
 
 from claude_client import query_claude
 from loader import scan_videos
@@ -477,7 +477,7 @@ def create_app(testing: bool = False) -> Flask:
         if not has_video:
             return jsonify({"error": "At least one video file is required."}), 400
 
-        session_key = storage.new_session_key()
+        session_key = storage.new_session_key(getattr(g, "user_id", None))
 
         # Determine local session directory
         if storage.is_cloud():
@@ -544,7 +544,7 @@ def create_app(testing: bool = False) -> Flask:
         if not has_video:
             return jsonify({"error": "At least one video file is required."}), 400
 
-        session_key = storage.new_session_key()
+        session_key = storage.new_session_key(getattr(g, "user_id", None))
         uploads = {
             name: storage.presigned_put_url(f"{session_key}/{Path(name).name}", expires=7200)
             for name in filenames
@@ -595,6 +595,8 @@ def create_app(testing: bool = False) -> Flask:
     @app.post("/load-folder")
     def load_folder():
         folder = (request.get_json() or {}).get("folder", "").strip()
+        if storage.is_cloud() and not auth.owns_session(folder):
+            return jsonify({"error": "forbidden"}), 403
         if storage.is_cloud() and folder and not Path(folder).exists():
             session_key = folder
             with _cloud_session_lock:
@@ -750,6 +752,8 @@ def create_app(testing: bool = False) -> Flask:
     @app.get("/transcripts")
     def get_transcripts():
         folder = request.args.get("folder", "").strip()
+        if storage.is_cloud() and not auth.owns_session(folder):
+            return jsonify({"error": "forbidden"}), 403
         if storage.is_cloud() and folder and not Path(folder).exists():
             folder = _ensure_cloud_session(folder)
         if not folder or not Path(folder).exists():
@@ -783,6 +787,8 @@ def create_app(testing: bool = False) -> Flask:
         prompt = body.get("prompt", "").strip()
         if not prompt:
             return jsonify({"error": "prompt is required"}), 400
+        if storage.is_cloud() and not auth.owns_session(folder):
+            return jsonify({"error": "forbidden"}), 403
         if storage.is_cloud() and folder and not Path(folder).exists():
             folder = _ensure_cloud_session(folder)
         if not folder or not Path(folder).exists():

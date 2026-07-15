@@ -79,3 +79,12 @@ def current_user_prefix() -> str:
     if not storage.is_cloud():
         return ""
     return f"users/{g.user_id}"
+
+
+def owns_session(session_key: str) -> bool:
+    """True if session_key is under the current user's prefix (cloud), or always in local."""
+    if not storage.is_cloud():
+        return True
+    if not session_key:
+        return False
+    return session_key.startswith(current_user_prefix() + "/")

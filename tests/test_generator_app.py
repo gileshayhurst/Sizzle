@@ -1388,7 +1388,7 @@ def test_cloud_temp_dir_cleanup_scheduled(client, tmp_path, monkeypatch):
     import auth
     token = auth.make_token("testuser")
     client.environ_base["HTTP_AUTHORIZATION"] = f"Bearer {token}"
-    session_key = "sessions/test"
+    session_key = "users/testuser/sessions/test"
     txt_content = "[0:05] Speaker: Hi."
 
     timers_started = []

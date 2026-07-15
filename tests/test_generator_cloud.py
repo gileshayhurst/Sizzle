@@ -60,7 +60,7 @@ def test_save_library_uses_storage_in_cloud_mode(monkeypatch):
 
 def test_generate_endpoint_accepts_session_key_in_cloud_mode(cloud_client, tmp_path):
     """POST /generate in cloud mode accepts session_key, downloads only txt files, and uses presigned URLs."""
-    session_key = "sessions/test123"
+    session_key = "users/testuser/sessions/test123"
     txt_content = "[0:00] Speaker: Hello world."
 
     def fake_list_keys(prefix):
@@ -107,7 +107,7 @@ def test_generate_endpoint_accepts_session_key_in_cloud_mode(cloud_client, tmp_p
 
 def test_generate_cloud_uses_streaming_upload_not_upload_file(cloud_client, tmp_path):
     """In cloud mode, generation must use upload_stream for the reel, not upload_file."""
-    session_key = "sessions/streaming_test"
+    session_key = "users/testuser/sessions/streaming_test"
     txt_content = "[0:00] Speaker: Hello world."
 
     def fake_list_keys(prefix):
@@ -154,7 +154,7 @@ def test_generate_cloud_uses_streaming_upload_not_upload_file(cloud_client, tmp_
 
 def test_generate_cloud_upload_failure_does_not_hang(cloud_client, tmp_path):
     """If upload_stream raises, the job must complete (not deadlock on proc.wait)."""
-    session_key = "sessions/upload_fail_test"
+    session_key = "users/testuser/sessions/upload_fail_test"
     txt_content = "[0:00] Speaker: Hello world."
 
     def fake_list_keys(prefix):
@@ -274,7 +274,7 @@ def test_run_generation_marks_job_error_on_unexpected_exception(tmp_path):
 
 def test_generate_cloud_does_not_download_video_files(cloud_client, tmp_path):
     """In cloud mode, /generate must NOT call download_file for video files."""
-    session_key = "sessions/test456"
+    session_key = "users/testuser/sessions/test456"
     txt_content = "[0:00] Speaker: Hello world."
 
     def fake_list_keys(prefix):
@@ -326,7 +326,7 @@ def test_generate_cloud_does_not_download_video_files(cloud_client, tmp_path):
 
 def test_generate_cloud_calls_presigned_url_for_selected_video(cloud_client, tmp_path):
     """In cloud mode, /generate must call storage.presigned_url for the selected video key."""
-    session_key = "sessions/test789"
+    session_key = "users/testuser/sessions/test789"
     txt_content = "[0:00] Speaker: Hello world."
 
     def fake_list_keys(prefix):
