@@ -1359,7 +1359,7 @@ def test_generation_result_includes_entry_id(tmp_path, client):
 
     captured_entry = {}
 
-    def fake_add(entry):
+    def fake_add(entry, user_id=None):
         captured_entry.update(entry)
 
     with patch("generator_app._library_add", side_effect=fake_add), \
@@ -1540,7 +1540,7 @@ def test_local_generation_writes_vtt_sidecar(client, tmp_path):
 
     captured = {}
 
-    def fake_add(entry):
+    def fake_add(entry, user_id=None):
         captured["entry"] = entry
 
     with patch("generator_app._library_add", side_effect=fake_add), \

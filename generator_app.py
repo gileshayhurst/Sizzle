@@ -393,7 +393,8 @@ def _run_generation(job_id: str, folder: str,
                     selections: dict, prompt: str, output_filename: str,
                     session_key: str = None,
                     video_paths: list = None,
-                    video_urls: dict = None) -> None:
+                    video_urls: dict = None,
+                    user_id: str = None) -> None:
     """Run a generation job, guaranteeing it always reaches a terminal state.
 
     The pipeline runs on a daemon thread whose only wrapper is a `finally` for
@@ -409,6 +410,7 @@ def _run_generation(job_id: str, folder: str,
             session_key=session_key,
             video_paths=video_paths,
             video_urls=video_urls,
+            user_id=user_id,
         )
     except Exception as exc:
         job = _jobs.get(job_id)
@@ -427,7 +429,8 @@ def _run_generation_impl(job_id: str, folder: str,
                     selections: dict, prompt: str, output_filename: str,
                     session_key: str = None,
                     video_paths: list = None,
-                    video_urls: dict = None) -> None:
+                    video_urls: dict = None,
+                    user_id: str = None) -> None:
     """Extract and stitch clips from selected transcript lines."""
     job = _jobs[job_id]
     if video_paths is None:
@@ -776,7 +779,7 @@ def _run_generation_impl(job_id: str, folder: str,
             except Exception as exc:
                 _append_log(job_id, f"· Captions sidecar skipped: {exc}")
 
-    _library_add(library_entry)
+    _library_add(library_entry, user_id)
 
     # Schedule cleanup of the cloud session temp dir 1 hour after generation.
     # The dir is kept alive so /video/<job_id> can serve the reel directly
@@ -874,6 +877,7 @@ def create_app(testing: bool = False) -> Flask:
         output_filename = body.get("output_filename", "sizzle_reel.mp4").strip()
         output_filename = Path(output_filename).name
         session_key = body.get("session_key", "").strip() or None
+        gen_user_id = _uid()
 
         VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
         video_paths_for_gen = None
@@ -941,6 +945,7 @@ def create_app(testing: bool = False) -> Flask:
                     session_key=session_key,
                     video_paths=video_paths_for_gen,
                     video_urls=video_urls_for_gen,
+                    user_id=gen_user_id,
                 )
             finally:
                 if _tmp_dir_to_cleanup:
@@ -953,6 +958,7 @@ def create_app(testing: bool = False) -> Flask:
                         session_key=session_key,
                         video_paths=video_paths_for_gen,
                         video_urls=video_urls_for_gen,
+                        user_id=gen_user_id,
                     )
                 finally:
                     if _tmp_dir_to_cleanup:
