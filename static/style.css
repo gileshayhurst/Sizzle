@@ -504,6 +504,15 @@ body {
   font-family: var(--font-mono); font-size: 12px;
 }
 .prompt-input { width: 100%; }
+/* Identification Options: which identifying lines get burned onto each clip. */
+.footer-field-idopts { gap: 6px; }
+.idopts { display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: center; }
+.idopt {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 13px; color: var(--ink); cursor: pointer; user-select: none; font-weight: 500;
+}
+.idopt input { accent-color: var(--amber); width: 15px; height: 15px; cursor: pointer; }
+.idopts-help { font-size: 0.6875rem; color: var(--muted); line-height: 1.3; max-width: 240px; }
 .btn-generate {
   background: var(--amber-strong); color: #fff; border: none; border-radius: var(--radius-md);
   padding: 9px 20px; font-size: 13px; font-weight: 600; cursor: pointer;

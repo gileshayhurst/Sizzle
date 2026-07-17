@@ -82,7 +82,6 @@ def test_generate_endpoint_accepts_session_key_in_cloud_mode(cloud_client, tmp_p
          patch("generator_app.check_ffmpeg"), \
          patch("generator_app.get_video_dimensions", return_value=(1920, 1080)), \
          patch("generator_app.get_video_duration", return_value=None), \
-         patch("generator_app.make_title_card"), \
          patch("generator_app.extract_clip"), \
          patch("generator_app.stitch_clips_to_pipe", return_value=mock_proc), \
          patch("generator_app.storage.upload_stream"), \
@@ -129,7 +128,6 @@ def test_generate_cloud_uses_streaming_upload_not_upload_file(cloud_client, tmp_
          patch("generator_app.check_ffmpeg"), \
          patch("generator_app.get_video_dimensions", return_value=(1920, 1080)), \
          patch("generator_app.get_video_duration", return_value=None), \
-         patch("generator_app.make_title_card"), \
          patch("generator_app.extract_clip"), \
          patch("generator_app.stitch_clips_to_pipe", return_value=mock_proc), \
          patch("generator_app.storage.upload_stream", mock_upload_stream), \
@@ -173,7 +171,6 @@ def test_generate_cloud_upload_failure_does_not_hang(cloud_client, tmp_path):
          patch("generator_app.check_ffmpeg"), \
          patch("generator_app.get_video_dimensions", return_value=(1920, 1080)), \
          patch("generator_app.get_video_duration", return_value=None), \
-         patch("generator_app.make_title_card"), \
          patch("generator_app.extract_clip"), \
          patch("generator_app.stitch_clips_to_pipe", return_value=mock_proc), \
          patch("generator_app.storage.upload_stream", side_effect=OSError("S3 network failure")), \
@@ -205,7 +202,6 @@ def test_run_generation_skips_scan_videos_when_paths_provided(tmp_path):
     with patch("generator_app.scan_videos") as mock_scan, \
          patch("generator_app.get_video_duration", return_value=None), \
          patch("generator_app.get_video_dimensions", return_value=(1920, 1080)), \
-         patch("generator_app.make_title_card"), \
          patch("generator_app.extract_clip"), \
          patch("generator_app.stitch_clips"), \
          patch("generator_app._library_add"):
@@ -299,7 +295,6 @@ def test_generate_cloud_does_not_download_video_files(cloud_client, tmp_path):
          patch("generator_app.check_ffmpeg"), \
          patch("generator_app.get_video_dimensions", return_value=(1920, 1080)), \
          patch("generator_app.get_video_duration", return_value=None), \
-         patch("generator_app.make_title_card"), \
          patch("generator_app.extract_clip"), \
          patch("generator_app.stitch_clips_to_pipe", return_value=mock_proc), \
          patch("generator_app.storage.upload_stream"), \
@@ -354,7 +349,6 @@ def test_generate_cloud_calls_presigned_url_for_selected_video(cloud_client, tmp
          patch("generator_app.check_ffmpeg"), \
          patch("generator_app.get_video_dimensions", return_value=(1920, 1080)), \
          patch("generator_app.get_video_duration", return_value=None), \
-         patch("generator_app.make_title_card"), \
          patch("generator_app.extract_clip"), \
          patch("generator_app.stitch_clips_to_pipe", return_value=mock_proc), \
          patch("generator_app.storage.upload_stream"), \
@@ -388,7 +382,6 @@ def test_run_generation_passes_presigned_url_to_extract_clip(tmp_path):
 
     with patch("generator_app.get_video_duration", return_value=None), \
          patch("generator_app.get_video_dimensions", return_value=(1920, 1080)), \
-         patch("generator_app.make_title_card"), \
          patch("generator_app.extract_clip", side_effect=lambda vp, *a, **kw: captured.append(vp)), \
          patch("generator_app.stitch_clips"), \
          patch("generator_app._library_add"):

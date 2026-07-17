@@ -180,30 +180,32 @@ def test_extract_clip_fade_clamped_for_short_clip():
     assert "st=0.0" in vf_val
 
 
-def test_make_title_card_no_fade_no_afade():
-    from generator_app import make_title_card
+def test_extract_clip_burns_title_overlay():
+    """title_lines are burned onto the clip as top-anchored drawtext with a
+    fading alpha (escaped commas so ffmpeg doesn't treat them as separators)."""
     with patch("subprocess.run") as mock_run:
-        mock_run.return_value = MagicMock(returncode=0)
+        mock_run.return_value = type("R", (), {"returncode": 0})()
         with tempfile.TemporaryDirectory() as tmp:
-            make_title_card(["Test"], 1920, 1080, os.path.join(tmp, "card.mp4"))
+            out = os.path.join(tmp, "clip_0000.mp4")
+            extract_clip("input.mp4", 0.0, 8.0, out,
+                         title_lines=["Sarah K", "from 1:24"], font_path=None, height=1080)
+            # textfiles written next to the clip, one per line
+            assert os.path.exists(os.path.join(tmp, "clip_0000_t0.txt"))
+            assert os.path.exists(os.path.join(tmp, "clip_0000_t1.txt"))
     cmd = _captured_cmd(mock_run)
     vf_val = cmd[cmd.index("-vf") + 1]
-    assert "fade" not in vf_val
-    assert "-af" not in cmd
+    assert vf_val.count("drawtext=") == 2
+    assert "alpha=" in vf_val
+    assert "\\," in vf_val        # commas in the alpha expr are escaped
+    assert mock_run.call_args.kwargs.get("cwd") == tmp  # relative paths resolve here
 
 
-def test_make_title_card_fade_in_appends_filter_and_afade():
-    from generator_app import make_title_card
+def test_extract_clip_no_title_lines_no_drawtext():
     with patch("subprocess.run") as mock_run:
-        mock_run.return_value = MagicMock(returncode=0)
-        with tempfile.TemporaryDirectory() as tmp:
-            make_title_card(["Test"], 1920, 1080, os.path.join(tmp, "card.mp4"), fade_in_secs=2.0)
+        mock_run.return_value = type("R", (), {"returncode": 0})()
+        extract_clip("input.mp4", 0.0, 8.0, "out.mp4", title_lines=[])
     cmd = _captured_cmd(mock_run)
-    vf_val = cmd[cmd.index("-vf") + 1]
-    assert "fade=t=in:st=0:d=2.0" in vf_val
-    assert "-af" in cmd
-    af_val = cmd[cmd.index("-af") + 1]
-    assert "afade=t=in:st=0:d=2.0" in af_val
+    assert "-vf" not in cmd
 
 
 def test_stitch_clips_to_pipe_returns_popen_with_pipe_stdout():

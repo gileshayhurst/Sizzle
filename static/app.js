@@ -1538,6 +1538,11 @@ async function submitGenerate(mode, selections) {
   // user pasted, then append the real output extension.
   const outputBase = $('output-filename').value.trim().replace(/\.mp4$/i, '') || 'sizzle_reel';
   const outputFilename = outputBase + '.mp4';
+  const idOptions = {
+    name: $('idopt-name').checked,
+    timestamp: $('idopt-timestamp').checked,
+    segment: $('idopt-segment').checked,
+  };
 
   showScreen('screen-generating');
   $('gen-log').innerHTML = '';
@@ -1552,7 +1557,7 @@ async function submitGenerate(mode, selections) {
   // hardware encoder. Any failure falls through to the unchanged server pipeline.
   if (APP_MODE === 'cloud' && window.ReelEncoder?.isSupported()) {
     try {
-      await _submitGenerateBrowser(mode, selections, prompt, outputFilename);
+      await _submitGenerateBrowser(mode, selections, prompt, outputFilename, idOptions);
       return;
     } catch (err) {
       if (err.name === 'AbortError') {
@@ -1568,10 +1573,10 @@ async function submitGenerate(mode, selections) {
   }
 
   // Server path (local mode, unsupported browser, or browser fallback).
-  await _submitGenerateServer(mode, selections, prompt, outputFilename);
+  await _submitGenerateServer(mode, selections, prompt, outputFilename, idOptions);
 }
 
-async function _submitGenerateServer(mode, selections, prompt, outputFilename) {
+async function _submitGenerateServer(mode, selections, prompt, outputFilename, idOptions) {
   let resp, jobData;
   try {
     resp = await fetch(GENERATOR_URL + '/generate', {
@@ -1584,6 +1589,7 @@ async function _submitGenerateServer(mode, selections, prompt, outputFilename) {
         selections,
         prompt,
         output_filename: outputFilename,
+        id_options: idOptions,
       }),
     });
     jobData = await resp.json();
@@ -1602,7 +1608,7 @@ async function _submitGenerateServer(mode, selections, prompt, outputFilename) {
   watchGeneration(job_id);
 }
 
-async function _submitGenerateBrowser(mode, selections, prompt, outputFilename) {
+async function _submitGenerateBrowser(mode, selections, prompt, outputFilename, idOptions) {
   const controller = new AbortController();
   _genTerminated = false;
 
@@ -1625,6 +1631,7 @@ async function _submitGenerateBrowser(mode, selections, prompt, outputFilename) 
       selections,
       prompt,
       output_filename: outputFilename,
+      id_options: idOptions,
     }),
     signal: controller.signal,
   });

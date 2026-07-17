@@ -184,6 +184,15 @@
                        autocomplete="off" spellcheck="false">
               </div>
             </div>
+            <div class="footer-field footer-field-idopts">
+              <label class="footer-label" id="idopts-label">Identification Options</label>
+              <div class="idopts" role="group" aria-labelledby="idopts-label">
+                <label class="idopt"><input type="checkbox" id="idopt-name" checked> Name</label>
+                <label class="idopt"><input type="checkbox" id="idopt-timestamp" checked> Timestamp</label>
+                <label class="idopt"><input type="checkbox" id="idopt-segment" checked> Segment tracker</label>
+              </div>
+              <span class="idopts-help">Choose what identifying information to include in each clip</span>
+            </div>
             <div class="footer-field footer-field-btn">
               <label class="footer-label">&nbsp;</label>
               <button id="btn-generate" class="btn-generate" disabled>Generate Reel</button>

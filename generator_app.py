@@ -240,117 +240,41 @@ def get_video_duration(video_path: str) -> float | None:
         return None
 
 
-def make_title_card(
-    lines: list, width: int, height: int, output_path: str, duration: float = 5.0, fade_in_secs: float = 0.0
-) -> None:
-    """Generate a black title card with white centred text, encoded H.264/AAC.
-
-    Uses textfile= and a relative fontfile= so the ffmpeg filter string contains
-    no Windows drive-letter colon.  This ffmpeg build (8.x on Windows) does not
-    honour single-quote quoting or \\: escaping inside filter option values, so
-    any ‘:’ in the filter string terminates the option value early.  Writing text
-    to side-car files and running ffmpeg with cwd=tmp_dir avoids the issue
-    entirely.
-    """
-    fontsize = max(24, height // 15)
-
-    # Reduce font size if the longest line would overflow the frame.
-    # Rough estimate: Arial glyph width ≈ 0.55× fontsize.
-    max_chars = max(len(line) for line in lines)
-    usable_width = width - 80
-    while fontsize > 16 and max_chars * fontsize * 0.55 > usable_width:
-        fontsize = int(fontsize * 0.9)
-
-    tmp_dir = Path(output_path).parent
-    prefix = Path(output_path).stem  # unique per clip, e.g. "clip_0000"
-
-    # ── Font: copy into tmp_dir so we can reference it by filename only ──────
-    font_src = _find_system_font()
-    if font_src:
-        font_name = Path(font_src).name          # e.g. "arial.ttf"
-        font_dest = tmp_dir / font_name
-        if not font_dest.exists():
-            shutil.copy(font_src, font_dest)
-        fontfile_arg = f"fontfile={font_name}:"  # relative — no colon in path
-    else:
-        fontfile_arg = ""
-
-    # ── Text files: write each line to its own file so the filter string ─────
-    # ── contains no user content at all (avoids all escaping issues).     ─────
-    # drawtext still expands % format specifiers even from textfile, so double
-    # any literal percent signs in the text.
-    text_filenames = []
-    for i, line in enumerate(lines):
-        tf = tmp_dir / f"{prefix}_t{i}.txt"
-        tf.write_text(line.replace("%", "%%"), encoding="utf-8")
-        text_filenames.append(tf.name)  # relative filename only
-
-    # ── Build filter ──────────────────────────────────────────────────────────
-    line_height = int(fontsize * 1.2)
-    spacing = 8
-    n = len(lines)
-    total_h = n * line_height + (n - 1) * spacing
-
-    filters = []
-    for i, tf_name in enumerate(text_filenames):
-        if n == 1:
-            # Avoid leading '(' — ffmpeg 8.x parser stops at the first balanced ')' when
-            # the value starts with '(', cutting off '/2' and producing a parse error.
-            y_expr = "h/2-text_h/2"
-        else:
-            y_off = i * (line_height + spacing)
-            # Precompute at Python time so the value is a plain integer, not an expression
-            # starting with '(' (same ffmpeg 8.x parser bug as above).
-            y_expr = str((height - total_h) // 2 + y_off)
-        filters.append(
-            f"drawtext={fontfile_arg}textfile={tf_name}"
-            f":fontcolor=white:fontsize={fontsize}:x=w/2-text_w/2:y={y_expr}"
-        )
-
-    if fade_in_secs > 0.0:
-        filters.append(f"fade=t=in:st=0:d={fade_in_secs}")
-
-    cmd = [
-        "ffmpeg", "-y",
-        "-f", "lavfi", "-i", f"color=black:size={width}x{height}:rate=30",
-        "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000",
-        "-vf", ",".join(filters),
-        "-map", "0:v", "-map", "1:a",   # explicit mapping ensures audio is always included
-        "-c:v", "libx264", "-preset", "ultrafast",
-        "-c:a", "aac",
-        "-t", str(duration),
-    ]
-    if fade_in_secs > 0.0:
-        cmd += ["-af", f"afade=t=in:st=0:d={fade_in_secs}"]
-    cmd.append(Path(output_path).name)
-
-    result = subprocess.run(
-        cmd,
-        check=False,
-        capture_output=True,
-        cwd=str(tmp_dir),  # all relative paths resolve here
-    )
-    if result.returncode != 0:
-        print(result.stderr.decode(errors="replace"), file=__import__("sys").stderr)
-        result.check_returncode()
-
-
 # ─── Generation worker ────────────────────────────────────────────────────────
+
+def _normalize_id_options(id_options: dict | None) -> dict:
+    """Identification overlay flags, defaulting every field to on (all checked).
+
+    Keys: name, timestamp, segment — chosen on the create screen. Missing/None
+    means "use the default" (all three), so existing callers keep prior behavior.
+    """
+    o = id_options or {}
+    return {
+        "name": o.get("name", True),
+        "timestamp": o.get("timestamp", True),
+        "segment": o.get("segment", True),
+    }
+
 
 def _build_segment_list(
     video_paths: list,
     selections: dict,
     video_urls: dict | None = None,
+    id_options: dict | None = None,
 ) -> list[dict]:
     """Parse transcripts and group selected lines into ordered segments.
 
     Shared between POST /generate (via _run_generation_impl) and POST /plan
-    so segment ordering, timing, and title-card text are computed once.
+    so segment ordering, timing, and title-overlay text are computed once.
+
+    `id_options` selects which identifying lines the overlay shows (name,
+    timestamp, segment tracker); an empty selection yields no overlay lines.
 
     Returns a list of dicts ordered as they appear in video_paths:
       video_name, video_stem, ffmpeg_input, start_sec, end_sec, title_lines
     Videos with no transcript or no matching selections are skipped silently.
     """
+    id_opts = _normalize_id_options(id_options)
     grouped = []
     for vp in video_paths:
         selected_raws = selections.get(vp.name, [])
@@ -373,6 +297,13 @@ def _build_segment_list(
     for vp, segs, ffmpeg_input, all_lines, selected_set in grouped:
         for start_sec, end_sec in segs:
             seg_num += 1
+            title_lines = []
+            if id_opts["name"]:
+                title_lines.append(vp.stem)
+            if id_opts["timestamp"]:
+                title_lines.append(f"from {_format_seconds(start_sec)}")
+            if id_opts["segment"]:
+                title_lines.append(f"Segment {seg_num} / {total_segs}")
             result.append({
                 "video_name": vp.name,
                 "video_stem": vp.stem,
@@ -381,11 +312,7 @@ def _build_segment_list(
                 "end_sec": end_sec,
                 "caption_lines": collect_caption_lines(
                     all_lines, selected_set, start_sec, end_sec),
-                "title_lines": [
-                    vp.stem,
-                    f"from {_format_seconds(start_sec)}",
-                    f"Segment {seg_num} / {total_segs}",
-                ],
+                "title_lines": title_lines,
             })
     return result
 
@@ -394,7 +321,8 @@ def _run_generation(job_id: str, folder: str,
                     selections: dict, prompt: str, output_filename: str,
                     session_key: str = None,
                     video_paths: list = None,
-                    video_urls: dict = None) -> None:
+                    video_urls: dict = None,
+                    id_options: dict = None) -> None:
     """Run a generation job, guaranteeing it always reaches a terminal state.
 
     The pipeline runs on a daemon thread whose only wrapper is a `finally` for
@@ -410,6 +338,7 @@ def _run_generation(job_id: str, folder: str,
             session_key=session_key,
             video_paths=video_paths,
             video_urls=video_urls,
+            id_options=id_options,
         )
     except Exception as exc:
         job = _jobs.get(job_id)
@@ -428,7 +357,8 @@ def _run_generation_impl(job_id: str, folder: str,
                     selections: dict, prompt: str, output_filename: str,
                     session_key: str = None,
                     video_paths: list = None,
-                    video_urls: dict = None) -> None:
+                    video_urls: dict = None,
+                    id_options: dict = None) -> None:
     """Extract and stitch clips from selected transcript lines."""
     job = _jobs[job_id]
     if video_paths is None:
@@ -442,7 +372,7 @@ def _run_generation_impl(job_id: str, folder: str,
         video_paths = _filter_generated_reels(video_paths)
 
     # Build segment plan (shared with POST /plan)
-    segments = _build_segment_list(video_paths, selections, video_urls)
+    segments = _build_segment_list(video_paths, selections, video_urls, id_options)
 
     # Log per-video results and advance progress counter
     segment_video_names = {s["video_name"] for s in segments}
@@ -470,19 +400,19 @@ def _run_generation_impl(job_id: str, folder: str,
             job["error"] = "No segments found in selections"
         return
 
-    TITLE_CARD_DURATION = 5.0
-    total_segs = len(segments)
-
     _append_log(job_id, "· Extracting clips...")
     output_path = str(Path(folder) / output_filename)
+    font_path = _find_system_font()
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         # ── Phase 1: Plan ────────────────────────────────────────────────
-        plan = []      # ordered list of {"type": "title"|"clip", ...}
-        item_idx = 0
+        # One clip per segment. The identification overlay (title_lines) is
+        # burned onto the clip itself, so there is no separate title card and
+        # no title+clip pairing — the reel is just the ordered clips.
+        plan = []
         _dim_cache: dict = {}
 
-        for seg in segments:
+        for idx, seg in enumerate(segments):
             ffmpeg_input = seg["ffmpeg_input"]
             if ffmpeg_input not in _dim_cache:
                 try:
@@ -490,61 +420,24 @@ def _run_generation_impl(job_id: str, folder: str,
                 except Exception:
                     _dim_cache[ffmpeg_input] = (1920, 1080)
             width, height = _dim_cache[ffmpeg_input]
-            card_path = os.path.join(tmp_dir, f"clip_{item_idx:04d}.mp4")
-            item_idx += 1
-            clip_path = os.path.join(tmp_dir, f"clip_{item_idx:04d}.mp4")
-            item_idx += 1
             plan.append({
-                "type": "title",
-                "path": card_path,
-                "lines": seg["title_lines"],
-                "width": width,
-                "height": height,
-                "ok": False,
-                "error": None,
-            })
-            plan.append({
-                "type": "clip",
-                "path": clip_path,
+                "path": os.path.join(tmp_dir, f"clip_{idx:04d}.mp4"),
                 "video_path": ffmpeg_input,
                 "start_sec": seg["start_sec"],
                 "end_sec": seg["end_sec"],
+                "title_lines": seg["title_lines"],
+                "height": height,
                 "ok": False,
                 "error": None,
             })
 
         # ── Phase 2: Execute ─────────────────────────────────────────────
-        # Title cards: serial (fast, ~0.1s each)
-        for item in plan:
-            if item["type"] != "title":
-                continue
-            if job["cancel"].is_set():
-                item["error"] = "cancelled"
-                continue
-            try:
-                make_title_card(
-                    item["lines"], item["width"], item["height"], item["path"],
-                    duration=TITLE_CARD_DURATION, fade_in_secs=2.0,
-                )
-                item["ok"] = True
-            except Exception as exc:
-                item["error"] = str(exc)
-                label = " | ".join(item.get("lines", []))
-                _append_log(job_id, f"✗ Title card failed [{label}]: {exc}")
-
         # Clips: parallel (capped at 1 in cloud mode — concurrent ffmpeg processes
         # each downloading and VP9-decoding large webm files from R2 spike memory
         # and trigger OOM kills on Render).
         max_workers = 1 if storage.is_cloud() else min(4, os.cpu_count() or 4)
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            for idx, item in enumerate(plan):
-                if item["type"] != "clip":
-                    continue
-                # Skip if the paired title card failed
-                title_item = plan[idx - 1]
-                if not title_item["ok"]:
-                    item["error"] = "title card failed"
-                    continue
+            for item in plan:
                 if job["cancel"].is_set():
                     item["error"] = "cancelled"
                     continue
@@ -555,10 +448,13 @@ def _run_generation_impl(job_id: str, folder: str,
                     item["end_sec"],
                     item["path"],
                     2.0,  # fade_out_secs
+                    item["title_lines"],
+                    font_path,
+                    item["height"],
                 )
 
             for item in plan:
-                if item["type"] != "clip" or "future" not in item:
+                if "future" not in item:
                     continue
                 if job["cancel"].is_set():
                     item["future"].cancel()
@@ -582,53 +478,35 @@ def _run_generation_impl(job_id: str, folder: str,
             return
 
         # ── Phase 2 summary ──────────────────────────────────────────────
-        ok_titles = sum(1 for it in plan if it["type"] == "title" and it["ok"])
-        ok_clips  = sum(1 for it in plan if it["type"] == "clip"  and it["ok"])
-        fail_titles = sum(1 for it in plan if it["type"] == "title" and not it["ok"])
-        fail_clips  = sum(1 for it in plan if it["type"] == "clip"  and not it["ok"])
+        ok_clips = sum(1 for it in plan if it["ok"])
+        fail_clips = len(plan) - ok_clips
         _append_log(
             job_id,
-            f"· Extraction summary: {ok_titles}/{ok_titles+fail_titles} title cards ok,"
-            f" {ok_clips}/{ok_clips+fail_clips} clips ok"
+            f"· Extraction summary: {ok_clips}/{ok_clips+fail_clips} clips ok"
         )
         for it in plan:
             if not it["ok"]:
-                kind = it["type"]
-                err  = it.get("error", "unknown error")
-                _append_log(job_id, f"  ✗ {kind} failed: {err}")
+                _append_log(job_id, f"  ✗ clip failed: {it.get('error', 'unknown error')}")
 
         # ── Phase 3: Assemble ────────────────────────────────────────────
         clip_paths = []
         clip_durations = []
         segment_starts = []
         cumulative_time = 0.0
-        title_card_count = 0
 
-        i = 0
-        while i < len(plan):
-            title_item = plan[i]
-            clip_item = plan[i + 1]
-            i += 2
-
-            if not title_item["ok"] or not clip_item["ok"]:
-                _append_log(
-                    job_id,
-                    f"  · Skipping segment {title_card_count+1}:"
-                    f" title_ok={title_item['ok']} clip_ok={clip_item['ok']}"
-                )
+        for n, item in enumerate(plan):
+            if not item["ok"]:
+                _append_log(job_id, f"  · Skipping segment {n+1}: clip extraction failed")
                 continue   # errors already logged in Phase 2
-
-            segment_starts.append(cumulative_time)  # points to title card start
-            clip_paths.append(title_item["path"])
-            cumulative_time += TITLE_CARD_DURATION
-            title_card_count += 1
-            clip_paths.append(clip_item["path"])
-            clip_durations.append(clip_item["end_sec"] - clip_item["start_sec"])
-            cumulative_time += clip_item["end_sec"] - clip_item["start_sec"]
+            segment_starts.append(cumulative_time)  # points to clip start
+            clip_paths.append(item["path"])
+            dur = item["end_sec"] - item["start_sec"]
+            clip_durations.append(dur)
+            cumulative_time += dur
 
         _append_log(
             job_id,
-            f"· Assembling {title_card_count} segment(s) → {len(clip_paths)} file(s) to stitch"
+            f"· Assembling {len(clip_paths)} clip(s) to stitch"
         )
 
         if not clip_paths:
@@ -709,7 +587,7 @@ def _run_generation_impl(job_id: str, folder: str,
                     job["error"] = f"Stitch failed: {exc}"
                 return
 
-    duration = int(sum(clip_durations) + title_card_count * TITLE_CARD_DURATION)
+    duration = int(sum(clip_durations))
 
     # In local mode: record the output filename in a sidecar file inside the
     # output folder.  When this folder is later uploaded in cloud mode, the
@@ -755,7 +633,9 @@ def _run_generation_impl(job_id: str, folder: str,
         library_entry["reel_s3_key"] = f"{session_key}/{output_filename}"
 
     # ── Captions: derive a WebVTT track from the same segments ───────────
-    vtt = build_webvtt(segments)
+    # No title cards → clips start at reel_t, so the caption timeline has no
+    # title-card offset.
+    vtt = build_webvtt(segments, title_card_duration=0.0)
     if vtt:
         stem = Path(output_filename).stem
         if storage.is_cloud() and session_key:
@@ -876,6 +756,7 @@ def create_app(testing: bool = False) -> Flask:
         output_filename = body.get("output_filename", "sizzle_reel.mp4").strip()
         output_filename = Path(output_filename).name
         session_key = body.get("session_key", "").strip() or None
+        id_options = body.get("id_options")  # which identifying lines to overlay
 
         VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
         video_paths_for_gen = None
@@ -945,6 +826,7 @@ def create_app(testing: bool = False) -> Flask:
                     session_key=session_key,
                     video_paths=video_paths_for_gen,
                     video_urls=video_urls_for_gen,
+                    id_options=id_options,
                 )
             finally:
                 if _tmp_dir_to_cleanup:
@@ -957,6 +839,7 @@ def create_app(testing: bool = False) -> Flask:
                         session_key=session_key,
                         video_paths=video_paths_for_gen,
                         video_urls=video_urls_for_gen,
+                        id_options=id_options,
                     )
                 finally:
                     if _tmp_dir_to_cleanup:
@@ -1012,11 +895,12 @@ def create_app(testing: bool = False) -> Flask:
                 key=lambda p: p.name,
             )
 
-            segments = _build_segment_list(video_paths, selections, video_urls)
+            segments = _build_segment_list(
+                video_paths, selections, video_urls, body.get("id_options"))
             if not segments:
                 return jsonify({"error": "No segments found in selections"}), 422
 
-            captions_vtt = build_webvtt(segments)
+            captions_vtt = build_webvtt(segments, title_card_duration=0.0)
             captions_key = None
             captions_put_url = None
             if captions_vtt:

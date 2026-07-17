@@ -36,147 +36,6 @@ def test_format_seconds_exact_minute():
     assert _format_seconds(120.0) == "2:00"
 
 
-# ─── make_title_card ──────────────────────────────────────────────────────────
-
-def test_make_title_card_generates_one_drawtext_per_line(tmp_path):
-    from generator_app import make_title_card
-    out = str(tmp_path / "card.mp4")
-    with patch("generator_app.subprocess.run") as mock_run, \
-         patch("generator_app._find_system_font", return_value=None):
-        mock_run.return_value = MagicMock(returncode=0)
-        make_title_card(["NOBU", "from 1:23", "Segment 2 / 5"], 1920, 1080, out)
-    args = mock_run.call_args[0][0]
-    vf_idx = args.index("-vf")
-    vf_value = args[vf_idx + 1]
-    # One drawtext per line
-    assert vf_value.count("drawtext=") == 3
-    # Text is now in side-car files — the filter string has textfile= refs, not raw text
-    assert vf_value.count("textfile=") == 3
-    assert "NOBU" not in vf_value       # text is in file, not embedded in filter
-    assert r"from 1\:23" not in vf_value  # no escaping needed any more
-    # Side-car files written to tmp_path
-    assert (tmp_path / "card_t0.txt").read_text(encoding="utf-8") == "NOBU"
-    assert (tmp_path / "card_t1.txt").read_text(encoding="utf-8") == "from 1:23"
-    assert (tmp_path / "card_t2.txt").read_text(encoding="utf-8") == "Segment 2 / 5"
-
-
-def test_make_title_card_calls_ffmpeg_with_correct_args(tmp_path):
-    from generator_app import make_title_card
-    out = str(tmp_path / "card.mp4")
-    with patch("generator_app.subprocess.run") as mock_run, \
-         patch("generator_app._find_system_font", return_value=None):
-        mock_run.return_value = MagicMock(returncode=0)
-        make_title_card(["My Video"], 1920, 1080, out, duration=5.0)
-    mock_run.assert_called_once()
-    cmd = mock_run.call_args[0][0]
-    joined = " ".join(cmd)
-    assert cmd[0] == "ffmpeg"
-    assert "1920x1080" in joined
-    assert "5.0" in joined
-    # cwd is set to tmp_dir so ffmpeg resolves relative paths correctly
-    kwargs = mock_run.call_args[1]
-    assert "cwd" in kwargs
-    assert kwargs["cwd"] == str(tmp_path)
-
-
-def test_make_title_card_text_percent_doubled_in_file(tmp_path):
-    """drawtext still expands % format specifiers in textfile content, so % → %%."""
-    from generator_app import make_title_card
-    out = str(tmp_path / "card.mp4")
-    with patch("generator_app.subprocess.run") as mock_run, \
-         patch("generator_app._find_system_font", return_value=None):
-        mock_run.return_value = MagicMock(returncode=0)
-        make_title_card(["50% Done"], 1280, 720, out)
-    assert (tmp_path / "card_t0.txt").read_text(encoding="utf-8") == "50%% Done"
-
-
-def test_make_title_card_includes_fontfile_when_font_found(tmp_path):
-    from generator_app import make_title_card
-    out = str(tmp_path / "card.mp4")
-    fake_font = str(tmp_path / "arial.ttf")
-    # Create a dummy font file so shutil.copy succeeds
-    (tmp_path / "arial.ttf").write_bytes(b"")
-    with patch("generator_app.subprocess.run") as mock_run, \
-         patch("generator_app._find_system_font", return_value=fake_font):
-        mock_run.return_value = MagicMock(returncode=0)
-        make_title_card(["Test"], 1920, 1080, out)
-    joined = " ".join(mock_run.call_args[0][0])
-    # fontfile= must be relative (filename only, no drive-letter colon)
-    assert "fontfile=" in joined
-    assert "arial.ttf" in joined
-    assert "fontfile=arial.ttf:" in joined, (
-        "fontfile must be a plain relative filename — absolute paths with C: break "
-        "this ffmpeg build because ':' is never properly escaped in filter values"
-    )
-
-
-def test_make_title_card_omits_fontfile_when_none_found(tmp_path):
-    from generator_app import make_title_card
-    out = str(tmp_path / "card.mp4")
-    with patch("generator_app.subprocess.run") as mock_run, \
-         patch("generator_app._find_system_font", return_value=None):
-        mock_run.return_value = MagicMock(returncode=0)
-        make_title_card(["Test"], 1920, 1080, out)
-    joined = " ".join(mock_run.call_args[0][0])
-    assert "fontfile=" not in joined
-
-
-def test_make_title_card_wraps_long_title(tmp_path):
-    from generator_app import make_title_card
-    out = str(tmp_path / "card.mp4")
-    with patch("generator_app.subprocess.run") as mock_run, \
-         patch("generator_app._find_system_font", return_value=None):
-        mock_run.return_value = MagicMock(returncode=0)
-        make_title_card(["New York", "Japanese restaurant", "Nobu"], 640, 352, out)
-    cmd = mock_run.call_args[0][0]
-    vf_arg = cmd[cmd.index("-vf") + 1]
-    assert vf_arg.count("drawtext=") == 3
-
-
-def test_make_title_card_does_not_wrap_short_title(tmp_path):
-    from generator_app import make_title_card
-    out = str(tmp_path / "card.mp4")
-    with patch("generator_app.subprocess.run") as mock_run, \
-         patch("generator_app._find_system_font", return_value=None):
-        mock_run.return_value = MagicMock(returncode=0)
-        make_title_card(["Nobu"], 1920, 1080, out)
-    cmd = mock_run.call_args[0][0]
-    vf_arg = cmd[cmd.index("-vf") + 1]
-    assert vf_arg.count("drawtext=") == 1
-
-
-def test_make_title_card_reduces_fontsize_for_long_line(tmp_path):
-    """Font size must be reduced when a line would overflow the frame width."""
-    from generator_app import make_title_card
-    import re
-    out = str(tmp_path / "card.mp4")
-    # 50 chars at default fontsize (72 for 1080p) → 50*72*0.55=1980 > 1920-80=1840
-    long_line = "A" * 50
-    with patch("generator_app.subprocess.run") as mock_run, \
-         patch("generator_app._find_system_font", return_value=None):
-        mock_run.return_value = MagicMock(returncode=0)
-        make_title_card([long_line], 1920, 1080, out)
-    vf_value = mock_run.call_args[0][0][mock_run.call_args[0][0].index("-vf") + 1]
-    match = re.search(r"fontsize=(\d+)", vf_value)
-    assert match, "fontsize not found in drawtext filter"
-    assert int(match.group(1)) < 72, "Expected font size to be reduced below default 72"
-
-
-def test_make_title_card_x_expression_centers_text(tmp_path):
-    """The drawtext x expression must center text without commas (ffmpeg 8.x splits filter chain on commas)."""
-    from generator_app import make_title_card
-    out = str(tmp_path / "card.mp4")
-    with patch("generator_app.subprocess.run") as mock_run, \
-         patch("generator_app._find_system_font", return_value=None):
-        mock_run.return_value = MagicMock(returncode=0)
-        make_title_card(["Hello"], 1920, 1080, out)
-    vf_value = mock_run.call_args[0][0][mock_run.call_args[0][0].index("-vf") + 1]
-    assert "x=w/2-text_w/2" in vf_value, \
-        f"Expected comma-free centering expression, got: {vf_value}"
-    assert "max(20," not in vf_value, \
-        "x expression must not contain commas — ffmpeg 8.x treats them as filter separators"
-
-
 # ─── get_video_dimensions ─────────────────────────────────────────────────────
 
 def test_get_video_dimensions_returns_width_height():
@@ -601,7 +460,6 @@ def test_generate_returns_job_id(client, tmp_path):
     with patch("generator_app.extract_clip"), \
          patch("generator_app.stitch_clips"), \
          patch("generator_app.check_ffmpeg"), \
-         patch("generator_app.make_title_card"), \
          patch("generator_app._library_add"):
         resp = client.post("/generate", json={
             "folder": str(tmp_path),
@@ -629,7 +487,6 @@ def test_generate_accepts_empty_prompt(client, tmp_path):
     with patch("generator_app.extract_clip"), \
          patch("generator_app.stitch_clips"), \
          patch("generator_app.check_ffmpeg"), \
-         patch("generator_app.make_title_card"), \
          patch("generator_app._library_add"):
         resp = client.post("/generate", json={
             "folder": str(tmp_path),
@@ -655,51 +512,57 @@ def test_video_endpoint_not_found(client):
     assert resp.status_code == 404
 
 
-# ─── Title card integration tests ─────────────────────────────────────────────
+# ─── Identification overlay integration tests ─────────────────────────────────
+# Overlay lines are burned onto each clip, so they arrive as extract_clip's
+# `title_lines` argument (positional index 5), not a separate title card.
 
-def test_title_card_inserted_between_videos(client, tmp_path):
-    (tmp_path / "alpha.mp4").touch()
-    (tmp_path / "alpha.txt").write_text("[0:05] Speaker: Hello.", encoding="utf-8")
-    (tmp_path / "beta.mp4").touch()
-    (tmp_path / "beta.txt").write_text("[0:10] Speaker: World.", encoding="utf-8")
-
-    with patch("generator_app.extract_clip"), \
+def _run_generate_and_wait(client, tmp_path, selections, id_options=None):
+    """Drive /generate to completion with a captured extract_clip; return the
+    list of title_lines passed for each clip, in order."""
+    with patch("generator_app.extract_clip") as mock_extract, \
          patch("generator_app.stitch_clips"), \
          patch("generator_app.check_ffmpeg"), \
          patch("generator_app.get_video_dimensions", return_value=(1920, 1080)), \
-         patch("generator_app.make_title_card") as mock_card, \
          patch("generator_app._library_add"):
-        mock_card.reset_mock()
-        resp = client.post("/generate", json={
+        body = {
             "folder": str(tmp_path),
             "mode": "highlight",
-            "selections": {
-                "alpha.mp4": ["[0:05] Speaker: Hello."],
-                "beta.mp4": ["[0:10] Speaker: World."],
-            },
+            "selections": selections,
             "prompt": "",
             "output_filename": "out.mp4",
-        })
+        }
+        if id_options is not None:
+            body["id_options"] = id_options
+        resp = client.post("/generate", json=body)
         assert resp.status_code == 200
         job_id = resp.get_json()["job_id"]
-
         for _ in range(25):
             status = client.get(f"/status/{job_id}").get_json()["status"]
             if status in ("done", "error", "cancelled"):
                 break
             time.sleep(0.2)
-
         assert status == "done", f"Job ended in unexpected state: {status}"
-
-    assert mock_card.call_count == 2
-    calls = [c[0][0] for c in mock_card.call_args_list]
-    assert calls[0][0] == "alpha"
-    assert calls[0][2] == "Segment 1 / 2"
-    assert calls[1][0] == "beta"
-    assert calls[1][2] == "Segment 2 / 2"
+    return [c[0][5] for c in mock_extract.call_args_list]
 
 
-def test_segment_title_cards_inserted_within_video(client, tmp_path):
+def test_overlay_titles_ordered_across_videos(client, tmp_path):
+    (tmp_path / "alpha.mp4").touch()
+    (tmp_path / "alpha.txt").write_text("[0:05] Speaker: Hello.", encoding="utf-8")
+    (tmp_path / "beta.mp4").touch()
+    (tmp_path / "beta.txt").write_text("[0:10] Speaker: World.", encoding="utf-8")
+
+    titles = _run_generate_and_wait(client, tmp_path, {
+        "alpha.mp4": ["[0:05] Speaker: Hello."],
+        "beta.mp4": ["[0:10] Speaker: World."],
+    })
+    assert len(titles) == 2
+    assert titles[0][0] == "alpha"
+    assert titles[0][2] == "Segment 1 / 2"
+    assert titles[1][0] == "beta"
+    assert titles[1][2] == "Segment 2 / 2"
+
+
+def test_overlay_titles_for_multiple_segments_within_video(client, tmp_path):
     (tmp_path / "vid.mp4").touch()
     (tmp_path / "vid.txt").write_text(
         "[0:05] Speaker: First line.\n"
@@ -708,43 +571,33 @@ def test_segment_title_cards_inserted_within_video(client, tmp_path):
         encoding="utf-8",
     )
 
-    with patch("generator_app.extract_clip"), \
-         patch("generator_app.stitch_clips"), \
-         patch("generator_app.check_ffmpeg"), \
-         patch("generator_app.get_video_dimensions", return_value=(1920, 1080)), \
-         patch("generator_app.make_title_card") as mock_card, \
-         patch("generator_app._library_add"):
-        resp = client.post("/generate", json={
-            "folder": str(tmp_path),
-            "mode": "highlight",
-            "selections": {
-                "vid.mp4": [
-                    "[0:05] Speaker: First line.",
-                    "[0:25] Speaker: Second cluster.",
-                ],
-            },
-            "prompt": "",
-            "output_filename": "out.mp4",
-        })
-        assert resp.status_code == 200
-        job_id = resp.get_json()["job_id"]
+    titles = _run_generate_and_wait(client, tmp_path, {
+        "vid.mp4": [
+            "[0:05] Speaker: First line.",
+            "[0:25] Speaker: Second cluster.",
+        ],
+    })
+    assert len(titles) == 2
+    assert titles[0][0] == "vid"
+    assert titles[0][1].startswith("from ")
+    assert titles[0][2] == "Segment 1 / 2"
+    assert titles[1][0] == "vid"
+    assert titles[1][2] == "Segment 2 / 2"
 
-        for _ in range(25):
-            status = client.get(f"/status/{job_id}").get_json()["status"]
-            if status in ("done", "error", "cancelled"):
-                break
-            time.sleep(0.2)
 
-        assert status == "done", f"Job ended in unexpected state: {status}"
+def test_id_options_select_which_overlay_lines(client, tmp_path):
+    """Unchecked identification boxes drop their line; all-off yields no overlay."""
+    (tmp_path / "vid.mp4").touch()
+    (tmp_path / "vid.txt").write_text("[0:05] Speaker: Hello.", encoding="utf-8")
+    sel = {"vid.mp4": ["[0:05] Speaker: Hello."]}
 
-    assert mock_card.call_count == 2
-    calls = [c[0][0] for c in mock_card.call_args_list]
-    assert calls[0][0] == "vid"
-    assert calls[0][1].startswith("from ")
-    assert calls[0][2] == "Segment 1 / 2"
-    assert calls[1][0] == "vid"
-    assert calls[1][1].startswith("from ")
-    assert calls[1][2] == "Segment 2 / 2"
+    name_only = _run_generate_and_wait(
+        client, tmp_path, sel, {"name": True, "timestamp": False, "segment": False})
+    assert name_only[0] == ["vid"]
+
+    none = _run_generate_and_wait(
+        client, tmp_path, sel, {"name": False, "timestamp": False, "segment": False})
+    assert none[0] == []
 
 
 def test_generation_result_includes_segment_starts(client, tmp_path):
@@ -757,7 +610,6 @@ def test_generation_result_includes_segment_starts(client, tmp_path):
     with patch("generator_app.extract_clip"), \
          patch("generator_app.stitch_clips"), \
          patch("generator_app.check_ffmpeg"), \
-         patch("generator_app.make_title_card"), \
          patch("generator_app.get_video_dimensions", return_value=(1920, 1080)), \
          patch("generator_app._library_add"):
         resp = client.post("/generate", json={
@@ -822,7 +674,6 @@ def test_webm_source_uses_mp4_temp_clip(client, tmp_path):
     with patch("generator_app.extract_clip") as mock_extract, \
          patch("generator_app.stitch_clips"), \
          patch("generator_app.check_ffmpeg"), \
-         patch("generator_app.make_title_card"), \
          patch("generator_app.get_video_dimensions", return_value=(1920, 1080)), \
          patch("generator_app._library_add"):
         resp = client.post("/generate", json={
@@ -847,12 +698,9 @@ def test_webm_source_uses_mp4_temp_clip(client, tmp_path):
     )
 
 
-def test_card_failure_skips_clip_extraction_and_segment(client, tmp_path):
-    """When make_title_card fails, the segment must be skipped entirely.
-
-    Previously the code fell through to extract_clip, adding clips without
-    title cards and offsetting all subsequent segment_starts by 5 seconds.
-    """
+def test_failed_clip_skipped_from_reel(client, tmp_path):
+    """When extract_clip fails for a segment, that clip is left out of the reel
+    entirely — no title card to roll back, just one fewer stitched clip."""
     (tmp_path / "vid.mp4").touch()
     (tmp_path / "vid.txt").write_text(
         "[0:05] Speaker: First.\n"
@@ -861,85 +709,21 @@ def test_card_failure_skips_clip_extraction_and_segment(client, tmp_path):
         encoding="utf-8",
     )
 
-    card_call_count = [0]
-
-    def fail_first_card(*args, **kwargs):
-        card_call_count[0] += 1
-        if card_call_count[0] == 1:
-            raise RuntimeError("simulated font error")
-        # Second call succeeds (returns None implicitly)
-
-    from generator_app import _jobs
-    with patch("generator_app.make_title_card", side_effect=fail_first_card), \
-         patch("generator_app.extract_clip") as mock_extract, \
-         patch("generator_app.stitch_clips"), \
-         patch("generator_app.check_ffmpeg"), \
-         patch("generator_app.get_video_dimensions", return_value=(1920, 1080)), \
-         patch("generator_app._library_add"):
-        resp = client.post("/generate", json={
-            "folder": str(tmp_path),
-            "mode": "checkbox",
-            "selections": {
-                "vid.mp4": ["[0:05] Speaker: First.", "[0:25] Speaker: Second."]
-            },
-            "output_filename": "out.mp4",
-        })
-        job_id = resp.get_json()["job_id"]
-
-        for _ in range(25):
-            import time; time.sleep(0.1)
-            if _jobs.get(job_id, {}).get("status") in ("done", "error"):
-                break
-
-    result = _jobs[job_id]["result"]
-    assert result is not None, f"Job should complete; ended: {_jobs[job_id]}"
-
-    # extract_clip must have been called exactly once (for segment 2 only)
-    assert mock_extract.call_count == 1, (
-        f"extract_clip called {mock_extract.call_count} times; "
-        "segment 1 should have been skipped when its card failed"
-    )
-
-    # segment_starts must have exactly 1 entry at t=0.0 (title card start;
-    # failed card left no stale marker)
-    assert result["segment_starts"] == [0.0], (
-        f"segment_starts={result['segment_starts']}; "
-        "failed card should not leave a stale marker"
-    )
-
-
-def test_failed_clip_rolls_back_title_card(client, tmp_path):
-    """When extract_clip fails, its preceding title card must be removed from
-    clip_paths so the reel does not contain an orphaned title card.
-
-    Previously only segment_starts.pop() ran, leaving the card in clip_paths
-    and producing a dangling title card (plays, then jumps to next segment).
-    """
-    (tmp_path / "vid.mp4").touch()
-    (tmp_path / "vid.txt").write_text(
-        "[0:05] Speaker: First.\n"
-        "[0:15] Speaker: Gap.\n"
-        "[0:25] Speaker: Second.",
-        encoding="utf-8",
-    )
-
-    extract_call_count = [0]
-
-    def fail_second_clip(video_path, start, end, out, fade_out_secs=0.0):
-        extract_call_count[0] += 1
-        if extract_call_count[0] == 2:
+    def fail_late_clip(*args, **kwargs):
+        # args[1] is start_sec; the second segment starts at ~0:25. Keying on the
+        # start (not call order) keeps this deterministic under parallel extraction.
+        if args[1] >= 20:
             raise RuntimeError("simulated encode error")
-        # First clip succeeds
+        # First clip (start 0:05) succeeds
 
     stitched_with = []
 
     def capture_stitch(paths, out):
         stitched_with.extend(paths)
 
-    with patch("generator_app.extract_clip", side_effect=fail_second_clip), \
+    with patch("generator_app.extract_clip", side_effect=fail_late_clip), \
          patch("generator_app.stitch_clips", side_effect=capture_stitch), \
          patch("generator_app.check_ffmpeg"), \
-         patch("generator_app.make_title_card"), \
          patch("generator_app.get_video_dimensions", return_value=(1920, 1080)), \
          patch("generator_app._library_add"):
         resp = client.post("/generate", json={
@@ -958,32 +742,23 @@ def test_failed_clip_rolls_back_title_card(client, tmp_path):
             if status in ("done", "error", "cancelled"):
                 break
 
-    # Segment 1: card + clip succeed → 2 entries in clip_paths
-    # Segment 2: card succeeds, clip fails → card must be rolled back → 0 net entries
-    # stitch_clips should have been called with exactly 2 paths (card1 + clip1)
-    assert len(stitched_with) == 2, (
-        f"stitch_clips received {len(stitched_with)} paths; "
-        "expected 2 (card1 + clip1 only — card2 should have been rolled back)"
+    # Two segments, second clip fails → only the first clip is stitched.
+    assert len(stitched_with) == 1, (
+        f"stitch_clips received {len(stitched_with)} paths; expected 1 (only clip 1)"
     )
 
 
-def test_duration_seconds_includes_title_card_time(client, tmp_path):
-    """duration_seconds in the job result must include title card durations.
-
-    Each segment prepends a 5-second title card.  Previously only content-clip
-    durations were summed, understating reel length by N_segments * 5 seconds.
-    """
+def test_duration_seconds_is_sum_of_clip_durations(client, tmp_path):
+    """No title cards → duration_seconds is just the summed clip content."""
     (tmp_path / "vid.mp4").touch()
     # Single selected line at 0:05. Trailing dead-air cap ends the clip at the
-    # estimated speech end (1 word → 5 + 0.5 + 1.0 = 6.5s → 1.5s content), then
-    # the 5s title card is added: int(1.5 + 5) = 6s.
+    # estimated speech end (1 word → 5 + 0.5 + 1.0 = 6.5s → 1.5s content).
     (tmp_path / "vid.txt").write_text("[0:05] Speaker: Hello.", encoding="utf-8")
 
     from generator_app import _jobs
     with patch("generator_app.extract_clip"), \
          patch("generator_app.stitch_clips"), \
          patch("generator_app.check_ffmpeg"), \
-         patch("generator_app.make_title_card"), \
          patch("generator_app.get_video_dimensions", return_value=(1920, 1080)), \
          patch("generator_app._library_add"):
         resp = client.post("/generate", json={
@@ -1001,19 +776,16 @@ def test_duration_seconds_includes_title_card_time(client, tmp_path):
 
     result = _jobs[job_id]["result"]
     assert result is not None
-    # 1 segment: 1.5s capped content + 5s title card = int(6.5) = 6s.
-    # (Without the title card the sum would be int(1.5) = 1 — so 6 still proves
-    # the card time is included.)
-    assert result["duration_seconds"] == 6, (
-        f"duration_seconds={result['duration_seconds']}; "
-        "expected 6 (1.5s capped content + 5s title card)"
+    # 1 segment: int(1.5s content) = 1s (no title-card time added).
+    assert result["duration_seconds"] == 1, (
+        f"duration_seconds={result['duration_seconds']}; expected 1 (1.5s content only)"
     )
 
 
 # ─── Parallel clip extraction ─────────────────────────────────────────────────
 
 def test_parallel_extraction_all_succeed(client, tmp_path):
-    """All clips extracted; stitch receives title+clip pairs in order."""
+    """All clips extracted; stitch receives one clip per segment (no title cards)."""
     (tmp_path / "v1.mp4").touch()
     (tmp_path / "v2.mp4").touch()
     (tmp_path / "v1.txt").write_text("[0:01] Speaker: hello\n[0:10] Speaker: done\n", encoding="utf-8")
@@ -1021,13 +793,9 @@ def test_parallel_extraction_all_succeed(client, tmp_path):
 
     stitched = []
 
-    def fake_extract(video_path, start, end, output_path, fade_out_secs=0.0):
+    def fake_extract(*args, **kwargs):
         from pathlib import Path
-        Path(output_path).write_bytes(b"clip")
-
-    def fake_title(lines, w, h, out, duration=5.0, fade_in_secs=0.0):
-        from pathlib import Path
-        Path(out).write_bytes(b"title")
+        Path(args[3]).write_bytes(b"clip")   # output_path is the 4th positional arg
 
     def fake_stitch(paths, out):
         stitched.extend(paths)
@@ -1035,7 +803,6 @@ def test_parallel_extraction_all_succeed(client, tmp_path):
         Path(out).write_bytes(b"reel")
 
     with patch("generator_app.extract_clip", side_effect=fake_extract), \
-         patch("generator_app.make_title_card", side_effect=fake_title), \
          patch("generator_app.stitch_clips", side_effect=fake_stitch), \
          patch("generator_app._library_add"), \
          patch("generator_app.get_video_dimensions", return_value=(1920, 1080)):
@@ -1054,8 +821,8 @@ def test_parallel_extraction_all_succeed(client, tmp_path):
     from generator_app import _jobs
     job = _jobs[job_id]
     assert job["status"] == "done"
-    # Two segments → two title+clip pairs → 4 paths
-    assert len(stitched) == 4
+    # Two segments → two clips → 2 paths
+    assert len(stitched) == 2
 
 
 def test_parallel_extraction_failed_clip_skipped(client, tmp_path):
@@ -1067,15 +834,11 @@ def test_parallel_extraction_failed_clip_skipped(client, tmp_path):
 
     stitched = []
 
-    def fake_extract(video_path, start, end, output_path, fade_out_secs=0.0):
+    def fake_extract(*args, **kwargs):
         from pathlib import Path
-        if "v1" in video_path:
+        if "v1" in args[0]:                  # video_path is the 1st positional arg
             raise RuntimeError("extraction failed")
-        Path(output_path).write_bytes(b"clip")
-
-    def fake_title(lines, w, h, out, duration=5.0, fade_in_secs=0.0):
-        from pathlib import Path
-        Path(out).write_bytes(b"title")
+        Path(args[3]).write_bytes(b"clip")
 
     def fake_stitch(paths, out):
         stitched.extend(paths)
@@ -1083,7 +846,6 @@ def test_parallel_extraction_failed_clip_skipped(client, tmp_path):
         Path(out).write_bytes(b"reel")
 
     with patch("generator_app.extract_clip", side_effect=fake_extract), \
-         patch("generator_app.make_title_card", side_effect=fake_title), \
          patch("generator_app.stitch_clips", side_effect=fake_stitch), \
          patch("generator_app._library_add"), \
          patch("generator_app.get_video_dimensions", return_value=(1920, 1080)):
@@ -1102,8 +864,8 @@ def test_parallel_extraction_failed_clip_skipped(client, tmp_path):
     from generator_app import _jobs
     job = _jobs[job_id]
     assert job["status"] == "done"
-    # v1 failed, v2 succeeded → 1 title + 1 clip = 2 paths
-    assert len(stitched) == 2
+    # v1 failed, v2 succeeded → 1 clip = 1 path
+    assert len(stitched) == 1
 
 
 def test_parallel_extraction_all_fail_returns_error(client, tmp_path):
@@ -1111,15 +873,10 @@ def test_parallel_extraction_all_fail_returns_error(client, tmp_path):
     (tmp_path / "v1.mp4").touch()
     (tmp_path / "v1.txt").write_text("[0:01] Speaker: hi\n[0:10] Speaker: bye\n", encoding="utf-8")
 
-    def fake_extract(video_path, start, end, output_path, fade_out_secs=0.0):
+    def fake_extract(*args, **kwargs):
         raise RuntimeError("always fails")
 
-    def fake_title(lines, w, h, out, duration=5.0, fade_in_secs=0.0):
-        from pathlib import Path
-        Path(out).write_bytes(b"title")
-
     with patch("generator_app.extract_clip", side_effect=fake_extract), \
-         patch("generator_app.make_title_card", side_effect=fake_title), \
          patch("generator_app.stitch_clips"), \
          patch("generator_app._library_add"), \
          patch("generator_app.get_video_dimensions", return_value=(1920, 1080)):
@@ -1136,9 +893,9 @@ def test_parallel_extraction_all_fail_returns_error(client, tmp_path):
     assert _jobs[job_id]["status"] == "error"
 
 
-def test_duration_seconds_excludes_rolled_back_title_card(client, tmp_path):
-    """When a clip extraction fails and its title card is rolled back, that card's
-    5 seconds must NOT be counted in duration_seconds."""
+def test_duration_seconds_excludes_failed_clip(client, tmp_path):
+    """A failed clip contributes nothing to duration_seconds — only surviving
+    clips are summed (no title-card time in the total either)."""
     (tmp_path / "vid.mp4").touch()
     (tmp_path / "vid.txt").write_text(
         "[0:05] Speaker: First.\n"
@@ -1147,19 +904,16 @@ def test_duration_seconds_excludes_rolled_back_title_card(client, tmp_path):
         encoding="utf-8",
     )
 
-    extract_call_count = [0]
-
-    def fail_second_clip(video_path, start, end, out, fade_out_secs=0.0):
-        extract_call_count[0] += 1
-        if extract_call_count[0] == 2:
+    def fail_late_clip(*args, **kwargs):
+        # args[1] is start_sec; the second segment starts at ~0:25.
+        if args[1] >= 20:
             raise RuntimeError("simulated encode error")
-        # First clip succeeds
+        # First clip (start 0:05) succeeds
 
     from generator_app import _jobs
-    with patch("generator_app.extract_clip", side_effect=fail_second_clip), \
+    with patch("generator_app.extract_clip", side_effect=fail_late_clip), \
          patch("generator_app.stitch_clips"), \
          patch("generator_app.check_ffmpeg"), \
-         patch("generator_app.make_title_card"), \
          patch("generator_app.get_video_dimensions", return_value=(1920, 1080)), \
          patch("generator_app._library_add"):
         resp = client.post("/generate", json={
@@ -1179,14 +933,10 @@ def test_duration_seconds_excludes_rolled_back_title_card(client, tmp_path):
 
     result = _jobs[job_id]["result"]
     assert result is not None, f"Job should complete, got: {_jobs[job_id]}"
-
-    # Segment 1: "First." (1 word) capped to 1.5s content + 5s title card = 6.5s
-    # Segment 2: card created then rolled back (clip failed) → 0s net
-    # Total expected: int(6.5) = 6s. If the rolled-back card were counted it
-    # would add 5 → int(11.5) = 11, so 6 proves it is excluded.
-    assert result["duration_seconds"] == 6, (
+    # Only segment 1 survives: "First." (1 word) capped to 1.5s → int(1.5) = 1s.
+    assert result["duration_seconds"] == 1, (
         f"duration_seconds={result['duration_seconds']}; "
-        "rolled-back title card must not add to duration"
+        "failed clip must not contribute to duration"
     )
 
 
@@ -1359,7 +1109,6 @@ def test_generation_result_includes_entry_id(tmp_path, client):
         captured_entry.update(entry)
 
     with patch("generator_app._library_add", side_effect=fake_add), \
-         patch("generator_app.make_title_card"), \
          patch("generator_app.extract_clip"), \
          patch("generator_app.stitch_clips"), \
          patch("generator_app.get_video_dimensions", return_value=(1920, 1080)):
@@ -1410,7 +1159,6 @@ def test_cloud_temp_dir_cleanup_scheduled(client, tmp_path):
     with patch("generator_app.extract_clip"), \
          patch("generator_app.stitch_clips_to_pipe", return_value=mock_proc), \
          patch("generator_app.check_ffmpeg"), \
-         patch("generator_app.make_title_card"), \
          patch("generator_app.get_video_dimensions", return_value=(1920, 1080)), \
          patch("generator_app.get_video_duration", return_value=None), \
          patch("generator_app._library_add"), \
@@ -1538,7 +1286,6 @@ def test_local_generation_writes_vtt_sidecar(client, tmp_path):
         captured["entry"] = entry
 
     with patch("generator_app._library_add", side_effect=fake_add), \
-         patch("generator_app.make_title_card"), \
          patch("generator_app.extract_clip"), \
          patch("generator_app.stitch_clips"), \
          patch("generator_app.check_ffmpeg"), \

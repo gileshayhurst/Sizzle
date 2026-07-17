@@ -11,6 +11,8 @@
  * Plan shape (from POST /plan):
  *   { session_key, output_filename, width, height, reel_key,
  *     presigned_put_url, segments: [{ video, presigned_get_url, start_sec, end_sec, title_lines }] }
+ * title_lines are burned onto each clip as a top-anchored, fading title
+ * overlay (no separate title card).
  *
  * Callbacks: { onLog(msg), onProgress(done, total), signal (AbortSignal), generatorUrl }
  *
@@ -33,8 +35,8 @@ import {
   canEncodeVideo,
 } from '/static/vendor/mediabunny.mjs';
 
-const TITLE_CARD_DURATION_SEC = 5.0;
-const TITLE_FADE_IN_SEC = 2.0;
+const TITLE_SHOW_SEC = 3.0;   // how long the identification overlay stays up
+const TITLE_FADE_SEC = 0.3;   // fade in / fade out duration
 const CLIP_FADE_OUT_SEC = 2.0;
 const FPS = 30;
 const SAMPLE_RATE = 48000;
@@ -92,43 +94,39 @@ function _drawCaption(ctx, text, width, height, fontSize) {
   });
 }
 
-// ── Title card: draw text with fade-in on the shared canvas + silent audio ──────
-async function _encodeTitleCard(titleLines, width, height, ctx, videoSource, audioSource, startTs, signal) {
-  const totalFrames = Math.round(TITLE_CARD_DURATION_SEC * FPS);
-  const fadeInFrames = Math.round(TITLE_FADE_IN_SEC * FPS);
-  const fontSize = Math.max(24, Math.floor(height / 15));
-  const lineHeight = Math.round(fontSize * 1.4);
-  const totalTextH = titleLines.length * lineHeight;
-  const baseY = Math.round((height - totalTextH) / 2 + fontSize);
-
-  for (let i = 0; i < totalFrames; i++) {
-    _throwIfAborted(signal);
-    const alpha = Math.min(1.0, i / Math.max(1, fadeInFrames - 1));
-    ctx.fillStyle = '#000';
-    ctx.fillRect(0, 0, width, height);
-    ctx.globalAlpha = alpha;
-    ctx.fillStyle = '#fff';
-    ctx.font = `bold ${fontSize}px sans-serif`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'alphabetic';
-    titleLines.forEach((line, idx) => ctx.fillText(line, width / 2, baseY + idx * lineHeight));
-    ctx.globalAlpha = 1.0;
-    await videoSource.add(startTs + i / FPS, 1 / FPS);
-  }
-
-  // Silent stereo audio for the full title-card duration.
-  const silence = new AudioBuffer({
-    length: Math.round(TITLE_CARD_DURATION_SEC * SAMPLE_RATE),
-    numberOfChannels: CHANNELS,
-    sampleRate: SAMPLE_RATE,
-  });
-  await audioSource.add(silence);
-
-  return startTs + TITLE_CARD_DURATION_SEC;
+// Title overlay opacity at `relSec` into a clip: fade in, hold, fade out, gone.
+// Mirrors video_editor._title_alpha_expr so both renderers behave the same.
+function _titleAlpha(relSec, clipDurationSec) {
+  const show = Math.min(TITLE_SHOW_SEC, clipDurationSec);
+  if (relSec >= show) return 0;
+  if (relSec < TITLE_FADE_SEC) return relSec / TITLE_FADE_SEC;
+  if (relSec < show - TITLE_FADE_SEC) return 1;
+  return Math.max(0, (show - relSec) / TITLE_FADE_SEC);
 }
 
-// ── Clip: range-read webm, decode VP9/Opus, apply fade-out, re-encode ───────────
-async function _encodeClip(url, startSec, endSec, width, height, ctx, videoSource, audioSource, startTs, signal) {
+// Draw the identification lines, top-anchored, white text with a drop shadow so
+// they stay legible over arbitrary video. `alpha` fades the whole overlay.
+function _drawTitle(ctx, titleLines, width, height, alpha) {
+  if (!titleLines || !titleLines.length || alpha <= 0) return;
+  const fontSize = Math.max(20, Math.floor(height / 22));
+  const lineHeight = Math.round(fontSize * 1.35);
+  const top = Math.max(fontSize, Math.floor(height / 14)) + fontSize;
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.font = `bold ${fontSize}px sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'alphabetic';
+  ctx.shadowColor = 'rgba(0,0,0,0.8)';
+  ctx.shadowOffsetX = 2;
+  ctx.shadowOffsetY = 2;
+  ctx.shadowBlur = 3;
+  ctx.fillStyle = '#fff';
+  titleLines.forEach((line, i) => ctx.fillText(line, width / 2, top + i * lineHeight));
+  ctx.restore();
+}
+
+// ── Clip: range-read webm, decode VP9/Opus, apply fade-out, burn title, re-encode ─
+async function _encodeClip(url, startSec, endSec, titleLines, width, height, ctx, videoSource, audioSource, startTs, signal) {
   const clipDurationSec = endSec - startSec;
   const input = new Input({ formats: ALL_FORMATS, source: new UrlSource(url) });
 
@@ -157,6 +155,7 @@ async function _encodeClip(url, startSec, endSec, width, height, ctx, videoSourc
           ctx.drawImage(wrapped.canvas, 0, 0, width, height);
           ctx.globalAlpha = 1.0;
         }
+        _drawTitle(ctx, titleLines, width, height, _titleAlpha(relSec, clipDurationSec));
         await videoSource.add(startTs + relSec, 1 / FPS);
         i++;
       }
@@ -209,7 +208,7 @@ window.ReelEncoder = {
     const progress = onProgress || (() => {});
     const { width, height, segments, presigned_put_url,
             session_key, output_filename } = plan;
-    const total = segments.length * 2; // title + clip per segment
+    const total = segments.length; // one clip per segment (title burned onto clip)
     let done = 0;
 
     // Fail fast if this browser cannot encode H.264 at this resolution.
@@ -242,7 +241,7 @@ window.ReelEncoder = {
     output.addAudioTrack(audioSource);
     await output.start();
 
-    // ── Encode each segment: title card + clip, in order, into one stream ───────
+    // ── Encode each segment's clip, in order, into one stream ───────────────────
     let ts = 0; // seconds
     const segmentStarts = [];
 
@@ -251,14 +250,9 @@ window.ReelEncoder = {
         _throwIfAborted(signal);
         const seg = segments[i];
 
-        log(`· Title card ${i + 1}/${segments.length}: ${seg.title_lines[0]}`);
         segmentStarts.push(ts);
-        ts = await _encodeTitleCard(seg.title_lines, width, height, ctx, videoSource, audioSource, ts, signal);
-        progress(++done, total);
-
-        _throwIfAborted(signal);
         log(`· Encoding clip ${i + 1}/${segments.length} (${seg.start_sec.toFixed(1)}–${seg.end_sec.toFixed(1)}s)…`);
-        ts = await _encodeClip(seg.presigned_get_url, seg.start_sec, seg.end_sec,
+        ts = await _encodeClip(seg.presigned_get_url, seg.start_sec, seg.end_sec, seg.title_lines,
                                width, height, ctx, videoSource, audioSource, ts, signal);
         progress(++done, total);
         log(`✓ Clip ${i + 1} done`);
