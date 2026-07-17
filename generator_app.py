@@ -100,6 +100,11 @@ def _library_add(entry: dict) -> None:
 # dropped (title card included) when the source can't provide it.
 MIN_CLIP_SECONDS = 1.5
 
+# Symmetric fade at each clip's head and tail — the transition between clips now
+# that there are no title cards. Short so it reads as a dip, not dead time on the
+# already-tight clips.
+TRANSITION_FADE_SECONDS = 0.4
+
 # Trailing dead-air cap. A segment's raw end is the next line's start, which
 # overshoots by any interview pause after the last selected line — leaving the
 # speaker sitting silently. We instead estimate when that line's speech ends
@@ -447,10 +452,12 @@ def _run_generation_impl(job_id: str, folder: str,
                     item["start_sec"],
                     item["end_sec"],
                     item["path"],
-                    2.0,  # fade_out_secs
+                    TRANSITION_FADE_SECONDS,  # fade_out_secs
                     item["title_lines"],
                     font_path,
                     item["height"],
+                    fade_in_secs=TRANSITION_FADE_SECONDS,
+                    show_timer=True,
                 )
 
             for item in plan:

@@ -37,7 +37,7 @@ import {
 
 const TITLE_SHOW_SEC = 3.0;   // how long the identification overlay stays up
 const TITLE_FADE_SEC = 0.3;   // fade in / fade out duration
-const CLIP_FADE_OUT_SEC = 2.0;
+const TRANSITION_FADE_SEC = 0.4;  // symmetric head/tail dip between clips
 const FPS = 30;
 const SAMPLE_RATE = 48000;
 const CHANNELS = 2;
@@ -48,10 +48,39 @@ function _throwIfAborted(signal) {
   if (signal?.aborted) throw new DOMException('Cancelled', 'AbortError');
 }
 
-function _fadeOutGain(relSec, clipDurationSec) {
-  const fadeStart = Math.max(0, clipDurationSec - CLIP_FADE_OUT_SEC);
-  if (relSec < fadeStart) return 1.0;
-  return Math.max(0, 1.0 - (relSec - fadeStart) / CLIP_FADE_OUT_SEC);
+// Symmetric transition: fade in over the head, fade out over the tail. Applied
+// to both video (canvas alpha) and audio (sample gain) so clips dip between each
+// other now that there is no title card separating them.
+function _transitionGain(relSec, clipDurationSec) {
+  const fadeIn = Math.min(1.0, relSec / TRANSITION_FADE_SEC);
+  const outStart = Math.max(0, clipDurationSec - TRANSITION_FADE_SEC);
+  const fadeOut = relSec < outStart
+    ? 1.0
+    : Math.max(0, 1.0 - (relSec - outStart) / TRANSITION_FADE_SEC);
+  return Math.min(fadeIn, fadeOut);
+}
+
+// Countdown of the clip's remaining whole seconds, pinned top-right on a
+// translucent box (matches the server-side ffmpeg timer).
+function _drawTimer(ctx, remainingSec, width, height, fontSize, alpha = 1) {
+  if (alpha <= 0) return;
+  const whole = Math.max(0, Math.ceil(remainingSec));
+  const text = `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, '0')}`;
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.font = `bold ${fontSize}px sans-serif`;
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  const padX = fontSize * 0.4, padY = fontSize * 0.25;
+  const tw = ctx.measureText(text).width;
+  const margin = Math.max(12, Math.floor(fontSize * 0.6));
+  const boxW = tw + padX * 2, boxH = fontSize + padY * 2;
+  const x = width - boxW - margin, y = margin;
+  ctx.fillStyle = 'rgba(0,0,0,0.5)';
+  ctx.fillRect(x, y, boxW, boxH);
+  ctx.fillStyle = '#fff';
+  ctx.fillText(text, x + padX, y + padY);
+  ctx.restore();
 }
 
 // Parse a WebVTT string into [{start, end, text}] (seconds). Minimal parser:
@@ -134,7 +163,8 @@ async function _encodeClip(url, startSec, endSec, titleLines, width, height, ctx
     const videoTrack = await input.getPrimaryVideoTrack();
     const audioTrack = await input.getPrimaryAudioTrack();
 
-    // ── Video: sample onto a fixed 30fps grid, apply fade, encode ──────────────
+    // ── Video: sample onto a fixed 30fps grid, apply transition + overlays ─────
+    const timerFontSize = Math.max(20, Math.floor(height / 22));
     if (videoTrack) {
       const sink = new CanvasSink(videoTrack, {
         width, height, fit: 'contain', poolSize: 2,
@@ -147,7 +177,7 @@ async function _encodeClip(url, startSec, endSec, titleLines, width, height, ctx
       for await (const wrapped of sink.canvasesAtTimestamps(timestamps)) {
         _throwIfAborted(signal);
         const relSec = i / FPS;
-        const alpha = _fadeOutGain(relSec, clipDurationSec);
+        const alpha = _transitionGain(relSec, clipDurationSec);
         ctx.fillStyle = '#000';
         ctx.fillRect(0, 0, width, height);
         if (wrapped) {
@@ -155,19 +185,22 @@ async function _encodeClip(url, startSec, endSec, titleLines, width, height, ctx
           ctx.drawImage(wrapped.canvas, 0, 0, width, height);
           ctx.globalAlpha = 1.0;
         }
-        _drawTitle(ctx, titleLines, width, height, _titleAlpha(relSec, clipDurationSec));
+        // Overlays dip with the frame during the head/tail transition (the
+        // server's fade filter dims drawtext the same way).
+        _drawTitle(ctx, titleLines, width, height, _titleAlpha(relSec, clipDurationSec) * alpha);
+        _drawTimer(ctx, clipDurationSec - relSec, width, height, timerFontSize, alpha);
         await videoSource.add(startTs + relSec, 1 / FPS);
         i++;
       }
     }
 
-    // ── Audio: decode, apply fade-out gain, encode (or silent-pad) ─────────────
+    // ── Audio: decode, apply transition gain, encode (or silent-pad) ───────────
     if (audioTrack) {
       const audioSink = new AudioBufferSink(audioTrack);
       for await (const { buffer, timestamp } of audioSink.buffers(startSec, endSec)) {
         _throwIfAborted(signal);
         const relSec = timestamp - startSec;
-        const gain = _fadeOutGain(relSec, clipDurationSec);
+        const gain = _transitionGain(relSec, clipDurationSec);
         if (gain < 1.0) {
           for (let ch = 0; ch < buffer.numberOfChannels; ch++) {
             const data = buffer.getChannelData(ch);

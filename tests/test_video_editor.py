@@ -208,6 +208,38 @@ def test_extract_clip_no_title_lines_no_drawtext():
     assert "-vf" not in cmd
 
 
+def test_extract_clip_shows_timer():
+    """show_timer burns a per-second countdown: one enable-gated drawtext per
+    whole second, each with its 'M:SS' text in a side-car file (no colon in the
+    filter string), and the countdown runs down (0:08 → 0:01)."""
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = type("R", (), {"returncode": 0})()
+        with tempfile.TemporaryDirectory() as tmp:
+            out = os.path.join(tmp, "clip_0000.mp4")
+            extract_clip("input.mp4", 0.0, 8.0, out, show_timer=True, height=1080)
+            assert (open(os.path.join(tmp, "clip_0000_timer0.txt")).read()) == "0:08"
+            assert (open(os.path.join(tmp, "clip_0000_timer7.txt")).read()) == "0:01"
+    cmd = _captured_cmd(mock_run)
+    vf_val = cmd[cmd.index("-vf") + 1]
+    assert vf_val.count("drawtext=") == 8          # ceil(8.0) windows
+    assert "enable=between(t\\," in vf_val          # commas escaped
+    assert "0:08" not in vf_val                     # M:SS lives in the file, not the filter
+    assert "%{eif" not in vf_val                    # no dynamic expression (would break this ffmpeg)
+
+
+def test_extract_clip_fade_in_and_out():
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = type("R", (), {"returncode": 0})()
+        extract_clip("input.mp4", 0.0, 8.0, "out.mp4", fade_out_secs=0.4, fade_in_secs=0.4)
+    cmd = _captured_cmd(mock_run)
+    vf_val = cmd[cmd.index("-vf") + 1]
+    assert "fade=t=in:st=0:d=0.4" in vf_val
+    assert "fade=t=out" in vf_val
+    af_val = cmd[cmd.index("-af") + 1]
+    assert "afade=t=in:st=0:d=0.4" in af_val
+    assert "afade=t=out" in af_val
+
+
 def test_stitch_clips_to_pipe_returns_popen_with_pipe_stdout():
     """stitch_clips_to_pipe must return a Popen with stdout=PIPE and the right ffmpeg flags."""
     from video_editor import stitch_clips_to_pipe
