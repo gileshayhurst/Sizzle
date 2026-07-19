@@ -172,7 +172,7 @@ def normalize_transcript(raw_text: str) -> str:
     return "\n".join(out)
 
 
-def read_transcript(txt_path) -> str:
+def read_transcript(txt_path: str | _Path) -> str:
     """Read a transcript sidecar and return it sentence-normalized.
 
     Every transcript read in both services goes through here so no code path
