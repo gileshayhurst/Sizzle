@@ -107,12 +107,15 @@ def normalize_transcript(raw_text: str) -> str:
     interpolate to the same second (e.g. a repeated "Yeah.") produce identical
     `raw` output lines. Since `raw` is the cross-service selection identity,
     selecting one selects both, which can duplicate a short clip in the reel.
-    This is accepted rather than fixed, because it requires repeated identical
-    short sentences clamped inside the same second, and the alternative —
-    nudging a later duplicate's timestamp forward to force uniqueness — was
-    tried and reverted: it breaks the monotonic-timestamp invariant that
-    group_lines_into_segments and captions.collect_caption_lines both rely on,
-    trading a rare identity collision for frequent, silent mis-ordering.
+    Measured on production-shaped transcripts this affects ~1-2% of lines but
+    around a third of transcripts, concentrated on short backchannel sentences
+    ("Yeah.", "Right."). It is accepted rather than fixed because the
+    alternative — nudging a later duplicate's timestamp forward to force
+    uniqueness — was tried and reverted: it breaks the monotonic-timestamp
+    invariant that group_lines_into_segments and captions.collect_caption_lines
+    both rely on, trading an identity collision for frequent, silent
+    mis-ordering. If this ever needs closing, do it in the selection layer
+    (index-qualify the key) rather than by fabricating timestamps.
     """
     lines = raw_text.splitlines()
     parsed: list[tuple[float, str, str] | None] = []
