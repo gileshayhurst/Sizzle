@@ -112,3 +112,113 @@ def test_is_interviewer_label_is_case_insensitive_over_synonyms():
         assert is_interviewer_label(label) is True
     for label in ["Participant", "Respondent", "Speaker", "Interviewee", "Guest"]:
         assert is_interviewer_label(label) is False
+
+
+from shared import normalize_transcript
+
+
+def test_normalize_leaves_single_sentence_line_untouched():
+    raw = "[0:05] Participant: Hello world."
+    assert normalize_transcript(raw) == raw
+
+
+def test_normalize_leaves_non_matching_lines_untouched():
+    raw = "some header\n[0:05] Participant: Hello world."
+    assert normalize_transcript(raw) == raw
+
+
+def test_normalize_splits_multi_sentence_turn():
+    raw = (
+        "[1:29] Participant: Um, so we do just a canned wet dog food, like the chunks ones. "
+        "Um, we'll do that. "
+        "Um, and I also, I try to give, uh, I put supplements in every one.\n"
+        "[2:30] Interviewer: That sounds like a very nutritious meal setup."
+    )
+    out = normalize_transcript(raw).splitlines()
+    assert len(out) == 4
+    assert out[0] == (
+        "[1:29] Participant: Um, so we do just a canned wet dog food, like the chunks ones."
+    )
+    assert out[1] == "[1:35] Participant: Um, we'll do that."
+    assert out[2] == (
+        "[1:37] Participant: Um, and I also, I try to give, uh, I put supplements in every one."
+    )
+    assert out[3] == "[2:30] Interviewer: That sounds like a very nutritious meal setup."
+
+
+def test_normalize_preserves_speaker_label_on_every_sentence():
+    raw = "[0:10] AI Agent: First question. Second question."
+    out = normalize_transcript(raw).splitlines()
+    assert all(line.split("] ", 1)[1].startswith("AI Agent: ") for line in out)
+
+
+def test_normalize_first_sentence_keeps_original_timestamp():
+    raw = "[1:00] Participant: One. Two. Three.\n[2:00] Participant: Next turn."
+    out = normalize_transcript(raw).splitlines()
+    assert out[0].startswith("[1:00] ")
+
+
+def test_normalize_timestamps_are_monotonic_and_within_turn():
+    raw = "[1:00] Participant: One. Two. Three. Four. Five.\n[2:00] Participant: Next."
+    lines = parse_transcript_lines(normalize_transcript(raw))
+    turn = [line for line in lines if line["text"] != "Next."]
+    seconds = [line["seconds"] for line in turn]
+    assert seconds == sorted(seconds)
+    assert seconds[0] == 60.0
+    assert seconds[-1] < 120.0
+
+
+def test_normalize_never_exceeds_next_line_start():
+    # A turn whose estimated speech window would overrun the next line.
+    raw = "[1:00] Participant: One. Two.\n[1:03] Participant: Next."
+    lines = parse_transcript_lines(normalize_transcript(raw))
+    assert all(line["seconds"] <= 63.0 for line in lines)
+
+
+def test_normalize_applies_early_start_bias():
+    # Second sentence's un-biased offset is large enough that the 1s bias is
+    # visible: without bias it would land a full second later.
+    raw = "[0:00] Participant: " + ("word " * 40).strip() + ". Second sentence here.\n[1:00] Participant: Next."
+    lines = parse_transcript_lines(normalize_transcript(raw))
+    second = [line for line in lines if line["text"] == "Second sentence here."][0]
+    words = 40 + 3
+    speech_end = 0.0 + words / 2.0 + 1.0
+    unbiased = (40 / words) * speech_end
+    assert second["seconds"] == int(max(0.0, unbiased - 1.0))
+
+
+def test_normalize_is_idempotent():
+    raw = (
+        "[1:29] Participant: First sentence here. Second sentence here. Third one.\n"
+        "[2:30] Interviewer: Done."
+    )
+    once = normalize_transcript(raw)
+    assert normalize_transcript(once) == once
+
+
+def test_normalize_is_deterministic():
+    raw = "[1:29] Participant: First sentence. Second sentence. Third sentence."
+    assert normalize_transcript(raw) == normalize_transcript(raw)
+
+
+def test_normalize_passes_through_unpunctuated_turn():
+    raw = "[1:00] Participant: um so like we just keep going and going without any punctuation at all"
+    assert normalize_transcript(raw) == raw
+
+
+def test_normalize_handles_empty_string():
+    assert normalize_transcript("") == ""
+
+
+def test_normalize_last_turn_without_following_line():
+    raw = "[1:00] Participant: One sentence. Two sentence."
+    out = normalize_transcript(raw).splitlines()
+    assert len(out) == 2
+    assert out[0] == "[1:00] Participant: One sentence."
+    assert out[1].endswith("Participant: Two sentence.")
+
+
+def test_normalize_splits_on_question_and_exclamation():
+    raw = "[0:00] Participant: Really? Yes! Absolutely."
+    out = normalize_transcript(raw).splitlines()
+    assert len(out) == 3

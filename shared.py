@@ -6,6 +6,16 @@ from video_editor import parse_timestamp_to_seconds
 
 _LINE_RE = _re.compile(r'^\[(\d+:\d{2})\]\s+(\w[\w ]*?):\s*(.*)')
 
+# Sentence boundary: terminal punctuation followed by whitespace. Matches the
+# convention transcriber._split_into_sentences uses for Whisper output.
+_SENTENCE_SPLIT_RE = _re.compile(r'(?<=[.!?])\s+')
+
+# Interpolated sentence starts are pulled this many seconds earlier. Forven
+# turn windows include pauses, so a proportional estimate skews late — and late
+# is the harmful direction (it clips the first word). Erring early costs at
+# most a beat of lead-in, which the 0.4s clip fade-in softens.
+START_BIAS_SECONDS = 1.0
+
 # Speaker labels that identify the AI interview agent (case-insensitive,
 # whitespace-normalized). Anything NOT in this set is treated as the
 # respondent, so detection fails safe toward keeping content.
@@ -60,6 +70,80 @@ MIN_CLIP_SECONDS = 1.5
 # sliver of air over clipping a word).
 SPEAKING_RATE = 2.0    # words/sec (conversational English ~2.5; slower = safer)
 TAIL_BUFFER = 1.0      # seconds of grace after the estimated last word
+
+
+def _seconds_to_timestamp(seconds: float) -> str:
+    total = int(seconds)
+    return f"{total // 60}:{total % 60:02d}"
+
+
+def normalize_transcript(raw_text: str) -> str:
+    """Split multi-sentence turn lines into one line per sentence.
+
+    Production transcripts are Forven platform exports: one line per whole
+    speaker turn, often 30-60s. That is the granularity ceiling on clip
+    length, because both Claude's returned ranges and manual selection can
+    only address whole lines. This splits each turn into sentences and
+    interpolates a timestamp for each by word-count proportion across the
+    turn's *estimated speech window* (not the raw turn window, which includes
+    trailing dead air and would skew every estimate late).
+
+    Must stay deterministic: the main app and generator service each normalize
+    the same .txt independently, and the resulting `raw` line strings are the
+    selection identity shared between them.
+
+    Lines that don't parse, single-sentence lines, and unpunctuated turns pass
+    through byte-identical, so the function is idempotent.
+    """
+    lines = raw_text.splitlines()
+    parsed: list[tuple[str, float, str, str] | None] = []
+    for raw in lines:
+        m = _LINE_RE.match(raw.strip())
+        if m:
+            ts, speaker, text = m.group(1), m.group(2).strip(), m.group(3)
+            parsed.append((raw, parse_timestamp_to_seconds(ts), speaker, text))
+        else:
+            parsed.append(None)
+
+    # Start of the next parseable line, used to bound each turn's window.
+    next_starts: list[float | None] = [None] * len(parsed)
+    upcoming: float | None = None
+    for i in range(len(parsed) - 1, -1, -1):
+        next_starts[i] = upcoming
+        if parsed[i] is not None:
+            upcoming = parsed[i][1]
+
+    out: list[str] = []
+    for idx, (entry, next_start) in enumerate(zip(parsed, next_starts)):
+        if entry is None:
+            out.append(lines[idx])
+            continue
+        raw, start, speaker, text = entry
+        sentences = [s for s in _SENTENCE_SPLIT_RE.split(text.strip()) if s]
+        if len(sentences) < 2:
+            out.append(raw)
+            continue
+
+        total_words = sum(len(s.split()) for s in sentences)
+        if total_words == 0:
+            out.append(raw)
+            continue
+
+        # Estimated end of speech in this turn, capped by the next line's
+        # start. Interpolating over this (rather than to next_start) keeps
+        # trailing silence from stretching every sentence estimate later.
+        speech_end = start + total_words / SPEAKING_RATE + TAIL_BUFFER
+        window_end = speech_end if next_start is None else min(next_start, speech_end)
+        span = max(0.0, window_end - start)
+
+        words_before = 0
+        for sentence in sentences:
+            offset = (words_before / total_words) * span
+            ts_sec = max(start, start + offset - START_BIAS_SECONDS)
+            out.append(f"[{_seconds_to_timestamp(ts_sec)}] {speaker}: {sentence}")
+            words_before += len(sentence.split())
+
+    return "\n".join(out)
 
 
 def group_lines_into_segments(
