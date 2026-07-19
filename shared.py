@@ -8,6 +8,9 @@ _LINE_RE = _re.compile(r'^\[(\d+:\d{2})\]\s+(\w[\w ]*?):\s*(.*)')
 
 # Sentence boundary: terminal punctuation followed by whitespace. Matches the
 # convention transcriber._split_into_sentences uses for Whisper output.
+# Known over-splits: "Dr. Smith", "U.S.", "Well..." — accepted rather than
+# adding an abbreviation list, because the failure mode is a short fragment
+# clip, which errs toward the finer granularity this function exists to produce.
 _SENTENCE_SPLIT_RE = _re.compile(r'(?<=[.!?])\s+')
 
 # Interpolated sentence starts are pulled this many seconds earlier. Forven
@@ -72,6 +75,9 @@ SPEAKING_RATE = 2.0    # words/sec (conversational English ~2.5; slower = safer)
 TAIL_BUFFER = 1.0      # seconds of grace after the estimated last word
 
 
+# Duplicates transcriber.py's own formatter verbatim. Deliberate: importing
+# transcriber from shared would put a Whisper-adjacent module on both
+# services' import path for the sake of a divmod and an f-string.
 def _seconds_to_timestamp(seconds: float) -> str:
     total = int(seconds)
     return f"{total // 60}:{total % 60:02d}"
@@ -93,15 +99,17 @@ def normalize_transcript(raw_text: str) -> str:
     selection identity shared between them.
 
     Lines that don't parse, single-sentence lines, and unpunctuated turns pass
-    through byte-identical, so the function is idempotent.
+    through per-line unchanged, so the function is idempotent. Note this is
+    per-line, not byte-identical at the file level: splitlines()+join()
+    normalizes CRLF to LF and drops a trailing newline.
     """
     lines = raw_text.splitlines()
-    parsed: list[tuple[str, float, str, str] | None] = []
+    parsed: list[tuple[float, str, str] | None] = []
     for raw in lines:
         m = _LINE_RE.match(raw.strip())
         if m:
             ts, speaker, text = m.group(1), m.group(2).strip(), m.group(3)
-            parsed.append((raw, parse_timestamp_to_seconds(ts), speaker, text))
+            parsed.append((parse_timestamp_to_seconds(ts), speaker, text))
         else:
             parsed.append(None)
 
@@ -111,23 +119,28 @@ def normalize_transcript(raw_text: str) -> str:
     for i in range(len(parsed) - 1, -1, -1):
         next_starts[i] = upcoming
         if parsed[i] is not None:
-            upcoming = parsed[i][1]
+            upcoming = parsed[i][0]
 
     out: list[str] = []
-    for idx, (entry, next_start) in enumerate(zip(parsed, next_starts)):
+    # Scoped to the whole file, not per-turn: two identical short sentences
+    # (e.g. "Yeah.") both clamping to the same interpolated second would
+    # otherwise emit byte-identical `raw` lines. Since `raw` is the selection
+    # identity shared across services, that collision would make one manual
+    # selection or Claude-returned range match two non-adjacent clips and
+    # duplicate one of them in the reel. Forven exports never contain
+    # duplicate lines, so nothing downstream is collision-safe.
+    emitted: set[str] = set()
+    for raw, entry, next_start in zip(lines, parsed, next_starts):
         if entry is None:
-            out.append(lines[idx])
+            out.append(raw)
             continue
-        raw, start, speaker, text = entry
+        start, speaker, text = entry
         sentences = [s for s in _SENTENCE_SPLIT_RE.split(text.strip()) if s]
         if len(sentences) < 2:
             out.append(raw)
             continue
 
         total_words = sum(len(s.split()) for s in sentences)
-        if total_words == 0:
-            out.append(raw)
-            continue
 
         # Estimated end of speech in this turn, capped by the next line's
         # start. Interpolating over this (rather than to next_start) keeps
@@ -140,7 +153,12 @@ def normalize_transcript(raw_text: str) -> str:
         for sentence in sentences:
             offset = (words_before / total_words) * span
             ts_sec = max(start, start + offset - START_BIAS_SECONDS)
-            out.append(f"[{_seconds_to_timestamp(ts_sec)}] {speaker}: {sentence}")
+            line = f"[{_seconds_to_timestamp(ts_sec)}] {speaker}: {sentence}"
+            while line in emitted:
+                ts_sec += 1.0
+                line = f"[{_seconds_to_timestamp(ts_sec)}] {speaker}: {sentence}"
+            emitted.add(line)
+            out.append(line)
             words_before += len(sentence.split())
 
     return "\n".join(out)

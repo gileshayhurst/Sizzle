@@ -1,7 +1,7 @@
 from pathlib import Path
 from unittest.mock import patch
 
-from shared import parse_transcript_lines
+from shared import normalize_transcript, parse_transcript_lines
 
 
 def test_parse_empty_string():
@@ -114,9 +114,6 @@ def test_is_interviewer_label_is_case_insensitive_over_synonyms():
         assert is_interviewer_label(label) is False
 
 
-from shared import normalize_transcript
-
-
 def test_normalize_leaves_single_sentence_line_untouched():
     raw = "[0:05] Participant: Hello world."
     assert normalize_transcript(raw) == raw
@@ -181,10 +178,7 @@ def test_normalize_applies_early_start_bias():
     raw = "[0:00] Participant: " + ("word " * 40).strip() + ". Second sentence here.\n[1:00] Participant: Next."
     lines = parse_transcript_lines(normalize_transcript(raw))
     second = [line for line in lines if line["text"] == "Second sentence here."][0]
-    words = 40 + 3
-    speech_end = 0.0 + words / 2.0 + 1.0
-    unbiased = (40 / words) * speech_end
-    assert second["seconds"] == int(max(0.0, unbiased - 1.0))
+    assert second["timestamp"] == "0:19"   # unbiased 20s, biased 1s early
 
 
 def test_normalize_is_idempotent():
@@ -222,3 +216,63 @@ def test_normalize_splits_on_question_and_exclamation():
     raw = "[0:00] Participant: Really? Yes! Absolutely."
     out = normalize_transcript(raw).splitlines()
     assert len(out) == 3
+
+
+def test_normalize_dedups_duplicate_sentences_within_turn():
+    # "Yeah." appears twice; both interpolate to the same second (short
+    # sentences clamp early). Without dedup this emits two byte-identical
+    # `raw` lines, and since `raw` is the cross-service selection identity,
+    # selecting one would match both and duplicate a clip in the reel.
+    raw = "[1:00] Participant: Yeah. Ok. Yeah."
+    lines = parse_transcript_lines(normalize_transcript(raw))
+    raws = [line["raw"] for line in lines]
+    assert len(raws) == 3
+    assert len(set(raws)) == 3
+
+
+def test_normalize_handles_out_of_order_next_start():
+    # next_start earlier than the turn's own start (out-of-order/duplicate
+    # source timestamps). The window collapses to zero span: every sentence
+    # lands on the turn's own start, nothing walks backwards, no crash.
+    raw = "[2:00] Participant: One. Two.\n[1:00] Participant: Next."
+    lines = parse_transcript_lines(normalize_transcript(raw))
+    turn = [line for line in lines if line["text"] in ("One.", "Two.")]
+    assert len(turn) == 2
+    assert all(line["seconds"] == 120.0 for line in turn)
+
+
+def test_normalize_passes_through_whitespace_only_text():
+    raw = "[0:05] P:   "
+    assert normalize_transcript(raw) == raw
+
+
+def test_normalize_realistic_multi_turn_fixture():
+    raw = (
+        "[0:00] Interviewer: Thanks for joining today, let's dive right into talking about dog food.\n"
+        "[0:05] Participant: Um, so we do just a canned wet dog food, like the chunks ones. "
+        "Um, we'll do that. "
+        "Um, and I also, I try to give, uh, I put supplements in every one, you know, just to keep him healthy overall.\n"
+        "[1:10] Interviewer: That's great, can you tell me a little more about which supplements you use?\n"
+        "[1:15] Participant: Yeah, so I use a joint supplement, and then I also give him a fish oil pill every single morning. "
+        "Um, he really seems to like the taste of it, actually. "
+        "It's been really good for his coat too, you know.\n"
+        "[2:25] Interviewer: Wonderful, thank you so much for sharing all of that with me today."
+    )
+    lines = parse_transcript_lines(normalize_transcript(raw))
+    turn_starts = [0.0, 5.0, 70.0, 75.0, 145.0]
+
+    # Every original turn boundary survives as some sentence's exact start.
+    for ts in turn_starts:
+        assert any(line["seconds"] == ts for line in lines)
+
+    # Timestamps are globally monotonic non-decreasing...
+    seconds = [line["seconds"] for line in lines]
+    assert seconds == sorted(seconds)
+
+    # ...and every sentence lands within its own turn's window, never
+    # spilling into the next turn — the interaction this fixture is meant
+    # to catch between next_starts and the speech-window cap.
+    for line in lines:
+        turn_idx = max(i for i, s in enumerate(turn_starts) if s <= line["seconds"])
+        turn_end = turn_starts[turn_idx + 1] if turn_idx + 1 < len(turn_starts) else float("inf")
+        assert turn_starts[turn_idx] <= line["seconds"] < turn_end
