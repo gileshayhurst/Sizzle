@@ -110,8 +110,21 @@ def test_group_lines_into_segments_uses_video_duration_for_last_segment():
         {"raw": "a", "seconds": 5.0},
         {"raw": "b", "seconds": 10.0},
     ]
-    result = _group_lines_into_segments(lines, {"a", "b"}, video_duration=30.0)
-    assert result == [(5.0, 30.0)]
+    result = _group_lines_into_segments(lines, {"a", "b"}, video_duration=20.0)
+    assert result == [(5.0, 20.0)]
+
+
+def test_group_lines_into_segments_caps_last_segment_at_max_clip_seconds():
+    """A video end far past the last line would give an over-long clip; the
+    MAX_CLIP_SECONDS ceiling trims it instead of running to the video end."""
+    from generator_app import _group_lines_into_segments
+    from shared import MAX_CLIP_SECONDS
+    lines = [
+        {"raw": "a", "seconds": 5.0},
+        {"raw": "b", "seconds": 10.0},
+    ]
+    result = _group_lines_into_segments(lines, {"a", "b"}, video_duration=300.0)
+    assert result == [(5.0, 5.0 + MAX_CLIP_SECONDS)]
 
 
 def test_group_lines_into_segments_falls_back_to_plus_ten_without_duration():

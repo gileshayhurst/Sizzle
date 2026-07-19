@@ -74,6 +74,13 @@ MIN_CLIP_SECONDS = 1.5
 SPEAKING_RATE = 2.0    # words/sec (conversational English ~2.5; slower = safer)
 TAIL_BUFFER = 1.0      # seconds of grace after the estimated last word
 
+# Hard ceiling on any single clip. Sentence normalization gets most clips to
+# 5-15s; this is the safety net for turns with no terminal punctuation (which
+# pass through unsplit) and for over-wide ranges returned by analyze. Set above
+# the target range so it only fires on pathological cases -- normal clips still
+# end on a natural sentence boundary.
+MAX_CLIP_SECONDS = 22.0
+
 
 # Duplicates transcriber.py's own formatter verbatim. Deliberate: importing
 # transcriber from shared would put a Whisper-adjacent module on both
@@ -171,10 +178,11 @@ def group_lines_into_segments(
     """Convert selected transcript lines into (start_sec, end_sec) clip ranges.
 
     Each segment's end is capped near the last selected line's estimated speech
-    end (see SPEAKING_RATE / TAIL_BUFFER) to trim trailing dead air, then the
-    MIN_CLIP_SECONDS floor is applied — so a lone title card with no clip is
-    never emitted, and short segments are extended (clamped to video duration)
-    or dropped if the source can't reach the floor.
+    end (see SPEAKING_RATE / TAIL_BUFFER) to trim trailing dead air, then capped
+    again at MAX_CLIP_SECONDS as a hard ceiling, then the MIN_CLIP_SECONDS floor
+    is applied — so a lone title card with no clip is never emitted, and short
+    segments are extended (clamped to video duration) or dropped if the source
+    can't reach the floor.
 
     Pure logic shared by the generator (real clip ranges) and the main app's
     analyze (create-screen length estimate), so both compute identical durations.
@@ -189,6 +197,7 @@ def group_lines_into_segments(
         if words:
             speech_end = last_line["seconds"] + words / SPEAKING_RATE + TAIL_BUFFER
             end = min(end, speech_end)
+        end = min(end, start + MAX_CLIP_SECONDS)
         if end - start < MIN_CLIP_SECONDS:
             extended = start + MIN_CLIP_SECONDS
             if video_duration is not None:

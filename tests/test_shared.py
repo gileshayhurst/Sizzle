@@ -1,7 +1,12 @@
 from pathlib import Path
 from unittest.mock import patch
 
-from shared import normalize_transcript, parse_transcript_lines
+from shared import (
+    MAX_CLIP_SECONDS,
+    group_lines_into_segments,
+    normalize_transcript,
+    parse_transcript_lines,
+)
 
 
 def test_parse_empty_string():
@@ -277,3 +282,23 @@ def test_normalize_realistic_multi_turn_fixture():
         turn_idx = max(i for i, s in enumerate(turn_starts) if s <= line["seconds"])
         turn_end = turn_starts[turn_idx + 1] if turn_idx + 1 < len(turn_starts) else float("inf")
         assert turn_starts[turn_idx] <= line["seconds"] < turn_end
+
+
+def test_clip_is_capped_at_max_clip_seconds():
+    # An unpunctuated 120-word turn: without the cap its estimated speech end
+    # is 60s+ past the start.
+    text = " ".join(["word"] * 120)
+    raw = f"[0:00] Participant: {text}"
+    lines = parse_transcript_lines(raw)
+    segments = group_lines_into_segments(lines, {raw}, video_duration=300.0)
+    assert len(segments) == 1
+    start, end = segments[0]
+    assert end - start == MAX_CLIP_SECONDS
+
+
+def test_short_clip_is_not_affected_by_cap():
+    raw = "[0:00] Participant: Four short words here."
+    lines = parse_transcript_lines(raw)
+    segments = group_lines_into_segments(lines, {raw}, video_duration=300.0)
+    start, end = segments[0]
+    assert end - start < MAX_CLIP_SECONDS
