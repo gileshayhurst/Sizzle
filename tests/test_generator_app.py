@@ -1200,11 +1200,14 @@ def test_cloud_temp_dir_cleanup_scheduled(client, tmp_path):
 
 def test_build_segment_list_returns_segments_with_correct_fields(tmp_path):
     from generator_app import _build_segment_list
+    # Turn-level source line; read_transcript() splits it into sentence-level
+    # lines on read, so the selection below is the sentence-level raw string
+    # that actually appears after normalization (see shared.normalize_transcript).
     transcript = "[0:10] Speaker: Hello world. Great content here.\n[0:20] Speaker: Second line."
     (tmp_path / "video.webm").write_bytes(b"")
     (tmp_path / "video.txt").write_text(transcript, encoding="utf-8")
     vp = tmp_path / "video.webm"
-    selections = {"video.webm": ["[0:10] Speaker: Hello world. Great content here."]}
+    selections = {"video.webm": ["[0:10] Speaker: Hello world."]}
     with patch("generator_app.get_video_duration", return_value=60.0):
         result = _build_segment_list([vp], selections)
     assert len(result) == 1

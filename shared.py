@@ -172,6 +172,19 @@ def normalize_transcript(raw_text: str) -> str:
     return "\n".join(out)
 
 
+def read_transcript(txt_path) -> str:
+    """Read a transcript sidecar and return it sentence-normalized.
+
+    Every transcript read in both services goes through here so no code path
+    can accidentally work with un-normalized turn-level lines -- the `raw`
+    strings are the selection identity shared across services, so they must
+    match everywhere. (Same invariant as filter_generated_reels: if you add a
+    new code path that reads a .txt, call this.) The file on disk is never
+    modified; it is client data.
+    """
+    return normalize_transcript(_Path(txt_path).read_text(encoding="utf-8"))
+
+
 def group_lines_into_segments(
     all_lines: list, selected_raws: set, video_duration: float | None = None
 ) -> list:

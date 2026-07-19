@@ -37,7 +37,7 @@ from flask_sock import Sock
 
 from loader import scan_videos
 from video_editor import check_ffmpeg, extract_clip, parse_timestamp_to_seconds, stitch_clips, stitch_clips_to_pipe
-from shared import parse_transcript_lines as _parse_transcript_lines, filter_generated_reels as _filter_generated_reels
+from shared import parse_transcript_lines as _parse_transcript_lines, filter_generated_reels as _filter_generated_reels, read_transcript as _read_transcript
 from captions import build_webvtt, collect_caption_lines, WEBVTT_MIME
 import storage
 
@@ -233,7 +233,7 @@ def _build_segment_list(
         txt_path = vp.with_suffix(".txt")
         if not txt_path.exists():
             continue
-        all_lines = _parse_transcript_lines(txt_path.read_text(encoding="utf-8"))
+        all_lines = _parse_transcript_lines(_read_transcript(txt_path))
         ffmpeg_input = video_urls.get(vp.name, str(vp)) if video_urls else str(vp)
         duration = get_video_duration(ffmpeg_input)
         selected_set = set(selected_raws)

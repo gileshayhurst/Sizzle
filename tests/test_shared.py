@@ -6,6 +6,7 @@ from shared import (
     group_lines_into_segments,
     normalize_transcript,
     parse_transcript_lines,
+    read_transcript,
 )
 
 
@@ -302,3 +303,15 @@ def test_short_clip_is_not_affected_by_cap():
     segments = group_lines_into_segments(lines, {raw}, video_duration=300.0)
     start, end = segments[0]
     assert end - start < MAX_CLIP_SECONDS
+
+
+def test_read_transcript_normalizes_on_read(tmp_path):
+    txt = tmp_path / "interview.txt"
+    txt.write_text(
+        "[1:00] Participant: First sentence here. Second sentence here.",
+        encoding="utf-8",
+    )
+    out = read_transcript(txt)
+    assert len(out.splitlines()) == 2
+    # The file on disk is client data and must not be rewritten.
+    assert len(txt.read_text(encoding="utf-8").splitlines()) == 1

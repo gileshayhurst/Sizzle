@@ -36,6 +36,7 @@ from timestamp_parser import parse_scored_timestamps
 from transcriber import transcribe_video
 from video_editor import parse_timestamp_to_seconds
 from shared import (
+    read_transcript as _read_transcript,
     parse_transcript_lines as _parse_transcript_lines,
     filter_generated_reels as _filter_generated_reels,
     group_lines_into_segments as _group_lines_into_segments,
@@ -236,7 +237,7 @@ def _run_analyze(folder: str, prompt: str) -> dict:
         if not txt_path.exists() or txt_path.stat().st_size == 0:
             return vp.name, [], None
 
-        transcript = txt_path.read_text(encoding="utf-8")
+        transcript = _read_transcript(txt_path)
         all_lines = _parse_transcript_lines(transcript)
 
         try:
@@ -802,7 +803,7 @@ def create_app(testing: bool = False) -> Flask:
             if not txt_path.exists():
                 lines = []
             else:
-                lines = _parse_transcript_lines(txt_path.read_text(encoding="utf-8"))
+                lines = _parse_transcript_lines(_read_transcript(txt_path))
             files.append({"name": vp.name, "lines": lines})
         return jsonify({"files": files})
 
