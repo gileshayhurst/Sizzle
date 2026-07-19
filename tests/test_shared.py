@@ -1,7 +1,13 @@
 from pathlib import Path
 from unittest.mock import patch
 
-from shared import parse_transcript_lines
+from shared import (
+    MAX_CLIP_SECONDS,
+    group_lines_into_segments,
+    normalize_transcript,
+    parse_transcript_lines,
+    read_transcript,
+)
 
 
 def test_parse_empty_string():
@@ -112,3 +118,246 @@ def test_is_interviewer_label_is_case_insensitive_over_synonyms():
         assert is_interviewer_label(label) is True
     for label in ["Participant", "Respondent", "Speaker", "Interviewee", "Guest"]:
         assert is_interviewer_label(label) is False
+
+
+def test_normalize_leaves_single_sentence_line_untouched():
+    raw = "[0:05] Participant: Hello world."
+    assert normalize_transcript(raw) == raw
+
+
+def test_normalize_leaves_non_matching_lines_untouched():
+    raw = "some header\n[0:05] Participant: Hello world."
+    assert normalize_transcript(raw) == raw
+
+
+def test_normalize_splits_multi_sentence_turn():
+    raw = (
+        "[1:29] Participant: Um, so we do just a canned wet dog food, like the chunks ones. "
+        "Um, we'll do that. "
+        "Um, and I also, I try to give, uh, I put supplements in every one.\n"
+        "[2:30] Interviewer: That sounds like a very nutritious meal setup."
+    )
+    out = normalize_transcript(raw).splitlines()
+    assert len(out) == 4
+    assert out[0] == (
+        "[1:29] Participant: Um, so we do just a canned wet dog food, like the chunks ones."
+    )
+    assert out[1] == "[1:35] Participant: Um, we'll do that."
+    assert out[2] == (
+        "[1:37] Participant: Um, and I also, I try to give, uh, I put supplements in every one."
+    )
+    assert out[3] == "[2:30] Interviewer: That sounds like a very nutritious meal setup."
+
+
+def test_normalize_preserves_speaker_label_on_every_sentence():
+    raw = "[0:10] AI Agent: First question. Second question."
+    out = normalize_transcript(raw).splitlines()
+    assert all(line.split("] ", 1)[1].startswith("AI Agent: ") for line in out)
+
+
+def test_normalize_first_sentence_keeps_original_timestamp():
+    raw = "[1:00] Participant: One. Two. Three.\n[2:00] Participant: Next turn."
+    out = normalize_transcript(raw).splitlines()
+    assert out[0].startswith("[1:00] ")
+
+
+def test_normalize_timestamps_are_monotonic_and_within_turn():
+    raw = "[1:00] Participant: One. Two. Three. Four. Five.\n[2:00] Participant: Next."
+    lines = parse_transcript_lines(normalize_transcript(raw))
+    turn = [line for line in lines if line["text"] != "Next."]
+    seconds = [line["seconds"] for line in turn]
+    assert seconds == sorted(seconds)
+    assert seconds[0] == 60.0
+    assert seconds[-1] < 120.0
+
+
+def test_normalize_never_exceeds_next_line_start():
+    # A turn whose estimated speech window would overrun the next line.
+    raw = "[1:00] Participant: One. Two.\n[1:03] Participant: Next."
+    lines = parse_transcript_lines(normalize_transcript(raw))
+    assert all(line["seconds"] <= 63.0 for line in lines)
+
+
+def test_normalize_applies_early_start_bias():
+    # Second sentence's un-biased offset is large enough that the 1s bias is
+    # visible: without bias it would land a full second later.
+    raw = "[0:00] Participant: " + ("word " * 40).strip() + ". Second sentence here.\n[1:00] Participant: Next."
+    lines = parse_transcript_lines(normalize_transcript(raw))
+    second = [line for line in lines if line["text"] == "Second sentence here."][0]
+    assert second["timestamp"] == "0:19"   # unbiased 20s, biased 1s early
+
+
+def test_normalize_is_idempotent():
+    raw = (
+        "[1:29] Participant: First sentence here. Second sentence here. Third one.\n"
+        "[2:30] Interviewer: Done."
+    )
+    once = normalize_transcript(raw)
+    assert normalize_transcript(once) == once
+
+
+def test_normalize_is_deterministic():
+    raw = "[1:29] Participant: First sentence. Second sentence. Third sentence."
+    assert normalize_transcript(raw) == normalize_transcript(raw)
+
+
+def test_normalize_passes_through_unpunctuated_turn():
+    raw = "[1:00] Participant: um so like we just keep going and going without any punctuation at all"
+    assert normalize_transcript(raw) == raw
+
+
+def test_normalize_handles_empty_string():
+    assert normalize_transcript("") == ""
+
+
+def test_normalize_last_turn_without_following_line():
+    raw = "[1:00] Participant: One sentence. Two sentence."
+    out = normalize_transcript(raw).splitlines()
+    assert len(out) == 2
+    assert out[0] == "[1:00] Participant: One sentence."
+    assert out[1].endswith("Participant: Two sentence.")
+
+
+def test_normalize_splits_on_question_and_exclamation():
+    raw = "[0:00] Participant: Really? Yes! Absolutely."
+    out = normalize_transcript(raw).splitlines()
+    assert len(out) == 3
+
+
+def test_normalize_timestamps_monotonic_with_repeated_sentences():
+    # Repeated short sentences ("Yeah.") can clamp to the same or adjacent
+    # seconds. A prior fix here nudged duplicates forward to force unique
+    # `raw` lines, but that broke monotonicity for later sentences (their
+    # offset is computed independent of any earlier nudge). Reverted; this
+    # locks in that plain interpolation stays non-decreasing on its own,
+    # since offset is monotonic in word position.
+    raw = "[1:00] Participant: Yeah. Yeah. Ok. Yeah.\n[2:00] Participant: Next."
+    lines = parse_transcript_lines(normalize_transcript(raw))
+    seconds = [line["seconds"] for line in lines]
+    assert seconds == sorted(seconds)
+
+
+def test_normalize_handles_out_of_order_next_start():
+    # next_start earlier than the turn's own start (out-of-order/duplicate
+    # source timestamps). The window collapses to zero span: every sentence
+    # lands on the turn's own start, nothing walks backwards, no crash.
+    raw = "[2:00] Participant: One. Two.\n[1:00] Participant: Next."
+    lines = parse_transcript_lines(normalize_transcript(raw))
+    turn = [line for line in lines if line["text"] in ("One.", "Two.")]
+    assert len(turn) == 2
+    assert all(line["seconds"] == 120.0 for line in turn)
+
+
+def test_normalize_passes_through_whitespace_only_text():
+    raw = "[0:05] P:   "
+    assert normalize_transcript(raw) == raw
+
+
+def test_normalize_realistic_multi_turn_fixture():
+    raw = (
+        "[0:00] Interviewer: Thanks for joining today, let's dive right into talking about dog food.\n"
+        "[0:05] Participant: Um, so we do just a canned wet dog food, like the chunks ones. "
+        "Um, we'll do that. "
+        "Um, and I also, I try to give, uh, I put supplements in every one, you know, just to keep him healthy overall.\n"
+        "[1:10] Interviewer: That's great, can you tell me a little more about which supplements you use?\n"
+        "[1:15] Participant: Yeah. Yeah. So I use a joint supplement, and then I also give him a fish oil pill every single morning. "
+        "Um, he really seems to like the taste of it, actually. "
+        "It's been really good for his coat too, you know.\n"
+        "[2:25] Interviewer: Wonderful, thank you so much for sharing all of that with me today."
+    )
+    lines = parse_transcript_lines(normalize_transcript(raw))
+    turn_starts = [0.0, 5.0, 70.0, 75.0, 145.0]
+
+    # Every original turn boundary survives as some sentence's exact start.
+    for ts in turn_starts:
+        assert any(line["seconds"] == ts for line in lines)
+
+    # Timestamps are globally monotonic non-decreasing...
+    seconds = [line["seconds"] for line in lines]
+    assert seconds == sorted(seconds)
+
+    # ...and every sentence lands within its own turn's window, never
+    # spilling into the next turn — the interaction this fixture is meant
+    # to catch between next_starts and the speech-window cap.
+    for line in lines:
+        turn_idx = max(i for i, s in enumerate(turn_starts) if s <= line["seconds"])
+        turn_end = turn_starts[turn_idx + 1] if turn_idx + 1 < len(turn_starts) else float("inf")
+        assert turn_starts[turn_idx] <= line["seconds"] < turn_end
+
+
+def test_clip_is_capped_at_max_clip_seconds():
+    # An unpunctuated 120-word turn: without the cap its estimated speech end
+    # is 60s+ past the start.
+    text = " ".join(["word"] * 120)
+    raw = f"[0:00] Participant: {text}"
+    lines = parse_transcript_lines(raw)
+    segments = group_lines_into_segments(lines, {raw}, video_duration=300.0)
+    assert len(segments) == 1
+    start, end = segments[0]
+    assert end - start == MAX_CLIP_SECONDS
+
+
+def test_short_clip_is_not_affected_by_cap():
+    raw = "[0:00] Participant: Four short words here."
+    lines = parse_transcript_lines(raw)
+    segments = group_lines_into_segments(lines, {raw}, video_duration=300.0)
+    start, end = segments[0]
+    assert end - start < MAX_CLIP_SECONDS
+
+
+def test_read_transcript_normalizes_on_read(tmp_path):
+    txt = tmp_path / "interview.txt"
+    txt.write_text(
+        "[1:00] Participant: First sentence here. Second sentence here.",
+        encoding="utf-8",
+    )
+    out = read_transcript(txt)
+    assert len(out.splitlines()) == 2
+    # The file on disk is client data and must not be rewritten.
+    assert len(txt.read_text(encoding="utf-8").splitlines()) == 1
+
+
+def test_both_services_read_transcripts_identically(tmp_path):
+    """The main app and the generator service each read the same .txt
+    independently. A line's raw string is the selection identity passed between
+    them, so their parsed output must be byte-identical — if one skips
+    normalization, selection silently matches nothing and the reel comes out
+    empty with no error."""
+    import app as main_app
+    import generator_app
+
+    txt = tmp_path / "interview.txt"
+    txt.write_text(
+        "[1:00] Participant: First sentence here. Second sentence here. Third one here.\n"
+        "[2:00] Interviewer: Thanks for your time.",
+        encoding="utf-8",
+    )
+
+    assert main_app._read_transcript(txt) == generator_app._read_transcript(txt)
+
+
+def test_selection_identity_survives_analyze_to_generate(tmp_path):
+    """A raw line string selected via the main app's read path must match a line
+    the generator's read path produces, and group into a real clip."""
+    import app as main_app
+    import generator_app
+
+    txt = tmp_path / "interview.txt"
+    txt.write_text(
+        "[1:00] Participant: First sentence here. Second sentence here. Third one here.\n"
+        "[2:00] Interviewer: Thanks for your time.",
+        encoding="utf-8",
+    )
+    app_side = parse_transcript_lines(main_app._read_transcript(txt))
+    generator_side = parse_transcript_lines(generator_app._read_transcript(txt))
+
+    selected = {app_side[1]["raw"]}
+    matched = [line for line in generator_side if line["raw"] in selected]
+    assert len(matched) == 1
+    assert matched[0]["text"] == "Second sentence here."
+
+    segments = group_lines_into_segments(generator_side, selected, video_duration=300.0)
+    assert len(segments) == 1
+    start, end = segments[0]
+    assert end > start
+    assert end - start <= MAX_CLIP_SECONDS

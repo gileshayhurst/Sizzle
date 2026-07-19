@@ -6,6 +6,19 @@ from video_editor import parse_timestamp_to_seconds
 
 _LINE_RE = _re.compile(r'^\[(\d+:\d{2})\]\s+(\w[\w ]*?):\s*(.*)')
 
+# Sentence boundary: terminal punctuation followed by whitespace. Matches the
+# convention transcriber._split_into_sentences uses for Whisper output.
+# Known over-splits: "Dr. Smith", "U.S.", "Well..." — accepted rather than
+# adding an abbreviation list, because the failure mode is a short fragment
+# clip, which errs toward the finer granularity this function exists to produce.
+_SENTENCE_SPLIT_RE = _re.compile(r'(?<=[.!?])\s+')
+
+# Interpolated sentence starts are pulled this many seconds earlier. Forven
+# turn windows include pauses, so a proportional estimate skews late — and late
+# is the harmful direction (it clips the first word). Erring early costs at
+# most a beat of lead-in, which the 0.4s clip fade-in softens.
+START_BIAS_SECONDS = 1.0
+
 # Speaker labels that identify the AI interview agent (case-insensitive,
 # whitespace-normalized). Anything NOT in this set is treated as the
 # respondent, so detection fails safe toward keeping content.
@@ -61,6 +74,116 @@ MIN_CLIP_SECONDS = 1.5
 SPEAKING_RATE = 2.0    # words/sec (conversational English ~2.5; slower = safer)
 TAIL_BUFFER = 1.0      # seconds of grace after the estimated last word
 
+# Hard ceiling on any single clip. Sentence normalization gets most clips to
+# 5-15s; this is the safety net for turns with no terminal punctuation (which
+# pass through unsplit) and for over-wide ranges returned by analyze. Set above
+# the target range so it only fires on pathological cases -- normal clips still
+# end on a natural sentence boundary.
+MAX_CLIP_SECONDS = 22.0
+
+
+# Duplicates transcriber.py's own formatter verbatim. Deliberate: importing
+# transcriber from shared would put a Whisper-adjacent module on both
+# services' import path for the sake of a divmod and an f-string.
+def _seconds_to_timestamp(seconds: float) -> str:
+    total = int(seconds)
+    return f"{total // 60}:{total % 60:02d}"
+
+
+def normalize_transcript(raw_text: str) -> str:
+    """Split multi-sentence turn lines into one line per sentence.
+
+    Production transcripts are Forven platform exports: one line per whole
+    speaker turn, often 30-60s. That is the granularity ceiling on clip
+    length, because both Claude's returned ranges and manual selection can
+    only address whole lines. This splits each turn into sentences and
+    interpolates a timestamp for each by word-count proportion across the
+    turn's *estimated speech window* (not the raw turn window, which includes
+    trailing dead air and would skew every estimate late).
+
+    Must stay deterministic: the main app and generator service each normalize
+    the same .txt independently, and the resulting `raw` line strings are the
+    selection identity shared between them.
+
+    Lines that don't parse, single-sentence lines, and unpunctuated turns pass
+    through per-line unchanged, so the function is idempotent. Note this is
+    per-line, not byte-identical at the file level: splitlines()+join()
+    normalizes CRLF to LF and drops a trailing newline.
+
+    Known accepted collision: two identical sentences in the same turn that
+    interpolate to the same second (e.g. a repeated "Yeah.") produce identical
+    `raw` output lines. Since `raw` is the cross-service selection identity,
+    selecting one selects both, which can duplicate a short clip in the reel.
+    Measured on production-shaped transcripts this affects ~1-2% of lines but
+    around a third of transcripts, concentrated on short backchannel sentences
+    ("Yeah.", "Right."). It is accepted rather than fixed because the
+    alternative — nudging a later duplicate's timestamp forward to force
+    uniqueness — was tried and reverted: it breaks the monotonic-timestamp
+    invariant that group_lines_into_segments and captions.collect_caption_lines
+    both rely on, trading an identity collision for frequent, silent
+    mis-ordering. If this ever needs closing, do it in the selection layer
+    (index-qualify the key) rather than by fabricating timestamps.
+    """
+    lines = raw_text.splitlines()
+    parsed: list[tuple[float, str, str] | None] = []
+    for raw in lines:
+        m = _LINE_RE.match(raw.strip())
+        if m:
+            ts, speaker, text = m.group(1), m.group(2).strip(), m.group(3)
+            parsed.append((parse_timestamp_to_seconds(ts), speaker, text))
+        else:
+            parsed.append(None)
+
+    # Start of the next parseable line, used to bound each turn's window.
+    next_starts: list[float | None] = [None] * len(parsed)
+    upcoming: float | None = None
+    for i in range(len(parsed) - 1, -1, -1):
+        next_starts[i] = upcoming
+        if parsed[i] is not None:
+            upcoming = parsed[i][0]
+
+    out: list[str] = []
+    for raw, entry, next_start in zip(lines, parsed, next_starts):
+        if entry is None:
+            out.append(raw)
+            continue
+        start, speaker, text = entry
+        sentences = [s for s in _SENTENCE_SPLIT_RE.split(text.strip()) if s]
+        if len(sentences) < 2:
+            out.append(raw)
+            continue
+
+        total_words = sum(len(s.split()) for s in sentences)
+
+        # Estimated end of speech in this turn, capped by the next line's
+        # start. Interpolating over this (rather than to next_start) keeps
+        # trailing silence from stretching every sentence estimate later.
+        speech_end = start + total_words / SPEAKING_RATE + TAIL_BUFFER
+        window_end = speech_end if next_start is None else min(next_start, speech_end)
+        span = max(0.0, window_end - start)
+
+        words_before = 0
+        for sentence in sentences:
+            offset = (words_before / total_words) * span
+            ts_sec = max(start, start + offset - START_BIAS_SECONDS)
+            out.append(f"[{_seconds_to_timestamp(ts_sec)}] {speaker}: {sentence}")
+            words_before += len(sentence.split())
+
+    return "\n".join(out)
+
+
+def read_transcript(txt_path: str | _Path) -> str:
+    """Read a transcript sidecar and return it sentence-normalized.
+
+    Every transcript read in both services goes through here so no code path
+    can accidentally work with un-normalized turn-level lines -- the `raw`
+    strings are the selection identity shared across services, so they must
+    match everywhere. (Same invariant as filter_generated_reels: if you add a
+    new code path that reads a .txt, call this.) The file on disk is never
+    modified; it is client data.
+    """
+    return normalize_transcript(_Path(txt_path).read_text(encoding="utf-8"))
+
 
 def group_lines_into_segments(
     all_lines: list, selected_raws: set, video_duration: float | None = None
@@ -68,10 +191,11 @@ def group_lines_into_segments(
     """Convert selected transcript lines into (start_sec, end_sec) clip ranges.
 
     Each segment's end is capped near the last selected line's estimated speech
-    end (see SPEAKING_RATE / TAIL_BUFFER) to trim trailing dead air, then the
-    MIN_CLIP_SECONDS floor is applied — so a lone title card with no clip is
-    never emitted, and short segments are extended (clamped to video duration)
-    or dropped if the source can't reach the floor.
+    end (see SPEAKING_RATE / TAIL_BUFFER) to trim trailing dead air, then capped
+    again at MAX_CLIP_SECONDS as a hard ceiling, then the MIN_CLIP_SECONDS floor
+    is applied — so a lone title card with no clip is never emitted, and short
+    segments are extended (clamped to video duration) or dropped if the source
+    can't reach the floor.
 
     Pure logic shared by the generator (real clip ranges) and the main app's
     analyze (create-screen length estimate), so both compute identical durations.
@@ -86,6 +210,7 @@ def group_lines_into_segments(
         if words:
             speech_end = last_line["seconds"] + words / SPEAKING_RATE + TAIL_BUFFER
             end = min(end, speech_end)
+        end = min(end, start + MAX_CLIP_SECONDS)
         if end - start < MIN_CLIP_SECONDS:
             extended = start + MIN_CLIP_SECONDS
             if video_duration is not None:
