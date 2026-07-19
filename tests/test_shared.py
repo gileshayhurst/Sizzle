@@ -315,3 +315,49 @@ def test_read_transcript_normalizes_on_read(tmp_path):
     assert len(out.splitlines()) == 2
     # The file on disk is client data and must not be rewritten.
     assert len(txt.read_text(encoding="utf-8").splitlines()) == 1
+
+
+def test_both_services_read_transcripts_identically(tmp_path):
+    """The main app and the generator service each read the same .txt
+    independently. A line's raw string is the selection identity passed between
+    them, so their parsed output must be byte-identical — if one skips
+    normalization, selection silently matches nothing and the reel comes out
+    empty with no error."""
+    import app as main_app
+    import generator_app
+
+    txt = tmp_path / "interview.txt"
+    txt.write_text(
+        "[1:00] Participant: First sentence here. Second sentence here. Third one here.\n"
+        "[2:00] Interviewer: Thanks for your time.",
+        encoding="utf-8",
+    )
+
+    assert main_app._read_transcript(txt) == generator_app._read_transcript(txt)
+
+
+def test_selection_identity_survives_analyze_to_generate(tmp_path):
+    """A raw line string selected via the main app's read path must match a line
+    the generator's read path produces, and group into a real clip."""
+    import app as main_app
+    import generator_app
+
+    txt = tmp_path / "interview.txt"
+    txt.write_text(
+        "[1:00] Participant: First sentence here. Second sentence here. Third one here.\n"
+        "[2:00] Interviewer: Thanks for your time.",
+        encoding="utf-8",
+    )
+    app_side = parse_transcript_lines(main_app._read_transcript(txt))
+    generator_side = parse_transcript_lines(generator_app._read_transcript(txt))
+
+    selected = {app_side[1]["raw"]}
+    matched = [line for line in generator_side if line["raw"] in selected]
+    assert len(matched) == 1
+    assert matched[0]["text"] == "Second sentence here."
+
+    segments = group_lines_into_segments(generator_side, selected, video_duration=300.0)
+    assert len(segments) == 1
+    start, end = segments[0]
+    assert end > start
+    assert end - start <= MAX_CLIP_SECONDS
