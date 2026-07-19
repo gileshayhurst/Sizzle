@@ -218,16 +218,17 @@ def test_normalize_splits_on_question_and_exclamation():
     assert len(out) == 3
 
 
-def test_normalize_dedups_duplicate_sentences_within_turn():
-    # "Yeah." appears twice; both interpolate to the same second (short
-    # sentences clamp early). Without dedup this emits two byte-identical
-    # `raw` lines, and since `raw` is the cross-service selection identity,
-    # selecting one would match both and duplicate a clip in the reel.
-    raw = "[1:00] Participant: Yeah. Ok. Yeah."
+def test_normalize_timestamps_monotonic_with_repeated_sentences():
+    # Repeated short sentences ("Yeah.") can clamp to the same or adjacent
+    # seconds. A prior fix here nudged duplicates forward to force unique
+    # `raw` lines, but that broke monotonicity for later sentences (their
+    # offset is computed independent of any earlier nudge). Reverted; this
+    # locks in that plain interpolation stays non-decreasing on its own,
+    # since offset is monotonic in word position.
+    raw = "[1:00] Participant: Yeah. Yeah. Ok. Yeah.\n[2:00] Participant: Next."
     lines = parse_transcript_lines(normalize_transcript(raw))
-    raws = [line["raw"] for line in lines]
-    assert len(raws) == 3
-    assert len(set(raws)) == 3
+    seconds = [line["seconds"] for line in lines]
+    assert seconds == sorted(seconds)
 
 
 def test_normalize_handles_out_of_order_next_start():
@@ -253,7 +254,7 @@ def test_normalize_realistic_multi_turn_fixture():
         "Um, we'll do that. "
         "Um, and I also, I try to give, uh, I put supplements in every one, you know, just to keep him healthy overall.\n"
         "[1:10] Interviewer: That's great, can you tell me a little more about which supplements you use?\n"
-        "[1:15] Participant: Yeah, so I use a joint supplement, and then I also give him a fish oil pill every single morning. "
+        "[1:15] Participant: Yeah. Yeah. So I use a joint supplement, and then I also give him a fish oil pill every single morning. "
         "Um, he really seems to like the taste of it, actually. "
         "It's been really good for his coat too, you know.\n"
         "[2:25] Interviewer: Wonderful, thank you so much for sharing all of that with me today."

@@ -102,6 +102,17 @@ def normalize_transcript(raw_text: str) -> str:
     through per-line unchanged, so the function is idempotent. Note this is
     per-line, not byte-identical at the file level: splitlines()+join()
     normalizes CRLF to LF and drops a trailing newline.
+
+    Known accepted collision: two identical sentences in the same turn that
+    interpolate to the same second (e.g. a repeated "Yeah.") produce identical
+    `raw` output lines. Since `raw` is the cross-service selection identity,
+    selecting one selects both, which can duplicate a short clip in the reel.
+    This is accepted rather than fixed, because it requires repeated identical
+    short sentences clamped inside the same second, and the alternative —
+    nudging a later duplicate's timestamp forward to force uniqueness — was
+    tried and reverted: it breaks the monotonic-timestamp invariant that
+    group_lines_into_segments and captions.collect_caption_lines both rely on,
+    trading a rare identity collision for frequent, silent mis-ordering.
     """
     lines = raw_text.splitlines()
     parsed: list[tuple[float, str, str] | None] = []
@@ -122,14 +133,6 @@ def normalize_transcript(raw_text: str) -> str:
             upcoming = parsed[i][0]
 
     out: list[str] = []
-    # Scoped to the whole file, not per-turn: two identical short sentences
-    # (e.g. "Yeah.") both clamping to the same interpolated second would
-    # otherwise emit byte-identical `raw` lines. Since `raw` is the selection
-    # identity shared across services, that collision would make one manual
-    # selection or Claude-returned range match two non-adjacent clips and
-    # duplicate one of them in the reel. Forven exports never contain
-    # duplicate lines, so nothing downstream is collision-safe.
-    emitted: set[str] = set()
     for raw, entry, next_start in zip(lines, parsed, next_starts):
         if entry is None:
             out.append(raw)
@@ -153,12 +156,7 @@ def normalize_transcript(raw_text: str) -> str:
         for sentence in sentences:
             offset = (words_before / total_words) * span
             ts_sec = max(start, start + offset - START_BIAS_SECONDS)
-            line = f"[{_seconds_to_timestamp(ts_sec)}] {speaker}: {sentence}"
-            while line in emitted:
-                ts_sec += 1.0
-                line = f"[{_seconds_to_timestamp(ts_sec)}] {speaker}: {sentence}"
-            emitted.add(line)
-            out.append(line)
+            out.append(f"[{_seconds_to_timestamp(ts_sec)}] {speaker}: {sentence}")
             words_before += len(sentence.split())
 
     return "\n".join(out)
