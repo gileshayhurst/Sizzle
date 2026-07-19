@@ -49,6 +49,74 @@ def parse_transcript_lines(raw_text: str) -> list[dict]:
     return lines
 
 
+# A clip shorter than this is imperceptible. Segments are extended to this floor,
+# or dropped when the source can't provide it.
+MIN_CLIP_SECONDS = 1.5
+
+# Trailing dead-air cap. A segment's raw end is the next line's start, which
+# overshoots by any interview pause after the last selected line. We instead
+# estimate when that line's speech ends from its word count. Rate is assumed slow
+# and a buffer is added so speech is never cut short (biased toward leaving a
+# sliver of air over clipping a word).
+SPEAKING_RATE = 2.0    # words/sec (conversational English ~2.5; slower = safer)
+TAIL_BUFFER = 1.0      # seconds of grace after the estimated last word
+
+
+def group_lines_into_segments(
+    all_lines: list, selected_raws: set, video_duration: float | None = None
+) -> list:
+    """Convert selected transcript lines into (start_sec, end_sec) clip ranges.
+
+    Each segment's end is capped near the last selected line's estimated speech
+    end (see SPEAKING_RATE / TAIL_BUFFER) to trim trailing dead air, then the
+    MIN_CLIP_SECONDS floor is applied — so a lone title card with no clip is
+    never emitted, and short segments are extended (clamped to video duration)
+    or dropped if the source can't reach the floor.
+
+    Pure logic shared by the generator (real clip ranges) and the main app's
+    analyze (create-screen length estimate), so both compute identical durations.
+    """
+    def _finalize(start: float, end: float, last_line: dict):
+        # Cap trailing dead air before applying the floor. `end` is the next
+        # line's start; clip instead at the last selected line's estimated
+        # speech end. min() means this can only ever shorten a clip. Falls back
+        # to `end` when there's no text to estimate from (fail toward keeping
+        # content).
+        words = len(last_line.get("text", "").split())
+        if words:
+            speech_end = last_line["seconds"] + words / SPEAKING_RATE + TAIL_BUFFER
+            end = min(end, speech_end)
+        if end - start < MIN_CLIP_SECONDS:
+            extended = start + MIN_CLIP_SECONDS
+            if video_duration is not None:
+                extended = min(extended, video_duration)
+            end = extended
+        if end - start < MIN_CLIP_SECONDS:
+            return None  # can't reach the floor (hit video end) -> drop
+        return (start, end)
+
+    segments = []
+    current = []
+
+    for line in all_lines:
+        if line["raw"] in selected_raws:
+            current.append(line)
+        else:
+            if current:
+                seg = _finalize(current[0]["seconds"], line["seconds"], current[-1])
+                if seg is not None:
+                    segments.append(seg)
+                current = []
+
+    if current:
+        end = video_duration if video_duration is not None else current[-1]["seconds"] + 10.0
+        seg = _finalize(current[0]["seconds"], end, current[-1])
+        if seg is not None:
+            segments.append(seg)
+
+    return segments
+
+
 def filter_generated_reels(video_paths: list, library: list = None) -> list:
     """Remove video paths recorded as generated reels. Fails open.
 

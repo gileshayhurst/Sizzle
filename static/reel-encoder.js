@@ -163,26 +163,53 @@ async function _encodeClip(url, startSec, endSec, titleLines, width, height, ctx
     const videoTrack = await input.getPrimaryVideoTrack();
     const audioTrack = await input.getPrimaryAudioTrack();
 
-    // ── Video: sample onto a fixed 30fps grid, apply transition + overlays ─────
+    // ── Video: decode sequentially, resample onto a fixed 30fps grid ───────────
+    // Use CanvasSink.canvases() (sequential, pre-decoding) — NOT
+    // canvasesAtTimestamps(), which is the *sparse* API and yields null for any
+    // grid point that falls between the source's sample timestamps. This encoder
+    // drew those nulls as BLACK, so whole clips came out black whenever a
+    // source's frame timing didn't line up with our 30fps grid. Instead we walk
+    // the decoded frames and hold the most-recent one across output frames. The
+    // held frame is copied into an offscreen buffer because CanvasSink recycles
+    // its pool canvases (poolSize), so the yielded canvas is not safe to retain.
     const timerFontSize = Math.max(20, Math.floor(height / 22));
     if (videoTrack) {
       const sink = new CanvasSink(videoTrack, {
         width, height, fit: 'contain', poolSize: 2,
       });
       const frameCount = Math.max(1, Math.round(clipDurationSec * FPS));
-      const timestamps = [];
-      for (let i = 0; i < frameCount; i++) timestamps.push(startSec + i / FPS);
 
-      let i = 0;
-      for await (const wrapped of sink.canvasesAtTimestamps(timestamps)) {
+      const holdCanvas = new OffscreenCanvas(width, height);
+      const holdCtx = holdCanvas.getContext('2d');
+      let haveFrame = false;
+
+      const srcIter = sink.canvases(startSec, endSec);
+      let nextSrc = await srcIter.next();
+      // Prime with the first decoded frame so the clip never opens on black even
+      // if that frame starts slightly after startSec.
+      if (!nextSrc.done && nextSrc.value) {
+        holdCtx.drawImage(nextSrc.value.canvas, 0, 0, width, height);
+        haveFrame = true;
+        nextSrc = await srcIter.next();
+      }
+
+      for (let i = 0; i < frameCount; i++) {
         _throwIfAborted(signal);
         const relSec = i / FPS;
+        const outT = startSec + relSec;
+        // Advance to the newest source frame due at or before this output time.
+        while (!nextSrc.done && nextSrc.value && nextSrc.value.timestamp <= outT + 1e-3) {
+          holdCtx.clearRect(0, 0, width, height);
+          holdCtx.drawImage(nextSrc.value.canvas, 0, 0, width, height);
+          haveFrame = true;
+          nextSrc = await srcIter.next();
+        }
         const alpha = _transitionGain(relSec, clipDurationSec);
         ctx.fillStyle = '#000';
         ctx.fillRect(0, 0, width, height);
-        if (wrapped) {
+        if (haveFrame) {
           ctx.globalAlpha = alpha;
-          ctx.drawImage(wrapped.canvas, 0, 0, width, height);
+          ctx.drawImage(holdCanvas, 0, 0, width, height);
           ctx.globalAlpha = 1.0;
         }
         // Overlays dip with the frame during the head/tail transition (the
@@ -190,7 +217,6 @@ async function _encodeClip(url, startSec, endSec, titleLines, width, height, ctx
         _drawTitle(ctx, titleLines, width, height, _titleAlpha(relSec, clipDurationSec) * alpha);
         _drawTimer(ctx, clipDurationSec - relSec, width, height, timerFontSize, alpha);
         await videoSource.add(startTs + relSec, 1 / FPS);
-        i++;
       }
     }
 

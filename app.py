@@ -35,7 +35,11 @@ from loader import scan_videos
 from timestamp_parser import parse_scored_timestamps
 from transcriber import transcribe_video
 from video_editor import parse_timestamp_to_seconds
-from shared import parse_transcript_lines as _parse_transcript_lines, filter_generated_reels as _filter_generated_reels
+from shared import (
+    parse_transcript_lines as _parse_transcript_lines,
+    filter_generated_reels as _filter_generated_reels,
+    group_lines_into_segments as _group_lines_into_segments,
+)
 import storage
 
 RECENT_FOLDERS_PATH = Path(__file__).parent / "recent_folders.json"
@@ -246,21 +250,31 @@ def _run_analyze(folder: str, prompt: str) -> dict:
             start_str, end_str = seg.split("-", 1)
             start_sec = parse_timestamp_to_seconds(start_str)
             end_sec = parse_timestamp_to_seconds(end_str)
-            lines: list[str] = []
-            for line in all_lines:
-                if line.get("is_interviewer"):
-                    continue  # analyze never auto-selects the interviewer
-                if start_sec - 0.5 <= line["seconds"] <= end_sec + 0.5:
-                    if line["raw"] not in lines:
-                        lines.append(line["raw"])
+            seg_line_dicts = [
+                line for line in all_lines
+                if not line.get("is_interviewer")  # analyze never auto-selects the interviewer
+                and start_sec - 0.5 <= line["seconds"] <= end_sec + 0.5
+            ]
+            lines = list(dict.fromkeys(d["raw"] for d in seg_line_dicts))
             if not lines:
                 continue  # segment mapped to no respondent lines — drop it
+            # The create-screen length estimate must match the clip the generator
+            # will actually cut. Claude's end timestamp is the *start* of the last
+            # line; the real clip plays that line to its spoken end, so estimate
+            # the duration with the same grouping/tail logic the generator uses
+            # (shared.group_lines_into_segments) rather than end_sec - start_sec.
+            grouped = _group_lines_into_segments(seg_line_dicts, set(lines))
+            if grouped:
+                clip_start = grouped[0][0]
+                clip_dur = sum(e - s for s, e in grouped)
+            else:
+                clip_start, clip_dur = start_sec, max(0.0, end_sec - start_sec)
             segments.append({
                 "start": start_str,
                 "end": end_str,
-                "start_seconds": start_sec,
-                "end_seconds": end_sec,
-                "duration_seconds": max(0.0, end_sec - start_sec),
+                "start_seconds": clip_start,
+                "end_seconds": clip_start + clip_dur,
+                "duration_seconds": clip_dur,
                 "score": score,
                 "lines": lines,
             })

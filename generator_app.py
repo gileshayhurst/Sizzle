@@ -95,76 +95,21 @@ def _library_add(entry: dict) -> None:
 
 
 
-# A clip shorter than this is imperceptible and produces a title-card->title-card
-# artifact with no visible video between. Segments are extended to this floor, or
-# dropped (title card included) when the source can't provide it.
-MIN_CLIP_SECONDS = 1.5
+# Segment grouping + trailing dead-air trim now live in shared.py so the main
+# app's analyze can compute the same clip durations for its length estimate.
+# Re-exported here under the historical private names used by the call site and
+# the test-suite.
+from shared import (  # noqa: E402
+    group_lines_into_segments as _group_lines_into_segments,
+    MIN_CLIP_SECONDS,
+    SPEAKING_RATE,
+    TAIL_BUFFER,
+)
 
 # Symmetric fade at each clip's head and tail — the transition between clips now
 # that there are no title cards. Short so it reads as a dip, not dead time on the
 # already-tight clips.
 TRANSITION_FADE_SECONDS = 0.4
-
-# Trailing dead-air cap. A segment's raw end is the next line's start, which
-# overshoots by any interview pause after the last selected line — leaving the
-# speaker sitting silently. We instead estimate when that line's speech ends
-# from its word count. Rate is assumed slow and a buffer is added so speech is
-# never cut short (biased toward leaving a sliver of air over clipping a word).
-SPEAKING_RATE = 2.0    # words/sec (conversational English ~2.5; slower = safer)
-TAIL_BUFFER = 1.0      # seconds of grace after the estimated last word
-
-
-def _group_lines_into_segments(
-    all_lines: list, selected_raws: set, video_duration: float | None = None
-) -> list:
-    """Convert selected transcript lines into (start_sec, end_sec) clip ranges.
-
-    Each segment's end is capped near the last selected line's estimated speech
-    end (see SPEAKING_RATE / TAIL_BUFFER) to trim trailing dead air, then the
-    MIN_CLIP_SECONDS floor is applied — so a lone title card with no clip is
-    never emitted, and short segments are extended (clamped to video duration)
-    or dropped if the source can't reach the floor.
-    """
-    def _finalize(start: float, end: float, last_line: dict):
-        # Cap trailing dead air before applying the floor. `end` is the next
-        # line's start; clip instead at the last selected line's estimated
-        # speech end. min() means this can only ever shorten a clip. Falls back
-        # to `end` when there's no text to estimate from (fail toward keeping
-        # content). ponytail: word-count heuristic — a >18-word line spoken
-        # under ~1.8 wps may clip a fraction early; lower SPEAKING_RATE if so.
-        words = len(last_line.get("text", "").split())
-        if words:
-            speech_end = last_line["seconds"] + words / SPEAKING_RATE + TAIL_BUFFER
-            end = min(end, speech_end)
-        if end - start < MIN_CLIP_SECONDS:
-            extended = start + MIN_CLIP_SECONDS
-            if video_duration is not None:
-                extended = min(extended, video_duration)
-            end = extended
-        if end - start < MIN_CLIP_SECONDS:
-            return None  # can't reach the floor (hit video end) -> drop
-        return (start, end)
-
-    segments = []
-    current = []
-
-    for line in all_lines:
-        if line["raw"] in selected_raws:
-            current.append(line)
-        else:
-            if current:
-                seg = _finalize(current[0]["seconds"], line["seconds"], current[-1])
-                if seg is not None:
-                    segments.append(seg)
-                current = []
-
-    if current:
-        end = video_duration if video_duration is not None else current[-1]["seconds"] + 10.0
-        seg = _finalize(current[0]["seconds"], end, current[-1])
-        if seg is not None:
-            segments.append(seg)
-
-    return segments
 
 
 # ─── ffmpeg helpers ───────────────────────────────────────────────────────────

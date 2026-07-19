@@ -468,7 +468,12 @@ def test_analyze_returns_segments_with_scores(client, tmp_path):
     seg = segs[0]
     assert seg["score"] == 9
     assert seg["start"] == "0:05" and seg["end"] == "0:20"
-    assert seg["duration_seconds"] == 15.0
+    # duration_seconds is the clip the generator will actually cut, not Claude's
+    # raw range: start 0:05 → last line's spoken end (0:15 + 4 words / 2.0 wps +
+    # 1.0s buffer = 0:18), i.e. 13.0s — so the create-screen estimate matches the
+    # real reel length instead of Claude's line-start-based range (which read 15s).
+    assert seg["duration_seconds"] == 13.0
+    assert seg["start_seconds"] == 5.0 and seg["end_seconds"] == 18.0
     assert len(seg["lines"]) == 2  # both lines fall within 0:05-0:20
 
 
