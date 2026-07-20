@@ -280,6 +280,28 @@ def test_get_video_duration_falls_back_to_packet_scan_when_no_container_duration
     assert "packet=pts_time" in calls[1]
 
 
+def test_get_video_duration_skips_packet_scan_for_remote_urls():
+    """The packet scan reads the whole packet index. On local disk that is
+    sub-second; over HTTP it streams the entire object just to reach the last
+    packet, which stalled cloud plans by up to the ffprobe timeout per video.
+    Remote inputs must fall through to None and let the encoder's
+    stop-when-exhausted guard handle it."""
+    from generator_app import get_video_duration
+    from unittest.mock import patch, MagicMock
+
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        return MagicMock(stdout="\n", returncode=0)  # no container duration
+
+    with patch("generator_app.subprocess.run", side_effect=fake_run):
+        assert get_video_duration("https://r2.example.com/sessions/abc/video.webm") is None
+
+    assert len(calls) == 1, "must not run the packet scan against a URL"
+    assert all("packet=pts_time" not in c for c in calls)
+
+
 def test_get_video_duration_returns_none_when_packet_scan_also_empty():
     from generator_app import get_video_duration
     from unittest.mock import patch, MagicMock

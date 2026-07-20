@@ -29,6 +29,11 @@ const state = {
 
 const OPTIMAL_MIN_SCORE = 8;      // quality bar for the optimal cut
 const OPTIMAL_SOFT_CAP_SECONDS = 120;  // 2 min soft cap on the optimal cut
+// Floor on the optimal cut. Sentence-level transcripts made a candidate one
+// sentence (~4-11s) rather than a whole turn (~15-30s), so a strict score>=8
+// filter that matched a single candidate produced a 4-second "optimal reel".
+// The cap alone can only trim; without a floor there was nothing to grow it.
+const OPTIMAL_MIN_SECONDS = 60;
 
 // Flatten the /analyze `segments` payload into one candidate array.
 // fileOrder is the array of filenames in state.files order (for tie-breaking).
@@ -82,8 +87,16 @@ function optimalDuration(ordered) {
     qualifying = ordered.filter(c => c.score === top);
   }
   // qualifying is a prefix of `ordered` by construction (highest-priority items).
-  // Trim from the end until under the soft cap, keeping at least one.
   let dur = qualifying.reduce((s, c) => s + c.duration_seconds, 0);
+  // Grow first: if the quality bar alone yields too little reel, keep taking the
+  // next-best candidates until we clear the floor or run out of material.
+  let take = qualifying.length;
+  while (dur < OPTIMAL_MIN_SECONDS && take < ordered.length) {
+    dur += ordered[take].duration_seconds;
+    take++;
+  }
+  qualifying = ordered.slice(0, take);
+  // Then trim from the end until under the soft cap, keeping at least one.
   while (qualifying.length > 1 && dur > OPTIMAL_SOFT_CAP_SECONDS) {
     dur -= qualifying[qualifying.length - 1].duration_seconds;
     qualifying = qualifying.slice(0, -1);

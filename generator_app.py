@@ -191,11 +191,17 @@ def _probe_container_duration(video_path: str) -> float | None:
 
 
 def _probe_last_packet_pts(video_path: str) -> float | None:
-    """Duration from the last video packet's PTS.
+    """Duration from the last video packet's PTS, for LOCAL FILES ONLY.
 
-    Reads only the packet index (headers), not frame data — under a second even
-    on a 600MB file — so this is a cheap fallback rather than a decode.
+    Reads the whole packet index (headers, not frame data): well under a second
+    on a 600MB local file. Over HTTP the same scan streams the entire object
+    just to reach the last packet, so this is deliberately skipped for remote
+    inputs — a presigned URL here would download hundreds of MB per video and
+    stall the plan. Cloud mode relies on the encoder's stop-when-exhausted
+    guard instead (reel-encoder MAX_HOLD_SEC), which needs no duration.
     """
+    if "://" in video_path:
+        return None
     try:
         result = subprocess.run(
             [
