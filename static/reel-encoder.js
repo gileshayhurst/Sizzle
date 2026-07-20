@@ -49,6 +49,14 @@ const CHANNELS = 2;
 const VIDEO_BITRATE = 3_000_000;
 const AUDIO_BITRATE = 128_000;
 
+// Seconds -> "M:SS". Rounds the total before splitting; flooring the minutes and
+// rounding the seconds separately renders 179.6 as "2:60" (same bug as app.js
+// _fmtSeconds).
+function _fmtClock(s) {
+  const total = Math.round(s);
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
+}
+
 function _throwIfAborted(signal) {
   if (signal?.aborted) throw new DOMException('Cancelled', 'AbortError');
 }
@@ -160,7 +168,7 @@ function _drawTitle(ctx, titleLines, width, height, alpha) {
 }
 
 // ── Clip: range-read webm, decode VP9/Opus, apply fade-out, burn title, re-encode ─
-async function _encodeClip(url, startSec, endSec, titleLines, width, height, ctx, videoSource, audioSource, startTs, signal) {
+async function _encodeClip(url, startSec, endSec, titleLines, width, height, ctx, videoSource, audioSource, startTs, signal, log) {
   const clipDurationSec = endSec - startSec;
   let framesEmitted = 0;
   const input = new Input({ formats: ALL_FORMATS, source: new UrlSource(url) });
@@ -240,6 +248,18 @@ async function _encodeClip(url, startSec, endSec, titleLines, width, height, ctx
     // Using the planned duration here is what let phantom time accumulate into
     // the reported reel length.
     const encodedSec = videoTrack ? framesEmitted / FPS : clipDurationSec;
+
+    // Cloud mode can't probe source durations (the packet scan is local-only —
+    // over HTTP it would stream the whole object), so the server cannot warn
+    // that a transcript outran its video. Report it from here instead, where
+    // the shortfall is known for free: a clip that ends early means the footage
+    // ran out, which usually means a truncated source recording.
+    const shortBy = clipDurationSec - encodedSec;
+    if (log && shortBy > 1.0) {
+      log(`⚠ Footage ran out ${shortBy.toFixed(1)}s early at ` +
+          `${_fmtClock(startSec)} (planned ${clipDurationSec.toFixed(1)}s, ` +
+          `encoded ${encodedSec.toFixed(1)}s) — the source recording is likely truncated.`);
+    }
 
     // ── Audio: decode, apply transition gain, encode (or silent-pad) ───────────
     // Audio buffers are appended without timestamps, so the audio track's length
@@ -346,7 +366,7 @@ window.ReelEncoder = {
         segmentStarts.push(ts);
         log(`· Encoding clip ${i + 1}/${segments.length} (${seg.start_sec.toFixed(1)}–${seg.end_sec.toFixed(1)}s)…`);
         ts = await _encodeClip(seg.presigned_get_url, seg.start_sec, seg.end_sec, seg.title_lines,
-                               width, height, ctx, videoSource, audioSource, ts, signal);
+                               width, height, ctx, videoSource, audioSource, ts, signal, log);
         progress(++done, total);
         log(`✓ Clip ${i + 1} done`);
       }
