@@ -74,12 +74,28 @@ MIN_CLIP_SECONDS = 1.5
 SPEAKING_RATE = 2.0    # words/sec (conversational English ~2.5; slower = safer)
 TAIL_BUFFER = 1.0      # seconds of grace after the estimated last word
 
+# Rate used ONLY for the clip end in group_lines_into_segments, deliberately
+# slower than SPEAKING_RATE. The two cannot share a value: SPEAKING_RATE also
+# sizes normalize_transcript's interpolation window, where lowering it pushes
+# sentence STARTS later and clips first words -- trading one cut for another.
+#
+# Slower here because the error is asymmetric. The clip end is a min() against
+# the next line's start, so over-estimating costs at most trailing air (bounded
+# by that next start, softened by the 0.4s fade-out), while under-estimating
+# cuts the speaker off mid-point. Measured at 2.0 w/s an emphatic speaker lost
+# their last 2s; people slow down and pause exactly where the content matters.
+CLIP_TAIL_RATE = 1.6   # words/sec
+
 # Hard ceiling on any single clip. Sentence normalization gets most clips to
 # 5-15s; this is the safety net for turns with no terminal punctuation (which
 # pass through unsplit) and for over-wide ranges returned by analyze. Set above
 # the target range so it only fires on pathological cases -- normal clips still
 # end on a natural sentence boundary.
-MAX_CLIP_SECONDS = 22.0
+#
+# Raised from 22s: at 22s a long answer was guillotined mid-thought (a 12
+# sentence, 120 word answer lost 7 of its sentences). This ceiling only ever
+# truncates, so it must sit above any answer worth keeping whole.
+MAX_CLIP_SECONDS = 40.0
 
 
 # Duplicates transcriber.py's own formatter verbatim. Deliberate: importing
@@ -208,7 +224,16 @@ def group_lines_into_segments(
         # content).
         words = len(last_line.get("text", "").split())
         if words:
-            speech_end = last_line["seconds"] + words / SPEAKING_RATE + TAIL_BUFFER
+            # Add START_BIAS_SECONDS back before estimating the speech end.
+            # normalize_transcript pulls each sentence's recorded start that far
+            # early to protect the FIRST word, so measuring the tail from the
+            # biased start spent the whole TAIL_BUFFER undoing that shift --
+            # leaving an effective margin of TAIL_BUFFER - START_BIAS_SECONDS,
+            # i.e. exactly zero. Any speaker slower than SPEAKING_RATE, or any
+            # pause for emphasis, then lost their last words. Measure the tail
+            # from where speech actually starts so the buffer is real again.
+            speech_start = last_line["seconds"] + START_BIAS_SECONDS
+            speech_end = speech_start + words / CLIP_TAIL_RATE + TAIL_BUFFER
             end = min(end, speech_end)
         end = min(end, start + MAX_CLIP_SECONDS)
         if end - start < MIN_CLIP_SECONDS:

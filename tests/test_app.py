@@ -469,11 +469,13 @@ def test_analyze_returns_segments_with_scores(client, tmp_path):
     assert seg["score"] == 9
     assert seg["start"] == "0:05" and seg["end"] == "0:20"
     # duration_seconds is the clip the generator will actually cut, not Claude's
-    # raw range: start 0:05 → last line's spoken end (0:15 + 4 words / 2.0 wps +
-    # 1.0s buffer = 0:18), i.e. 13.0s — so the create-screen estimate matches the
-    # real reel length instead of Claude's line-start-based range (which read 15s).
-    assert seg["duration_seconds"] == 13.0
-    assert seg["start_seconds"] == 5.0 and seg["end_seconds"] == 18.0
+    # raw range. Start 0:05; the last line's spoken end is measured from where
+    # speech really starts (0:15 + 1.0s START_BIAS_SECONDS, since normalization
+    # records starts that far early) plus 4 words / 1.6 wps CLIP_TAIL_RATE plus
+    # the 1.0s TAIL_BUFFER = 19.5s. So the estimate matches the real reel length
+    # rather than Claude's line-start-based range (which read 15s).
+    assert seg["duration_seconds"] == 14.5
+    assert seg["start_seconds"] == 5.0 and seg["end_seconds"] == 19.5
     assert len(seg["lines"]) == 2  # both lines fall within 0:05-0:20
 
 
@@ -481,20 +483,22 @@ def test_analyze_estimate_matches_generator_when_candidates_merge(client, tmp_pa
     """Adjacent candidates merge into one run in the generator and hit the
     MAX_CLIP_SECONDS ceiling, so the summed estimate must not over-promise.
 
-    Two Claude ranges cover four contiguous lines with no unselected line
-    between them. Grouped in isolation each is 13s (sum 26s), but the generator
-    groups the union into a single 0→33s run that MAX_CLIP_SECONDS truncates to
-    22s. The create-screen estimate has to report 22, not 26.
+    Two Claude ranges cover six contiguous lines with no unselected line
+    between them. Grouped in isolation each is 24.5s (sum 49s), but the
+    generator groups the union into a single run that MAX_CLIP_SECONDS
+    truncates to 40s. The create-screen estimate has to report 40, not 49.
     """
     (tmp_path / "vid.mp4").touch()
     (tmp_path / "vid.txt").write_text(
         "[0:00] Speaker: Black cod is amazing.\n"
         "[0:10] Speaker: Black cod is amazing.\n"
         "[0:20] Speaker: Black cod is amazing.\n"
-        "[0:30] Speaker: Black cod is amazing.",
+        "[0:30] Speaker: Black cod is amazing.\n"
+        "[0:40] Speaker: Black cod is amazing.\n"
+        "[0:50] Speaker: Black cod is amazing.",
         encoding="utf-8",
     )
-    with patch("app.query_claude", return_value="0:00-0:10|9\n0:20-0:30|9"):
+    with patch("app.query_claude", return_value="0:00-0:20|9\n0:30-0:50|9"):
         resp = client.post("/analyze", json={"folder": str(tmp_path), "prompt": "food"})
     assert resp.status_code == 200
     segs = resp.get_json()["segments"]["vid.mp4"]
@@ -505,9 +509,9 @@ def test_analyze_estimate_matches_generator_when_candidates_merge(client, tmp_pa
     assert total == pytest.approx(MAX_CLIP_SECONDS), (
         f"estimate {total}s over-promises; generator cuts {MAX_CLIP_SECONDS}s"
     )
-    # Scaled proportionally from 13s each.
+    # Scaled proportionally from 24.5s each.
     for s in segs:
-        assert s["duration_seconds"] == pytest.approx(11.0)
+        assert s["duration_seconds"] == pytest.approx(20.0)
         assert s["end_seconds"] == pytest.approx(s["start_seconds"] + s["duration_seconds"])
 
 

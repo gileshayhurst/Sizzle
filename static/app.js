@@ -28,7 +28,8 @@ const state = {
 // start_seconds, lines:[raw...]}. All math below is pure (no DOM, no network).
 
 const OPTIMAL_MIN_SCORE = 8;      // quality bar for the optimal cut
-const OPTIMAL_SOFT_CAP_SECONDS = 120;  // 2 min soft cap on the optimal cut
+const OPTIMAL_TARGET_MIN_SECONDS = 90;   // never propose a reel shorter than this
+const OPTIMAL_SOFT_CAP_SECONDS = 120;    // ...nor longer than this
 
 // Flatten the /analyze `segments` payload into one candidate array.
 // fileOrder is the array of filenames in state.files order (for tie-breaking).
@@ -71,24 +72,25 @@ function cumulativeDurations(ordered) {
   return sums;
 }
 
-// The optimal cut: all candidates scoring >= OPTIMAL_MIN_SCORE, falling back to
-// the highest score present; trimmed to the soft cap but never below 1 segment.
+// The optimal cut: everything clearing OPTIMAL_MIN_SCORE, then filled toward
+// OPTIMAL_TARGET_MIN_SECONDS and trimmed to OPTIMAL_SOFT_CAP_SECONDS, so the
+// proposal always lands in a watchable 90-120s window.
 // Returns the optimal duration in seconds (a valid snap point).
 function optimalDuration(ordered) {
   if (ordered.length === 0) return 0;
-  let qualifying = ordered.filter(c => c.score >= OPTIMAL_MIN_SCORE);
-  if (qualifying.length === 0) {
-    const top = ordered[0].score;  // ordered is score-desc, so [0] is highest
-    qualifying = ordered.filter(c => c.score === top);
-  }
-  // qualifying is a prefix of `ordered` by construction (highest-priority items).
-  // Trim from the end until under the soft cap, keeping at least one.
-  let dur = qualifying.reduce((s, c) => s + c.duration_seconds, 0);
-  while (qualifying.length > 1 && dur > OPTIMAL_SOFT_CAP_SECONDS) {
-    dur -= qualifying[qualifying.length - 1].duration_seconds;
-    qualifying = qualifying.slice(0, -1);
-  }
-  return dur;
+  // `ordered` is score-desc, so any score-threshold set is a prefix of it and
+  // its size is all we need to track.
+  let n = ordered.filter(c => c.score >= OPTIMAL_MIN_SCORE).length;
+  if (n === 0) n = ordered.filter(c => c.score === ordered[0].score).length;
+
+  const sums = cumulativeDurations(ordered);
+  // Floor first. The quality bar used to be a hard gate with nothing enforcing
+  // a length, so a single standout segment collapsed the whole reel to one
+  // clip -- and a flatter, worse spread produced more clips than a good one.
+  while (n < ordered.length && sums[n - 1] < OPTIMAL_TARGET_MIN_SECONDS) n++;
+  // Then the ceiling, which wins when even one clip overshoots it.
+  while (n > 1 && sums[n - 1] > OPTIMAL_SOFT_CAP_SECONDS) n--;
+  return sums[n - 1];
 }
 
 // Given a target duration, return the priority PREFIX whose cumulative duration

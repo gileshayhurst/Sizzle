@@ -1,6 +1,8 @@
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from shared import (
     MAX_CLIP_SECONDS,
     group_lines_into_segments,
@@ -303,6 +305,38 @@ def test_short_clip_is_not_affected_by_cap():
     segments = group_lines_into_segments(lines, {raw}, video_duration=300.0)
     start, end = segments[0]
     assert end - start < MAX_CLIP_SECONDS
+
+
+def test_clip_tail_buffer_survives_the_start_bias():
+    """The full TAIL_BUFFER must remain after the tail estimate, not be spent
+    undoing START_BIAS_SECONDS.
+
+    normalize_transcript records each sentence's start START_BIAS_SECONDS early
+    to protect the FIRST word. The clip end was measured from that biased start,
+    so the buffer meant to protect the LAST word went entirely on cancelling the
+    shift -- an effective margin of TAIL_BUFFER - START_BIAS_SECONDS = 0.0s. Any
+    speaker slower than the assumed rate, or pausing for emphasis, was cut off.
+    """
+    from shared import CLIP_TAIL_RATE, START_BIAS_SECONDS, TAIL_BUFFER
+
+    turn = ("[0:00] Respondent: We looked at three suppliers last quarter. "
+            "But the thing that decided it was the service level agreement, "
+            "because our previous vendor had burned us badly on uptime.")
+    lines = parse_transcript_lines(
+        normalize_transcript(turn + "\n[1:00] Interviewer: Got it."))
+    spoken = [l for l in lines if not l["is_interviewer"]]
+    start, end = group_lines_into_segments(lines, {l["raw"] for l in spoken})[0]
+
+    last = spoken[-1]
+    words = len(last["text"].split())
+    # Where speech actually starts, with the recording bias removed.
+    speech_start = last["seconds"] + START_BIAS_SECONDS
+    margin = end - (speech_start + words / CLIP_TAIL_RATE)
+    assert margin == pytest.approx(TAIL_BUFFER), (
+        f"tail margin is {margin}s, expected the full TAIL_BUFFER of "
+        f"{TAIL_BUFFER}s; a margin near 0 means the start bias is being "
+        f"double-counted and slow speakers get cut off"
+    )
 
 
 def test_read_transcript_normalizes_on_read(tmp_path):
