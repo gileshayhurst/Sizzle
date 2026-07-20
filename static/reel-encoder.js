@@ -49,6 +49,11 @@ const CHANNELS = 2;
 const VIDEO_BITRATE = 3_000_000;
 const AUDIO_BITRATE = 128_000;
 
+// Wall time the last clip spent opening its source and seeking to the clip
+// start, before any frame was decoded. Reported per clip so a slow generation
+// can be attributed to seek overhead vs actual encoding rather than guessed at.
+let _lastOpenMs = 0;
+
 // Seconds -> "M:SS". Rounds the total before splitting; flooring the minutes and
 // rounding the seconds separately renders 179.6 as "2:60" (same bug as app.js
 // _fmtSeconds).
@@ -171,6 +176,8 @@ function _drawTitle(ctx, titleLines, width, height, alpha) {
 async function _encodeClip(url, startSec, endSec, titleLines, width, height, ctx, videoSource, audioSource, startTs, signal, log) {
   const clipDurationSec = endSec - startSec;
   let framesEmitted = 0;
+  const _openT0 = performance.now();
+  _lastOpenMs = 0;
   const input = new Input({ formats: ALL_FORMATS, source: new UrlSource(url) });
 
   try {
@@ -199,6 +206,9 @@ async function _encodeClip(url, startSec, endSec, titleLines, width, height, ctx
 
       const srcIter = sink.canvases(startSec, endSec);
       let nextSrc = await srcIter.next();
+      // First frame in hand = open + seek is done. On an unindexed WebM this is
+      // where a scan from the start of the object shows up.
+      _lastOpenMs = performance.now() - _openT0;
       let lastFrameTs = -Infinity;
       // Prime with the first decoded frame so the clip never opens on black even
       // if that frame starts slightly after startSec.
@@ -357,6 +367,7 @@ window.ReelEncoder = {
     // ── Encode each segment's clip, in order, into one stream ───────────────────
     let ts = 0; // seconds
     const segmentStarts = [];
+    const clipTimings = [];
 
     try {
       for (let i = 0; i < segments.length; i++) {
@@ -365,10 +376,25 @@ window.ReelEncoder = {
 
         segmentStarts.push(ts);
         log(`· Encoding clip ${i + 1}/${segments.length} (${seg.start_sec.toFixed(1)}–${seg.end_sec.toFixed(1)}s)…`);
+        const t0 = performance.now();
         ts = await _encodeClip(seg.presigned_get_url, seg.start_sec, seg.end_sec, seg.title_lines,
                                width, height, ctx, videoSource, audioSource, ts, signal, log);
         progress(++done, total);
-        log(`✓ Clip ${i + 1} done`);
+        // Wall time per clip, split into open+seek vs encode. These sources are
+        // browser-recorded WebM with no seek index, so seeking to an arbitrary
+        // start means scanning clusters from the beginning of the object — the
+        // suspected reason many short clips cost more than few long ones.
+        const clipMs = performance.now() - t0;
+        clipTimings.push(clipMs);
+        log(`✓ Clip ${i + 1} done in ${(clipMs / 1000).toFixed(1)}s ` +
+            `(${_lastOpenMs.toFixed(0)}ms open+seek, ` +
+            `${(clipMs - _lastOpenMs).toFixed(0)}ms decode+encode)`);
+      }
+      if (clipTimings.length) {
+        const totalS = clipTimings.reduce((a, b) => a + b, 0) / 1000;
+        const slowest = Math.max(...clipTimings) / 1000;
+        log(`· Encode summary: ${clipTimings.length} clips in ${totalS.toFixed(1)}s ` +
+            `(avg ${(totalS / clipTimings.length).toFixed(1)}s, slowest ${slowest.toFixed(1)}s)`);
       }
 
       await output.finalize();
