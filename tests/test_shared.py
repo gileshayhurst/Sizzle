@@ -524,3 +524,28 @@ def test_tier_is_stable_across_repeated_reads(tmp_path):
     for _ in range(3):
         again = transcript_tier(parse_transcript_lines(txt.read_text(encoding="utf-8")))
         assert again == first == "rich"
+
+
+FIXTURES = Path(__file__).parent / "fixtures"
+
+
+def test_read_transcript_returns_rich_file_unchanged():
+    # Rich files must bypass normalization entirely — asserting byte-identity
+    # (not just idempotence) proves the bypass rather than a coincidence.
+    from shared import transcript_tier
+
+    path = FIXTURES / "rich_tier.txt"
+    text = path.read_text(encoding="utf-8")
+
+    # Verify the fixture is genuinely rich, not accidentally plain.
+    assert transcript_tier(parse_transcript_lines(text)) == "rich"
+
+    assert read_transcript(path) == text
+
+
+def test_read_transcript_still_normalizes_plain_file():
+    out = read_transcript(FIXTURES / "plain_tier.txt")
+    # "He's a Corgi mix. We got him as a rescue." is two sentences and must be
+    # split into two lines by normalization.
+    assert "Corgi mix." in out
+    assert out.count("Participant:") > 3

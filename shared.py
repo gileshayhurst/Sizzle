@@ -228,7 +228,7 @@ def normalize_transcript(raw_text: str) -> str:
 
 
 def read_transcript(txt_path: str | _Path) -> str:
-    """Read a transcript sidecar and return it sentence-normalized.
+    """Read a transcript sidecar and return it ready for parsing.
 
     Every transcript read in both services goes through here so no code path
     can accidentally work with un-normalized turn-level lines -- the `raw`
@@ -236,8 +236,17 @@ def read_transcript(txt_path: str | _Path) -> str:
     match everywhere. (Same invariant as filter_generated_reels: if you add a
     new code path that reads a .txt, call this.) The file on disk is never
     modified; it is client data.
+
+    Routes on tier: a "rich" file already has real per-sentence end times
+    (see transcript_tier) and is returned completely unchanged -- running it
+    through normalize_transcript would overwrite those true timestamps with
+    interpolated guesses. A "plain" file has no such times, so it still goes
+    through sentence normalization as before.
     """
-    return normalize_transcript(_Path(txt_path).read_text(encoding="utf-8"))
+    text = _Path(txt_path).read_text(encoding="utf-8")
+    if transcript_tier(parse_transcript_lines(text)) == "rich":
+        return text
+    return normalize_transcript(text)
 
 
 def group_lines_into_segments(
