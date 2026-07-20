@@ -56,8 +56,10 @@ def parse_transcript_lines(raw_text: str) -> list[dict]:
         ts, end_ts = m.group(1), m.group(2)
         speaker, text = m.group(3).strip(), m.group(4)
         seconds = parse_timestamp_to_seconds(ts)
-        # An end that is not strictly after the start cannot be real; treat it
-        # as absent, which demotes the whole file to the plain tier.
+        # An end that is not strictly after the start cannot be real, so treat
+        # it as absent. Tier detection (next task) requires EVERY respondent
+        # line to have a valid end, so one bad end will fall the file back to
+        # plain-tier clip boundaries rather than trusting a broken timestamp.
         end_seconds = None
         if end_ts:
             candidate = parse_timestamp_to_seconds(end_ts)

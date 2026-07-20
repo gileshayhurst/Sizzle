@@ -430,3 +430,24 @@ def test_normalize_still_splits_after_regex_change():
     out = normalize_transcript("[0:00] Participant: First sentence. Second sentence.")
     assert out.count("Participant:") == 2
     assert "First sentence." in out and "Second sentence." in out
+
+
+def test_normalize_handles_rich_format_lines_without_corruption():
+    """A rich line must survive normalization with speaker and text intact.
+
+    Reachable in production: a MIXED file (some lines with ends, some without)
+    is plain tier, so it IS normalized — and its rich lines pass through here.
+    A group-index regression does not crash on rich input, it silently reads
+    the end timestamp as the speaker and the speaker as the text.
+    """
+    out = normalize_transcript(
+        "[0:00-0:20] Participant: First sentence. Second sentence.\n"
+        "[1:00] Interviewer: Next?"
+    )
+    lines = parse_transcript_lines(out)
+    respondent = [l for l in lines if not l["is_interviewer"]]
+    assert len(respondent) == 2, "multi-sentence rich turn should split in two"
+    for line in respondent:
+        assert line["speaker"] == "Participant"
+    assert respondent[0]["text"] == "First sentence."
+    assert respondent[1]["text"] == "Second sentence."
