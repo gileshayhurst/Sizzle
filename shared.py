@@ -4,7 +4,10 @@ import storage as _storage
 from pathlib import Path as _Path
 from video_editor import parse_timestamp_to_seconds
 
-_LINE_RE = _re.compile(r'^\[(\d+:\d{2})\]\s+(\w[\w ]*?):\s*(.*)')
+# Optional end timestamp: [M:SS] (plain) or [M:SS-M:SS] (rich). Groups are
+# 1=start, 2=end-or-None, 3=speaker, 4=text — NOTE the shift, this regex is
+# also used by normalize_transcript.
+_LINE_RE = _re.compile(r'^\[(\d+:\d{2})(?:-(\d+:\d{2}))?\]\s+(\w[\w ]*?):\s*(.*)')
 
 # Sentence boundary: terminal punctuation followed by whitespace. Matches the
 # convention transcriber._split_into_sentences uses for Whisper output.
@@ -37,7 +40,9 @@ def is_interviewer_label(speaker: str) -> bool:
 def parse_transcript_lines(raw_text: str) -> list[dict]:
     """Parse a Whisper transcript into structured line dicts.
 
-    Each dict has keys: raw, timestamp, text, seconds, minute_bucket.
+    Each dict has keys: raw, timestamp, speaker, is_interviewer, text, seconds,
+    end_seconds, minute_bucket. end_seconds is None unless the line uses the
+    rich [M:SS-M:SS] format with an end strictly after its start.
     Lines that do not match the [M:SS] Speaker: text format are silently skipped.
     """
     lines = []
@@ -48,8 +53,16 @@ def parse_transcript_lines(raw_text: str) -> list[dict]:
         m = _LINE_RE.match(raw)
         if not m:
             continue
-        ts, speaker, text = m.group(1), m.group(2).strip(), m.group(3)
+        ts, end_ts = m.group(1), m.group(2)
+        speaker, text = m.group(3).strip(), m.group(4)
         seconds = parse_timestamp_to_seconds(ts)
+        # An end that is not strictly after the start cannot be real; treat it
+        # as absent, which demotes the whole file to the plain tier.
+        end_seconds = None
+        if end_ts:
+            candidate = parse_timestamp_to_seconds(end_ts)
+            if candidate > seconds:
+                end_seconds = candidate
         lines.append({
             "raw": raw,
             "timestamp": ts,
@@ -57,6 +70,7 @@ def parse_transcript_lines(raw_text: str) -> list[dict]:
             "is_interviewer": is_interviewer_label(speaker),
             "text": text,
             "seconds": seconds,
+            "end_seconds": end_seconds,
             "minute_bucket": int(seconds) // 60,
         })
     return lines
@@ -145,7 +159,8 @@ def normalize_transcript(raw_text: str) -> str:
     for raw in lines:
         m = _LINE_RE.match(raw.strip())
         if m:
-            ts, speaker, text = m.group(1), m.group(2).strip(), m.group(3)
+            # Groups 3/4 (not 2/3): _LINE_RE gained an optional end group.
+            ts, speaker, text = m.group(1), m.group(3).strip(), m.group(4)
             parsed.append((parse_timestamp_to_seconds(ts), speaker, text))
         else:
             parsed.append(None)

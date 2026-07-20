@@ -395,3 +395,38 @@ def test_selection_identity_survives_analyze_to_generate(tmp_path):
     start, end = segments[0]
     assert end > start
     assert end - start <= MAX_CLIP_SECONDS
+
+
+def test_parse_plain_line_has_no_end():
+    lines = parse_transcript_lines("[0:05] Participant: Hello there.")
+    assert lines[0]["end_seconds"] is None
+    assert lines[0]["seconds"] == 5.0
+
+
+def test_parse_rich_line_carries_end():
+    lines = parse_transcript_lines("[0:05-0:12] Participant: Hello there.")
+    assert lines[0]["seconds"] == 5.0
+    assert lines[0]["end_seconds"] == 12.0
+    assert lines[0]["text"] == "Hello there."
+    assert lines[0]["speaker"] == "Participant"
+
+
+def test_parse_rich_line_with_padded_minutes():
+    # Real Forven exports zero-pad: [00:05-00:12]
+    lines = parse_transcript_lines("[00:05-00:12] Participant: Hello there.")
+    assert lines[0]["seconds"] == 5.0
+    assert lines[0]["end_seconds"] == 12.0
+
+
+def test_parse_malformed_end_is_treated_as_absent():
+    # end <= start cannot be real; treat the line as plain rather than emit a
+    # zero-length or negative clip.
+    assert parse_transcript_lines("[0:12-0:12] P: Hi.")[0]["end_seconds"] is None
+    assert parse_transcript_lines("[0:12-0:05] P: Hi.")[0]["end_seconds"] is None
+
+
+def test_normalize_still_splits_after_regex_change():
+    # Guards the group-index shift: normalize_transcript uses the same regex.
+    out = normalize_transcript("[0:00] Participant: First sentence. Second sentence.")
+    assert out.count("Participant:") == 2
+    assert "First sentence." in out and "Second sentence." in out
