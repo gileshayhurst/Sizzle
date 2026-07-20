@@ -169,8 +169,8 @@ def get_video_dimensions(video_path: str) -> tuple:
         return (1920, 1080)
 
 
-def _probe_container_duration(video_path: str) -> float | None:
-    """Duration from the container header. Instant, but absent on some formats."""
+def get_video_duration(video_path: str) -> float | None:
+    """Return the video duration in seconds, or None on failure."""
     try:
         result = subprocess.run(
             [
@@ -188,62 +188,6 @@ def _probe_container_duration(video_path: str) -> float | None:
         return float(result.stdout.strip())
     except Exception:
         return None
-
-
-def _probe_last_packet_pts(video_path: str) -> float | None:
-    """Duration from the last video packet's PTS, for LOCAL FILES ONLY.
-
-    Reads the whole packet index (headers, not frame data): well under a second
-    on a 600MB local file. Over HTTP the same scan streams the entire object
-    just to reach the last packet, so this is deliberately skipped for remote
-    inputs — a presigned URL here would download hundreds of MB per video and
-    stall the plan. Cloud mode relies on the encoder's stop-when-exhausted
-    guard instead (reel-encoder MAX_HOLD_SEC), which needs no duration.
-    """
-    if "://" in video_path:
-        return None
-    try:
-        result = subprocess.run(
-            [
-                "ffprobe", "-v", "error",
-                "-select_streams", "v:0",
-                "-show_entries", "packet=pts_time",
-                "-of", "csv=p=0",
-                video_path,
-            ],
-            capture_output=True,
-            check=True,
-            text=True,
-            encoding="utf-8",
-            timeout=60,
-        )
-    except Exception:
-        return None
-    last = None
-    for line in result.stdout.splitlines():
-        line = line.strip().rstrip(",")
-        if not line or line == "N/A":
-            continue
-        try:
-            last = float(line)
-        except ValueError:
-            continue
-    return last
-
-
-def get_video_duration(video_path: str) -> float | None:
-    """Return the video duration in seconds, or None if it can't be determined.
-
-    Browser-recorded WebM (MediaRecorder) writes a streaming header with no
-    duration, so the container probe returns empty for every Forven source.
-    That silently returned None here, which left the clip-range clamp in
-    shared.group_lines_into_segments inert for all of them and let clips be
-    planned past the end of the footage. Fall back to the last packet PTS.
-    """
-    duration = _probe_container_duration(video_path)
-    if duration is not None:
-        return duration
-    return _probe_last_packet_pts(video_path)
 
 
 # ─── Generation worker ────────────────────────────────────────────────────────
@@ -267,7 +211,6 @@ def _build_segment_list(
     selections: dict,
     video_urls: dict | None = None,
     id_options: dict | None = None,
-    warn=None,
 ) -> list[dict]:
     """Parse transcripts and group selected lines into ordered segments.
 
@@ -295,19 +238,6 @@ def _build_segment_list(
         duration = get_video_duration(ffmpeg_input)
         selected_set = set(selected_raws)
         segs = _group_lines_into_segments(all_lines, selected_set, video_duration=duration)
-        if warn is not None and duration is not None:
-            # A transcript can outrun its video when the recording was truncated
-            # mid-interview. Those lines are unusable and get dropped, which
-            # would otherwise look like the analysis silently ignoring them —
-            # say so, since the fix is to re-download the source.
-            orphaned = [l for l in all_lines
-                        if l["raw"] in selected_set and l["seconds"] >= duration]
-            if orphaned:
-                last = max(l["seconds"] for l in all_lines)
-                warn(f"⚠ {vp.name}: video ends at {_format_seconds(duration)} but its "
-                     f"transcript runs to {_format_seconds(last)} — "
-                     f"{len(orphaned)} selected line(s) have no footage and were "
-                     f"skipped. The source recording is likely truncated.")
         if segs:
             grouped.append((vp, segs, ffmpeg_input, all_lines, selected_set))
 
@@ -392,9 +322,7 @@ def _run_generation_impl(job_id: str, folder: str,
         video_paths = _filter_generated_reels(video_paths)
 
     # Build segment plan (shared with POST /plan)
-    segments = _build_segment_list(
-        video_paths, selections, video_urls, id_options,
-        warn=lambda msg: _append_log(job_id, msg))
+    segments = _build_segment_list(video_paths, selections, video_urls, id_options)
 
     # Log per-video results and advance progress counter
     segment_video_names = {s["video_name"] for s in segments}
@@ -919,12 +847,8 @@ def create_app(testing: bool = False) -> Flask:
                 key=lambda p: p.name,
             )
 
-            # Cloud path: the browser drives encoding, so warnings ride back in
-            # the plan response for the frontend to surface in its log.
-            plan_warnings: list[str] = []
             segments = _build_segment_list(
-                video_paths, selections, video_urls, body.get("id_options"),
-                warn=plan_warnings.append)
+                video_paths, selections, video_urls, body.get("id_options"))
             if not segments:
                 return jsonify({"error": "No segments found in selections"}), 422
 
@@ -956,7 +880,6 @@ def create_app(testing: bool = False) -> Flask:
                 "captions_vtt": captions_vtt,
                 "captions_key": captions_key,
                 "captions_put_url": captions_put_url,
-                "warnings": plan_warnings,
                 "segments": [
                     {
                         "video": seg["video_name"],

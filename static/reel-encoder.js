@@ -39,28 +39,10 @@ const TITLE_SHOW_SEC = 3.0;   // how long the identification overlay stays up
 const TITLE_FADE_SEC = 0.3;   // fade in / fade out duration
 const TRANSITION_FADE_SEC = 0.4;  // symmetric head/tail dip between clips
 const FPS = 30;
-// How long the last decoded frame may be held once the source iterator is
-// exhausted before we treat the footage as genuinely over. Rides out ordinary
-// decode gaps (widest measured in a Forven source: 0.27s) without letting a
-// truncated recording freeze for the rest of the planned clip.
-const MAX_HOLD_SEC = 0.5;
 const SAMPLE_RATE = 48000;
 const CHANNELS = 2;
 const VIDEO_BITRATE = 3_000_000;
 const AUDIO_BITRATE = 128_000;
-
-// Wall time the last clip spent opening its source and seeking to the clip
-// start, before any frame was decoded. Reported per clip so a slow generation
-// can be attributed to seek overhead vs actual encoding rather than guessed at.
-let _lastOpenMs = 0;
-
-// Seconds -> "M:SS". Rounds the total before splitting; flooring the minutes and
-// rounding the seconds separately renders 179.6 as "2:60" (same bug as app.js
-// _fmtSeconds).
-function _fmtClock(s) {
-  const total = Math.round(s);
-  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
-}
 
 function _throwIfAborted(signal) {
   if (signal?.aborted) throw new DOMException('Cancelled', 'AbortError');
@@ -173,11 +155,8 @@ function _drawTitle(ctx, titleLines, width, height, alpha) {
 }
 
 // ── Clip: range-read webm, decode VP9/Opus, apply fade-out, burn title, re-encode ─
-async function _encodeClip(url, startSec, endSec, titleLines, width, height, ctx, videoSource, audioSource, startTs, signal, log) {
+async function _encodeClip(url, startSec, endSec, titleLines, width, height, ctx, videoSource, audioSource, startTs, signal) {
   const clipDurationSec = endSec - startSec;
-  let framesEmitted = 0;
-  const _openT0 = performance.now();
-  _lastOpenMs = 0;
   const input = new Input({ formats: ALL_FORMATS, source: new UrlSource(url) });
 
   try {
@@ -206,16 +185,11 @@ async function _encodeClip(url, startSec, endSec, titleLines, width, height, ctx
 
       const srcIter = sink.canvases(startSec, endSec);
       let nextSrc = await srcIter.next();
-      // First frame in hand = open + seek is done. On an unindexed WebM this is
-      // where a scan from the start of the object shows up.
-      _lastOpenMs = performance.now() - _openT0;
-      let lastFrameTs = -Infinity;
       // Prime with the first decoded frame so the clip never opens on black even
       // if that frame starts slightly after startSec.
       if (!nextSrc.done && nextSrc.value) {
         holdCtx.drawImage(nextSrc.value.canvas, 0, 0, width, height);
         haveFrame = true;
-        lastFrameTs = nextSrc.value.timestamp;
         nextSrc = await srcIter.next();
       }
 
@@ -228,16 +202,8 @@ async function _encodeClip(url, startSec, endSec, titleLines, width, height, ctx
           holdCtx.clearRect(0, 0, width, height);
           holdCtx.drawImage(nextSrc.value.canvas, 0, 0, width, height);
           haveFrame = true;
-          lastFrameTs = nextSrc.value.timestamp;
           nextSrc = await srcIter.next();
         }
-        // Stop once the footage genuinely runs out. The hold-frame logic above
-        // would otherwise keep redrawing the last decoded frame for the rest of
-        // the planned duration while _drawTimer renders a fresh countdown each
-        // pass — a frozen picture with a running timer, over audio that has
-        // nothing left to decode. MAX_HOLD_SEC still rides out ordinary decode
-        // gaps (the widest measured in a Forven source is 0.27s).
-        if (nextSrc.done && outT > lastFrameTs + MAX_HOLD_SEC) break;
         const alpha = _transitionGain(relSec, clipDurationSec);
         ctx.fillStyle = '#000';
         ctx.fillRect(0, 0, width, height);
@@ -251,36 +217,13 @@ async function _encodeClip(url, startSec, endSec, titleLines, width, height, ctx
         _drawTitle(ctx, titleLines, width, height, _titleAlpha(relSec, clipDurationSec) * alpha);
         _drawTimer(ctx, clipDurationSec - relSec, width, height, timerFontSize, alpha);
         await videoSource.add(startTs + relSec, 1 / FPS);
-        framesEmitted++;
       }
-    }
-    // What we actually encoded, which is what the reel timeline must advance by.
-    // Using the planned duration here is what let phantom time accumulate into
-    // the reported reel length.
-    const encodedSec = videoTrack ? framesEmitted / FPS : clipDurationSec;
-
-    // Cloud mode can't probe source durations (the packet scan is local-only —
-    // over HTTP it would stream the whole object), so the server cannot warn
-    // that a transcript outran its video. Report it from here instead, where
-    // the shortfall is known for free: a clip that ends early means the footage
-    // ran out, which usually means a truncated source recording.
-    const shortBy = clipDurationSec - encodedSec;
-    if (log && shortBy > 1.0) {
-      log(`⚠ Footage ran out ${shortBy.toFixed(1)}s early at ` +
-          `${_fmtClock(startSec)} (planned ${clipDurationSec.toFixed(1)}s, ` +
-          `encoded ${encodedSec.toFixed(1)}s) — the source recording is likely truncated.`);
     }
 
     // ── Audio: decode, apply transition gain, encode (or silent-pad) ───────────
-    // Audio buffers are appended without timestamps, so the audio track's length
-    // is just the sum of what decoded. Any clip whose audio falls short of its
-    // video therefore shifts every later clip's audio earlier, and the deficit
-    // compounds across the reel. Pad each clip back up to its encoded video
-    // length so the two tracks stay locked.
-    let audioSec = 0;
     if (audioTrack) {
       const audioSink = new AudioBufferSink(audioTrack);
-      for await (const { buffer, timestamp } of audioSink.buffers(startSec, startSec + encodedSec)) {
+      for await (const { buffer, timestamp } of audioSink.buffers(startSec, endSec)) {
         _throwIfAborted(signal);
         const relSec = timestamp - startSec;
         const gain = _transitionGain(relSec, clipDurationSec);
@@ -291,13 +234,11 @@ async function _encodeClip(url, startSec, endSec, titleLines, width, height, ctx
           }
         }
         await audioSource.add(buffer);
-        audioSec += buffer.duration;
       }
-    }
-    const padSec = encodedSec - audioSec;
-    if (padSec > 1e-3) {
+    } else {
+      // Keep the audio timeline aligned with video when a source has no audio.
       const silence = new AudioBuffer({
-        length: Math.round(padSec * SAMPLE_RATE),
+        length: Math.round(clipDurationSec * SAMPLE_RATE),
         numberOfChannels: CHANNELS,
         sampleRate: SAMPLE_RATE,
       });
@@ -307,7 +248,7 @@ async function _encodeClip(url, startSec, endSec, titleLines, width, height, ctx
     input.dispose();
   }
 
-  return startTs + encodedSec;
+  return startTs + clipDurationSec;
 }
 
 // ── Public API ──────────────────────────────────────────────────────────────────
@@ -328,11 +269,6 @@ window.ReelEncoder = {
             session_key, output_filename } = plan;
     const total = segments.length; // one clip per segment (title burned onto clip)
     let done = 0;
-
-    // Source-data problems the planner spotted (e.g. a truncated recording whose
-    // transcript outruns its video). Surface before encoding so the reason some
-    // selected lines produced no clip is visible, not silently absorbed.
-    (plan.warnings || []).forEach(w => log(w));
 
     // Fail fast if this browser cannot encode H.264 at this resolution.
     if (!(await canEncodeVideo('avc', { width, height, bitrate: VIDEO_BITRATE }))) {
@@ -367,7 +303,6 @@ window.ReelEncoder = {
     // ── Encode each segment's clip, in order, into one stream ───────────────────
     let ts = 0; // seconds
     const segmentStarts = [];
-    const clipTimings = [];
 
     try {
       for (let i = 0; i < segments.length; i++) {
@@ -376,25 +311,10 @@ window.ReelEncoder = {
 
         segmentStarts.push(ts);
         log(`· Encoding clip ${i + 1}/${segments.length} (${seg.start_sec.toFixed(1)}–${seg.end_sec.toFixed(1)}s)…`);
-        const t0 = performance.now();
         ts = await _encodeClip(seg.presigned_get_url, seg.start_sec, seg.end_sec, seg.title_lines,
-                               width, height, ctx, videoSource, audioSource, ts, signal, log);
+                               width, height, ctx, videoSource, audioSource, ts, signal);
         progress(++done, total);
-        // Wall time per clip, split into open+seek vs encode. These sources are
-        // browser-recorded WebM with no seek index, so seeking to an arbitrary
-        // start means scanning clusters from the beginning of the object — the
-        // suspected reason many short clips cost more than few long ones.
-        const clipMs = performance.now() - t0;
-        clipTimings.push(clipMs);
-        log(`✓ Clip ${i + 1} done in ${(clipMs / 1000).toFixed(1)}s ` +
-            `(${_lastOpenMs.toFixed(0)}ms open+seek, ` +
-            `${(clipMs - _lastOpenMs).toFixed(0)}ms decode+encode)`);
-      }
-      if (clipTimings.length) {
-        const totalS = clipTimings.reduce((a, b) => a + b, 0) / 1000;
-        const slowest = Math.max(...clipTimings) / 1000;
-        log(`· Encode summary: ${clipTimings.length} clips in ${totalS.toFixed(1)}s ` +
-            `(avg ${(totalS / clipTimings.length).toFixed(1)}s, slowest ${slowest.toFixed(1)}s)`);
+        log(`✓ Clip ${i + 1} done`);
       }
 
       await output.finalize();

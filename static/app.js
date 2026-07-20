@@ -28,29 +28,14 @@ const state = {
 // start_seconds, lines:[raw...]}. All math below is pure (no DOM, no network).
 
 const OPTIMAL_MIN_SCORE = 8;      // quality bar for the optimal cut
-const OPTIMAL_SOFT_CAP_SECONDS = 120;  // 2 min soft cap on the optimal cut
-// Floor on the optimal cut. Sentence-level transcripts made a candidate one
-// sentence (~4-11s) rather than a whole turn (~15-30s), so a strict score>=8
-// filter that matched a single candidate produced a 4-second "optimal reel".
-// The cap alone can only trim; without a floor there was nothing to grow it.
-const OPTIMAL_MIN_SECONDS = 60;
+const OPTIMAL_SOFT_CAP_SECONDS = 180;  // ~3 min soft cap on the optimal cut
 
 // Flatten the /analyze `segments` payload into one candidate array.
 // fileOrder is the array of filenames in state.files order (for tie-breaking).
-// Candidates shorter than MIN_CANDIDATE_SECONDS are dropped: sentence-level
-// transcripts produce sub-2s fragments that are useless as soundbites, and
-// because sortByPriority tie-breaks on duration ASCENDING they were selected
-// first — a 120s reel came out as ~60 clips with a 1.5s median. Every clip is
-// one ffmpeg invocation that must seek into an unindexed WebM, so clip count,
-// not reel length, is what drives generation time. Filtering here takes that
-// reel to ~20 clips with a 6s median, inside the 5-15s target band.
-const MIN_CANDIDATE_SECONDS = 6;
-
 function buildCandidatePool(segmentsByFile, fileOrder) {
   const pool = [];
   fileOrder.forEach(file => {
     (segmentsByFile[file] || []).forEach(seg => {
-      if (seg.duration_seconds < MIN_CANDIDATE_SECONDS) return;
       pool.push({
         file,
         score: seg.score,
@@ -60,20 +45,6 @@ function buildCandidatePool(segmentsByFile, fileOrder) {
       });
     });
   });
-  // Never return an empty pool just because everything was short — fall back to
-  // the longest few so a reel is still possible on sparse or choppy material.
-  if (pool.length === 0) {
-    const all = fileOrder.flatMap(file =>
-      (segmentsByFile[file] || []).map(seg => ({
-        file,
-        score: seg.score,
-        duration_seconds: seg.duration_seconds,
-        start_seconds: seg.start_seconds,
-        lines: seg.lines,
-      })));
-    all.sort((a, b) => b.duration_seconds - a.duration_seconds);
-    return all.slice(0, 10);
-  }
   return pool;
 }
 
@@ -111,16 +82,8 @@ function optimalDuration(ordered) {
     qualifying = ordered.filter(c => c.score === top);
   }
   // qualifying is a prefix of `ordered` by construction (highest-priority items).
+  // Trim from the end until under the soft cap, keeping at least one.
   let dur = qualifying.reduce((s, c) => s + c.duration_seconds, 0);
-  // Grow first: if the quality bar alone yields too little reel, keep taking the
-  // next-best candidates until we clear the floor or run out of material.
-  let take = qualifying.length;
-  while (dur < OPTIMAL_MIN_SECONDS && take < ordered.length) {
-    dur += ordered[take].duration_seconds;
-    take++;
-  }
-  qualifying = ordered.slice(0, take);
-  // Then trim from the end until under the soft cap, keeping at least one.
   while (qualifying.length > 1 && dur > OPTIMAL_SOFT_CAP_SECONDS) {
     dur -= qualifying[qualifying.length - 1].duration_seconds;
     qualifying = qualifying.slice(0, -1);
@@ -170,12 +133,8 @@ function mergeIntoPool(existingPool, segmentsByFile, fileOrder) {
 }
 
 function _fmtSeconds(s) {
-  // Round to whole seconds FIRST, then split. Flooring the minutes and rounding
-  // the seconds independently renders 179.6s as "2:60" — the round carries into
-  // a sixtieth second the floor never sees.
-  const total = Math.round(s);
-  const m = Math.floor(total / 60);
-  const r = total % 60;
+  const m = Math.floor(s / 60);
+  const r = Math.round(s % 60);
   return `${m}:${String(r).padStart(2, '0')}`;
 }
 
@@ -1945,7 +1904,10 @@ function showResult(result) {
   }
 
   $('result-filename').textContent = result.filename;
-  $('result-duration').textContent = _fmtSeconds(Math.max(0, result.duration_seconds || 0));
+  const dur = Math.max(0, Math.round(result.duration_seconds || 0));
+  const mins = Math.floor(dur / 60);
+  const secs = dur % 60;
+  $('result-duration').textContent = `${mins}:${String(secs).padStart(2,'0')}`;
   const n = result.clip_count || 0;
   $('result-clipcount').textContent = `${n} clip${n === 1 ? '' : 's'}`;
 
@@ -2093,7 +2055,9 @@ function renderLibrary() {
     card.className = 'reel-card';
     card.dataset.id = entry.id;
 
-    const durStr = _fmtSeconds(entry.duration_seconds || 0);
+    const mins = Math.floor((entry.duration_seconds || 0) / 60);
+    const secs = (entry.duration_seconds || 0) % 60;
+    const durStr = `${mins}:${String(secs).padStart(2, '0')}`;
     const dateStr = entry.created_at ? entry.created_at.split('T')[0] : '';
 
     const thumb = document.createElement('div');
