@@ -249,8 +249,12 @@ def test_run_generation_marks_job_error_on_unexpected_exception(tmp_path):
     vp = tmp_path / "video.mp4"
     job_id = generator_app._new_job("generation", 1)
 
-    # get_video_duration is called with no surrounding try/except; make it blow up.
-    with patch("generator_app.get_video_duration", side_effect=RuntimeError("boom")):
+    # _read_transcript is called with no surrounding try/except; make it blow up.
+    # (This used to inject via get_video_duration, but that is deliberately no
+    # longer called for remote inputs — the cloud path passes a presigned URL and
+    # ffprobe over HTTP only burns its timeout. The injection point is incidental;
+    # what matters is that an unexpected exception reaches the job as an error.)
+    with patch("generator_app._read_transcript", side_effect=RuntimeError("boom")):
         generator_app._run_generation(
             job_id, str(tmp_path),
             {"video.mp4": ["[0:00] Speaker: Hello world."]},

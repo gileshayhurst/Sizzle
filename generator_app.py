@@ -235,7 +235,19 @@ def _build_segment_list(
             continue
         all_lines = _parse_transcript_lines(_read_transcript(txt_path))
         ffmpeg_input = video_urls.get(vp.name, str(vp)) if video_urls else str(vp)
-        duration = get_video_duration(ffmpeg_input)
+        # Only probe local files. On the cloud /plan path ffmpeg_input is a
+        # presigned R2 URL, and ffprobe over HTTP from Render burns up to its
+        # full 5s timeout per video before failing anyway (see commit 3a4b07c),
+        # so the probe cost real wall time to return None. Skipping it is safe
+        # because the browser encoder clamps clip ends itself via
+        # input.computeDuration() (static/reel-encoder.js `_encodeClip`) — it is
+        # the thing actually decoding, so it is the authority on media length.
+        # The local /generate path still probes: there ffmpeg_input is a real
+        # file and ffprobe is fast and reliable.
+        duration = (
+            None if ffmpeg_input.startswith(("http://", "https://"))
+            else get_video_duration(ffmpeg_input)
+        )
         selected_set = set(selected_raws)
         segs = _group_lines_into_segments(all_lines, selected_set, video_duration=duration)
         if segs:

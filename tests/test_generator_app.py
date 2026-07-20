@@ -1261,6 +1261,43 @@ def test_build_segment_list_uses_video_urls_for_ffmpeg_input(tmp_path):
     assert result[0]["ffmpeg_input"] == presigned
 
 
+def test_build_segment_list_skips_duration_probe_for_remote_input(tmp_path):
+    """ffprobe is never run against a presigned URL.
+
+    On the cloud /plan path ffmpeg_input is an R2 URL; probing it over HTTP from
+    Render burns the full 5s timeout per video and returns None anyway. The
+    browser encoder clamps clip ends itself (input.computeDuration() in
+    static/reel-encoder.js), so the probe is pure wasted wall time here.
+    """
+    from generator_app import _build_segment_list
+    vp = tmp_path / "video.webm"
+    vp.write_bytes(b"")
+    (tmp_path / "video.txt").write_text("[0:05] Speaker: Hi there.", encoding="utf-8")
+    selections = {"video.webm": ["[0:05] Speaker: Hi there."]}
+
+    with patch("generator_app.get_video_duration") as probe:
+        result = _build_segment_list(
+            [vp], selections,
+            video_urls={"video.webm": "https://r2.example.com/video.webm?sig=abc"},
+        )
+    assert result, "segments should still be built without a duration"
+    probe.assert_not_called()
+
+
+def test_build_segment_list_still_probes_local_input(tmp_path):
+    """The local /generate path keeps probing — there ffprobe is fast and the
+    duration is what clamps a trailing segment to the real end of the video."""
+    from generator_app import _build_segment_list
+    vp = tmp_path / "video.webm"
+    vp.write_bytes(b"")
+    (tmp_path / "video.txt").write_text("[0:05] Speaker: Hi there.", encoding="utf-8")
+    selections = {"video.webm": ["[0:05] Speaker: Hi there."]}
+
+    with patch("generator_app.get_video_duration", return_value=60.0) as probe:
+        _build_segment_list([vp], selections)
+    probe.assert_called_once_with(str(vp))
+
+
 # ─── Captions (Task 2) ────────────────────────────────────────────────────────
 
 def test_build_segment_list_attaches_caption_lines(tmp_path):
