@@ -37,10 +37,20 @@ const OPTIMAL_MIN_SECONDS = 60;
 
 // Flatten the /analyze `segments` payload into one candidate array.
 // fileOrder is the array of filenames in state.files order (for tie-breaking).
+// Candidates shorter than MIN_CANDIDATE_SECONDS are dropped: sentence-level
+// transcripts produce sub-2s fragments that are useless as soundbites, and
+// because sortByPriority tie-breaks on duration ASCENDING they were selected
+// first — a 120s reel came out as ~60 clips with a 1.5s median. Every clip is
+// one ffmpeg invocation that must seek into an unindexed WebM, so clip count,
+// not reel length, is what drives generation time. Filtering here takes that
+// reel to ~20 clips with a 6s median, inside the 5-15s target band.
+const MIN_CANDIDATE_SECONDS = 6;
+
 function buildCandidatePool(segmentsByFile, fileOrder) {
   const pool = [];
   fileOrder.forEach(file => {
     (segmentsByFile[file] || []).forEach(seg => {
+      if (seg.duration_seconds < MIN_CANDIDATE_SECONDS) return;
       pool.push({
         file,
         score: seg.score,
@@ -50,6 +60,20 @@ function buildCandidatePool(segmentsByFile, fileOrder) {
       });
     });
   });
+  // Never return an empty pool just because everything was short — fall back to
+  // the longest few so a reel is still possible on sparse or choppy material.
+  if (pool.length === 0) {
+    const all = fileOrder.flatMap(file =>
+      (segmentsByFile[file] || []).map(seg => ({
+        file,
+        score: seg.score,
+        duration_seconds: seg.duration_seconds,
+        start_seconds: seg.start_seconds,
+        lines: seg.lines,
+      })));
+    all.sort((a, b) => b.duration_seconds - a.duration_seconds);
+    return all.slice(0, 10);
+  }
   return pool;
 }
 
