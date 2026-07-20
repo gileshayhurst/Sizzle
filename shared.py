@@ -78,6 +78,28 @@ def parse_transcript_lines(raw_text: str) -> list[dict]:
     return lines
 
 
+def transcript_tier(lines: list[dict]) -> str:
+    """Classify parsed lines as "rich" (real end times) or "plain".
+
+    Rich only if EVERY respondent line carries a valid end_seconds. Interviewer
+    lines are exempt: clip ends come from the last selected respondent line and
+    captions exclude the interviewer.
+
+    Strict all-or-nothing is deliberate. A per-line fallback would mix exact and
+    estimated boundaries inside a single reel, producing inconsistent output
+    with an invisible cause.
+
+    Must stay pure and deterministic: app.py and generator_app.py classify the
+    same .txt independently and must always agree.
+    """
+    respondent = [l for l in lines if not l.get("is_interviewer")]
+    if not respondent:
+        return "plain"
+    if all(l.get("end_seconds") is not None for l in respondent):
+        return "rich"
+    return "plain"
+
+
 # A clip shorter than this is imperceptible. Segments are extended to this floor,
 # or dropped when the source can't provide it.
 MIN_CLIP_SECONDS = 1.5

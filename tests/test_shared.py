@@ -451,3 +451,76 @@ def test_normalize_handles_rich_format_lines_without_corruption():
         assert line["speaker"] == "Participant"
     assert respondent[0]["text"] == "First sentence."
     assert respondent[1]["text"] == "Second sentence."
+
+
+def test_tier_rich_when_every_respondent_line_has_an_end():
+    from shared import transcript_tier
+    lines = parse_transcript_lines(
+        "[0:00-0:04] Participant: One.\n"
+        "[0:05-0:09] Participant: Two."
+    )
+    assert transcript_tier(lines) == "rich"
+
+
+def test_tier_ignores_interviewer_lines():
+    # Clip ends come from the last selected respondent line, and captions
+    # exclude the interviewer, so interviewer ends are not required.
+    from shared import transcript_tier
+    lines = parse_transcript_lines(
+        "[0:00] Interviewer: A question?\n"
+        "[0:05-0:09] Participant: An answer."
+    )
+    assert transcript_tier(lines) == "rich"
+
+
+def test_tier_plain_when_any_respondent_line_lacks_an_end():
+    from shared import transcript_tier
+    lines = parse_transcript_lines(
+        "[0:00-0:04] Participant: One.\n"
+        "[0:05] Participant: Two."
+    )
+    assert transcript_tier(lines) == "plain"
+
+
+def test_tier_plain_when_an_end_is_malformed():
+    from shared import transcript_tier
+    lines = parse_transcript_lines(
+        "[0:00-0:04] Participant: One.\n"
+        "[0:05-0:05] Participant: Two."
+    )
+    assert transcript_tier(lines) == "plain"
+
+
+def test_tier_plain_for_empty_or_interviewer_only():
+    from shared import transcript_tier
+    assert transcript_tier([]) == "plain"
+    assert transcript_tier(parse_transcript_lines("[0:00] Interviewer: Hi?")) == "plain"
+
+
+def test_both_services_agree_on_tier(tmp_path):
+    """app.py and generator_app.py classify the same file independently.
+
+    If they disagreed, one would normalize and the other would not, and their
+    `raw` strings — the selection identity — would never match.
+    """
+    import app as app_module
+    import generator_app as gen_module
+
+    txt = tmp_path / "interview.txt"
+    txt.write_text(
+        "[00:00-00:04] Participant: One sentence here.\n"
+        "[00:05-00:09] Participant: Another sentence here.",
+        encoding="utf-8",
+    )
+    assert app_module._read_transcript(txt) == gen_module._read_transcript(txt)
+
+
+def test_tier_is_stable_across_repeated_reads(tmp_path):
+    """Tier detection must be pure: same bytes, same answer, every time."""
+    from shared import transcript_tier
+    txt = tmp_path / "interview.txt"
+    txt.write_text("[00:00-00:04] Participant: One.", encoding="utf-8")
+    first = transcript_tier(parse_transcript_lines(txt.read_text(encoding="utf-8")))
+    for _ in range(3):
+        again = transcript_tier(parse_transcript_lines(txt.read_text(encoding="utf-8")))
+        assert again == first == "rich"
