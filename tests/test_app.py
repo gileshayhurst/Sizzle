@@ -477,6 +477,40 @@ def test_analyze_returns_segments_with_scores(client, tmp_path):
     assert len(seg["lines"]) == 2  # both lines fall within 0:05-0:20
 
 
+def test_analyze_estimate_matches_generator_when_candidates_merge(client, tmp_path):
+    """Adjacent candidates merge into one run in the generator and hit the
+    MAX_CLIP_SECONDS ceiling, so the summed estimate must not over-promise.
+
+    Two Claude ranges cover four contiguous lines with no unselected line
+    between them. Grouped in isolation each is 13s (sum 26s), but the generator
+    groups the union into a single 0→33s run that MAX_CLIP_SECONDS truncates to
+    22s. The create-screen estimate has to report 22, not 26.
+    """
+    (tmp_path / "vid.mp4").touch()
+    (tmp_path / "vid.txt").write_text(
+        "[0:00] Speaker: Black cod is amazing.\n"
+        "[0:10] Speaker: Black cod is amazing.\n"
+        "[0:20] Speaker: Black cod is amazing.\n"
+        "[0:30] Speaker: Black cod is amazing.",
+        encoding="utf-8",
+    )
+    with patch("app.query_claude", return_value="0:00-0:10|9\n0:20-0:30|9"):
+        resp = client.post("/analyze", json={"folder": str(tmp_path), "prompt": "food"})
+    assert resp.status_code == 200
+    segs = resp.get_json()["segments"]["vid.mp4"]
+    assert len(segs) == 2
+
+    from shared import MAX_CLIP_SECONDS
+    total = sum(s["duration_seconds"] for s in segs)
+    assert total == pytest.approx(MAX_CLIP_SECONDS), (
+        f"estimate {total}s over-promises; generator cuts {MAX_CLIP_SECONDS}s"
+    )
+    # Scaled proportionally from 13s each.
+    for s in segs:
+        assert s["duration_seconds"] == pytest.approx(11.0)
+        assert s["end_seconds"] == pytest.approx(s["start_seconds"] + s["duration_seconds"])
+
+
 def test_analyze_highlights_is_union_of_segment_lines(client, tmp_path):
     (tmp_path / "vid.mp4").touch()
     (tmp_path / "vid.txt").write_text(

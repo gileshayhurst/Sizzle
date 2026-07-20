@@ -280,6 +280,26 @@ def _run_analyze(folder: str, prompt: str) -> dict:
                 "lines": lines,
             })
 
+        # Reconcile the per-candidate estimates against what the generator would
+        # actually cut. Above, each candidate is grouped in ISOLATION, but
+        # generator_app groups the UNION of every selected line across the file
+        # (one pass over all_lines). Candidates that sit next to each other with
+        # no unselected line between them therefore merge into a single run in
+        # the generator and get truncated by the MAX_CLIP_SECONDS ceiling — so
+        # the naive sum of candidate durations systematically over-promises.
+        # Scale the candidates down by the ratio of merged to solo total, which
+        # makes a full selection exact and any prefix far closer.
+        if segments:
+            union_raws = {raw for seg in segments for raw in seg["lines"]}
+            merged = _group_lines_into_segments(all_lines, union_raws)
+            total_merged = sum(e - s for s, e in merged)
+            total_solo = sum(seg["duration_seconds"] for seg in segments)
+            if total_solo > total_merged > 0:
+                scale = total_merged / total_solo
+                for seg in segments:
+                    seg["duration_seconds"] *= scale
+                    seg["end_seconds"] = seg["start_seconds"] + seg["duration_seconds"]
+
         segments.sort(key=lambda s: s["start_seconds"])
         return vp.name, segments, None
 

@@ -28,7 +28,7 @@ const state = {
 // start_seconds, lines:[raw...]}. All math below is pure (no DOM, no network).
 
 const OPTIMAL_MIN_SCORE = 8;      // quality bar for the optimal cut
-const OPTIMAL_SOFT_CAP_SECONDS = 180;  // ~3 min soft cap on the optimal cut
+const OPTIMAL_SOFT_CAP_SECONDS = 120;  // 2 min soft cap on the optimal cut
 
 // Flatten the /analyze `segments` payload into one candidate array.
 // fileOrder is the array of filenames in state.files order (for tie-breaking).
@@ -132,10 +132,11 @@ function mergeIntoPool(existingPool, segmentsByFile, fileOrder) {
   return merged;
 }
 
+// Round to whole seconds BEFORE splitting. Rounding the remainder on its own
+// lets 179.6s render as "2:60" — floor(179.6/60)=2 but round(59.6)=60.
 function _fmtSeconds(s) {
-  const m = Math.floor(s / 60);
-  const r = Math.round(s % 60);
-  return `${m}:${String(r).padStart(2, '0')}`;
+  const t = Math.max(0, Math.round(s));
+  return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`;
 }
 
 // Replace the current selection with the given candidate list's lines,
@@ -1904,10 +1905,7 @@ function showResult(result) {
   }
 
   $('result-filename').textContent = result.filename;
-  const dur = Math.max(0, Math.round(result.duration_seconds || 0));
-  const mins = Math.floor(dur / 60);
-  const secs = dur % 60;
-  $('result-duration').textContent = `${mins}:${String(secs).padStart(2,'0')}`;
+  $('result-duration').textContent = _fmtSeconds(result.duration_seconds || 0);
   const n = result.clip_count || 0;
   $('result-clipcount').textContent = `${n} clip${n === 1 ? '' : 's'}`;
 
@@ -2055,9 +2053,7 @@ function renderLibrary() {
     card.className = 'reel-card';
     card.dataset.id = entry.id;
 
-    const mins = Math.floor((entry.duration_seconds || 0) / 60);
-    const secs = (entry.duration_seconds || 0) % 60;
-    const durStr = `${mins}:${String(secs).padStart(2, '0')}`;
+    const durStr = _fmtSeconds(entry.duration_seconds || 0);
     const dateStr = entry.created_at ? entry.created_at.split('T')[0] : '';
 
     const thumb = document.createElement('div');

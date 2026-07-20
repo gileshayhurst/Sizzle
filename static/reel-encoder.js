@@ -156,12 +156,31 @@ function _drawTitle(ctx, titleLines, width, height, alpha) {
 
 // ── Clip: range-read webm, decode VP9/Opus, apply fade-out, burn title, re-encode ─
 async function _encodeClip(url, startSec, endSec, titleLines, width, height, ctx, videoSource, audioSource, startTs, signal) {
-  const clipDurationSec = endSec - startSec;
   const input = new Input({ formats: ALL_FORMATS, source: new UrlSource(url) });
+  let clipDurationSec = endSec - startSec;
 
   try {
     const videoTrack = await input.getPrimaryVideoTrack();
     const audioTrack = await input.getPrimaryAudioTrack();
+
+    // Clamp the requested range to the media that actually exists. The plan's
+    // end_sec comes from transcript timing, and the cloud /plan path can't
+    // reliably clamp it: get_video_duration() ffprobes a presigned URL with a
+    // 5s timeout and swallows every failure as None, leaving ends unclamped
+    // (worst case shared.py invents last_line + 10s). Encoding past the last
+    // decodable frame emitted `frameCount` padding frames that all held the
+    // last decoded frame — frozen picture, still-counting timer, and audio
+    // that ended early so the next clip's audio slid forward. Clamping here
+    // keeps video, audio, timer and the returned duration in agreement, and
+    // because this return value feeds `ts` it also corrects segment_starts
+    // and the reported duration_seconds.
+    const srcDuration = await input.computeDuration();
+    if (Number.isFinite(srcDuration) && srcDuration > 0) {
+      endSec = Math.min(endSec, srcDuration);
+      startSec = Math.min(startSec, srcDuration);
+    }
+    clipDurationSec = Math.max(0, endSec - startSec);
+    if (clipDurationSec <= 0) return startTs;  // range lies past the media end
 
     // ── Video: decode sequentially, resample onto a fixed 30fps grid ───────────
     // Use CanvasSink.canvases() (sequential, pre-decoding) — NOT
@@ -309,12 +328,20 @@ window.ReelEncoder = {
         _throwIfAborted(signal);
         const seg = segments[i];
 
-        segmentStarts.push(ts);
         log(`· Encoding clip ${i + 1}/${segments.length} (${seg.start_sec.toFixed(1)}–${seg.end_sec.toFixed(1)}s)…`);
-        ts = await _encodeClip(seg.presigned_get_url, seg.start_sec, seg.end_sec, seg.title_lines,
-                               width, height, ctx, videoSource, audioSource, ts, signal);
+        const next = await _encodeClip(seg.presigned_get_url, seg.start_sec, seg.end_sec, seg.title_lines,
+                                       width, height, ctx, videoSource, audioSource, ts, signal);
         progress(++done, total);
-        log(`✓ Clip ${i + 1} done`);
+        // _encodeClip returns startTs unchanged when the range lies entirely
+        // past the end of the source, so nothing was written — don't record a
+        // start or count it, or duration/clip_count would over-report again.
+        if (next > ts) {
+          segmentStarts.push(ts);
+          ts = next;
+          log(`✓ Clip ${i + 1} done`);
+        } else {
+          log(`⚠ Clip ${i + 1} skipped — ${seg.video_name} is shorter than ${seg.start_sec.toFixed(1)}s`);
+        }
       }
 
       await output.finalize();
@@ -365,7 +392,7 @@ window.ReelEncoder = {
         output_filename,
         prompt: plan.prompt || '',
         duration_seconds: Math.round(totalDurationSec),
-        clip_count: segments.length,
+        clip_count: segmentStarts.length,
         segment_starts: segmentStarts,
         captions_key: captionsKey,
       }),
@@ -379,7 +406,7 @@ window.ReelEncoder = {
       entry_id,
       filename: output_filename,
       duration_seconds: Math.round(totalDurationSec),
-      clip_count: segments.length,
+      clip_count: segmentStarts.length,
       segment_starts: segmentStarts,
     };
   },
