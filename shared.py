@@ -211,6 +211,16 @@ def group_lines_into_segments(
             speech_end = last_line["seconds"] + words / SPEAKING_RATE + TAIL_BUFFER
             end = min(end, speech_end)
         end = min(end, start + MAX_CLIP_SECONDS)
+        # Never plan a clip over footage that does not exist. A transcript can
+        # outrun its video when the recording was truncated, and a mid-file
+        # segment takes its end from the next line's start, which no other rule
+        # bounds. Unclamped, the browser encoder still emits the full frame
+        # count -- holding the last decoded frame while the burned-in timer
+        # counts down, with no audio to decode.
+        if video_duration is not None:
+            if start >= video_duration:
+                return None  # no footage at all behind this line
+            end = min(end, video_duration)
         if end - start < MIN_CLIP_SECONDS:
             extended = start + MIN_CLIP_SECONDS
             if video_duration is not None:

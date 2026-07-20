@@ -317,6 +317,48 @@ def test_read_transcript_normalizes_on_read(tmp_path):
     assert len(txt.read_text(encoding="utf-8").splitlines()) == 1
 
 
+def _mid_file(sel_ts, next_ts):
+    """A selected line followed by an unselected one, so the segment's end comes
+    from the next line's start rather than the video-duration fallback."""
+    sel = f"[{sel_ts}] Participant: A selected line with a fair few words in it here."
+    nxt = f"[{next_ts}] Interviewer: An unselected line that closes the segment."
+    return parse_transcript_lines(f"{sel}\n{nxt}"), {sel}
+
+
+def test_mid_file_segment_end_is_clamped_to_video_duration():
+    """A transcript can outrun its video (a truncated recording). A mid-file
+    segment takes its end from the NEXT line's start, which nothing clamped --
+    so the clip was planned over footage that does not exist. The browser encoder
+    then emits the full frame count anyway, holding the last decoded frame while
+    the burned-in timer keeps counting, and decodes no audio: a frozen picture
+    over continuing sound."""
+    lines, sel = _mid_file("1:35", "2:00")
+    segments = group_lines_into_segments(lines, sel, video_duration=100.0)
+    assert len(segments) == 1
+    start, end = segments[0]
+    assert start == 95.0
+    assert end == 100.0, "clip must not run past the end of the footage"
+
+
+def test_mid_file_segment_entirely_past_video_end_is_dropped():
+    """No footage at all exists here, so there is no clip to cut."""
+    lines, sel = _mid_file("3:20", "3:40")
+    assert group_lines_into_segments(lines, sel, video_duration=100.0) == []
+
+
+def test_mid_file_segment_dropped_when_remaining_footage_under_floor():
+    """Less than MIN_CLIP_SECONDS of footage remains -> unusable, drop it."""
+    lines, sel = _mid_file("1:39", "2:00")
+    assert group_lines_into_segments(lines, sel, video_duration=100.0) == []
+
+
+def test_clamping_is_skipped_when_duration_unknown():
+    """video_duration=None must keep the old permissive behaviour rather than
+    dropping every segment."""
+    lines, sel = _mid_file("3:20", "3:40")
+    assert len(group_lines_into_segments(lines, sel, video_duration=None)) == 1
+
+
 def test_both_services_read_transcripts_identically(tmp_path):
     """The main app and the generator service each read the same .txt
     independently. A line's raw string is the selection identity passed between

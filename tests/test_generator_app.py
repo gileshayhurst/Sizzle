@@ -213,6 +213,94 @@ def test_get_video_duration_returns_none_on_failure():
         assert get_video_duration("/fake/video.mp4") is None
 
 
+def test_build_segment_list_warns_when_transcript_outruns_video(tmp_path):
+    """A truncated recording leaves selected lines with no footage. They get
+    dropped, which would look like the app silently ignoring the selection —
+    warn instead, since the fix is to re-download the source."""
+    import generator_app
+    from unittest.mock import patch
+
+    video = tmp_path / "interview.mp4"
+    video.write_bytes(b"fake")
+    usable = "[0:10] Participant: This line sits inside the footage."
+    orphan = "[9:00] Participant: This line has no video behind it."
+    video.with_suffix(".txt").write_text(f"{usable}\n{orphan}", encoding="utf-8")
+
+    warnings = []
+    with patch("generator_app.get_video_duration", return_value=60.0):
+        segments = generator_app._build_segment_list(
+            [video], {"interview.mp4": [usable, orphan]}, warn=warnings.append)
+
+    assert len(segments) == 1, "the orphaned line must not become a clip"
+    assert segments[0]["end_sec"] <= 60.0
+    assert len(warnings) == 1
+    assert "interview.mp4" in warnings[0]
+    assert "truncated" in warnings[0].lower()
+
+
+def test_build_segment_list_does_not_warn_when_transcript_fits_video(tmp_path):
+    import generator_app
+    from unittest.mock import patch
+
+    video = tmp_path / "interview.mp4"
+    video.write_bytes(b"fake")
+    line = "[0:10] Participant: This line sits well inside the footage."
+    video.with_suffix(".txt").write_text(line, encoding="utf-8")
+
+    warnings = []
+    with patch("generator_app.get_video_duration", return_value=600.0):
+        generator_app._build_segment_list(
+            [video], {"interview.mp4": [line]}, warn=warnings.append)
+
+    assert warnings == []
+
+
+def test_get_video_duration_falls_back_to_packet_scan_when_no_container_duration():
+    """Browser-recorded WebM (MediaRecorder) carries no duration in its container
+    header, so `format=duration` comes back empty. Every Forven source is such a
+    file, which made this return None for all of them and left the clip-range
+    clamp in group_lines_into_segments dead. Fall back to the last video packet
+    PTS, which ffprobe reads from the packet index in well under a second even
+    on a 600MB file."""
+    from generator_app import get_video_duration
+    from unittest.mock import patch, MagicMock
+
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        if "format=duration" in cmd:
+            return MagicMock(stdout="\n", returncode=0)      # empty -> no metadata
+        return MagicMock(stdout="0.000000\n33.400000\n501.445000\n", returncode=0)
+
+    with patch("generator_app.subprocess.run", side_effect=fake_run):
+        assert get_video_duration("/fake/recording.webm") == 501.445
+
+    assert len(calls) == 2, "should try the cheap metadata probe before scanning packets"
+    assert "packet=pts_time" in calls[1]
+
+
+def test_get_video_duration_returns_none_when_packet_scan_also_empty():
+    from generator_app import get_video_duration
+    from unittest.mock import patch, MagicMock
+    with patch("generator_app.subprocess.run",
+               return_value=MagicMock(stdout="\n", returncode=0)):
+        assert get_video_duration("/fake/broken.webm") is None
+
+
+def test_get_video_duration_ignores_na_packet_timestamps():
+    from generator_app import get_video_duration
+    from unittest.mock import patch, MagicMock
+
+    def fake_run(cmd, **kwargs):
+        if "format=duration" in cmd:
+            return MagicMock(stdout="N/A\n", returncode=0)
+        return MagicMock(stdout="0.000000\nN/A\n12.500000\n", returncode=0)
+
+    with patch("generator_app.subprocess.run", side_effect=fake_run):
+        assert get_video_duration("/fake/recording.webm") == 12.5
+
+
 # ─── Job / status / cancel routes ─────────────────────────────────────────────
 
 def test_status_unknown_job_returns_404(client):

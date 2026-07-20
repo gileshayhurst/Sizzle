@@ -28,7 +28,7 @@ const state = {
 // start_seconds, lines:[raw...]}. All math below is pure (no DOM, no network).
 
 const OPTIMAL_MIN_SCORE = 8;      // quality bar for the optimal cut
-const OPTIMAL_SOFT_CAP_SECONDS = 180;  // ~3 min soft cap on the optimal cut
+const OPTIMAL_SOFT_CAP_SECONDS = 120;  // 2 min soft cap on the optimal cut
 
 // Flatten the /analyze `segments` payload into one candidate array.
 // fileOrder is the array of filenames in state.files order (for tie-breaking).
@@ -133,8 +133,12 @@ function mergeIntoPool(existingPool, segmentsByFile, fileOrder) {
 }
 
 function _fmtSeconds(s) {
-  const m = Math.floor(s / 60);
-  const r = Math.round(s % 60);
+  // Round to whole seconds FIRST, then split. Flooring the minutes and rounding
+  // the seconds independently renders 179.6s as "2:60" — the round carries into
+  // a sixtieth second the floor never sees.
+  const total = Math.round(s);
+  const m = Math.floor(total / 60);
+  const r = total % 60;
   return `${m}:${String(r).padStart(2, '0')}`;
 }
 
@@ -1904,10 +1908,7 @@ function showResult(result) {
   }
 
   $('result-filename').textContent = result.filename;
-  const dur = Math.max(0, Math.round(result.duration_seconds || 0));
-  const mins = Math.floor(dur / 60);
-  const secs = dur % 60;
-  $('result-duration').textContent = `${mins}:${String(secs).padStart(2,'0')}`;
+  $('result-duration').textContent = _fmtSeconds(Math.max(0, result.duration_seconds || 0));
   const n = result.clip_count || 0;
   $('result-clipcount').textContent = `${n} clip${n === 1 ? '' : 's'}`;
 
@@ -2055,9 +2056,7 @@ function renderLibrary() {
     card.className = 'reel-card';
     card.dataset.id = entry.id;
 
-    const mins = Math.floor((entry.duration_seconds || 0) / 60);
-    const secs = (entry.duration_seconds || 0) % 60;
-    const durStr = `${mins}:${String(secs).padStart(2, '0')}`;
+    const durStr = _fmtSeconds(entry.duration_seconds || 0);
     const dateStr = entry.created_at ? entry.created_at.split('T')[0] : '';
 
     const thumb = document.createElement('div');
