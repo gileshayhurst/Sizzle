@@ -299,44 +299,32 @@ def test_clip_is_capped_at_max_clip_seconds():
     assert end - start == MAX_CLIP_SECONDS
 
 
-def test_short_clip_is_not_affected_by_cap():
-    raw = "[0:00] Participant: Four short words here."
+def test_short_clip_is_not_affected_by_cap_rich_tier():
+    """The ceiling only truncates long runs — a short one passes untouched.
+
+    Previously this was asserted with a single plain line and no following
+    line. That worked only because the deleted word-count estimate INFERRED
+    the content was short. Without it, a plain trailing run has no signal for
+    how long the speech is and runs to the ceiling, so "short" is now only
+    knowable where a real end (rich) or a next line (plain) says so. Both are
+    covered — here and in the plain-tier test below.
+    """
+    raw = "[0:00-0:03] Participant: Four short words here."
     lines = parse_transcript_lines(raw)
     segments = group_lines_into_segments(lines, {raw}, video_duration=300.0)
     start, end = segments[0]
+    assert (start, end) == (0.0, 3.0)
     assert end - start < MAX_CLIP_SECONDS
 
 
-def test_clip_tail_buffer_survives_the_start_bias():
-    """The full TAIL_BUFFER must remain after the tail estimate, not be spent
-    undoing START_BIAS_SECONDS.
-
-    normalize_transcript records each sentence's start START_BIAS_SECONDS early
-    to protect the FIRST word. The clip end was measured from that biased start,
-    so the buffer meant to protect the LAST word went entirely on cancelling the
-    shift -- an effective margin of TAIL_BUFFER - START_BIAS_SECONDS = 0.0s. Any
-    speaker slower than the assumed rate, or pausing for emphasis, was cut off.
-    """
-    from shared import CLIP_TAIL_RATE, START_BIAS_SECONDS, TAIL_BUFFER
-
-    turn = ("[0:00] Respondent: We looked at three suppliers last quarter. "
-            "But the thing that decided it was the service level agreement, "
-            "because our previous vendor had burned us badly on uptime.")
-    lines = parse_transcript_lines(
-        normalize_transcript(turn + "\n[1:00] Interviewer: Got it."))
-    spoken = [l for l in lines if not l["is_interviewer"]]
-    start, end = group_lines_into_segments(lines, {l["raw"] for l in spoken})[0]
-
-    last = spoken[-1]
-    words = len(last["text"].split())
-    # Where speech actually starts, with the recording bias removed.
-    speech_start = last["seconds"] + START_BIAS_SECONDS
-    margin = end - (speech_start + words / CLIP_TAIL_RATE)
-    assert margin == pytest.approx(TAIL_BUFFER), (
-        f"tail margin is {margin}s, expected the full TAIL_BUFFER of "
-        f"{TAIL_BUFFER}s; a margin near 0 means the start bias is being "
-        f"double-counted and slow speakers get cut off"
-    )
+def test_short_clip_is_not_affected_by_cap_plain_tier():
+    """Plain tier: the next line bounds the run well under the ceiling."""
+    raw = "[0:00] Participant: Four short words here."
+    lines = parse_transcript_lines(raw + "\n[0:05] Interviewer: And then?")
+    segments = group_lines_into_segments(lines, {raw}, video_duration=300.0)
+    start, end = segments[0]
+    assert (start, end) == (0.0, 5.0)
+    assert end - start < MAX_CLIP_SECONDS
 
 
 def test_read_transcript_normalizes_on_read(tmp_path):
@@ -549,3 +537,43 @@ def test_read_transcript_still_normalizes_plain_file():
     # split into two lines by normalization.
     assert "Corgi mix." in out
     assert out.count("Participant:") > 3
+
+
+def test_rich_clip_end_is_exactly_the_transcript_end():
+    lines = parse_transcript_lines(
+        "[0:00-0:08] Participant: A full answer here.\n"
+        "[0:30] Interviewer: Next question?"
+    )
+    sel = {lines[0]["raw"]}
+    assert group_lines_into_segments(lines, sel) == [(0.0, 8.0)]
+
+
+def test_rich_clip_end_ignores_word_count():
+    # Same timestamps, wildly different word counts -> identical boundary.
+    short = parse_transcript_lines(
+        "[0:00-0:08] Participant: Short.\n[0:30] Interviewer: Q?")
+    long = parse_transcript_lines(
+        "[0:00-0:08] Participant: " + " ".join(["word"] * 80) +
+        ".\n[0:30] Interviewer: Q?")
+    a = group_lines_into_segments(short, {short[0]["raw"]})
+    b = group_lines_into_segments(long, {long[0]["raw"]})
+    assert a == b == [(0.0, 8.0)]
+
+
+def test_plain_clip_end_is_the_next_line_start():
+    lines = parse_transcript_lines(
+        "[0:00] Participant: A full answer here.\n"
+        "[0:30] Interviewer: Next question?"
+    )
+    assert group_lines_into_segments(lines, {lines[0]["raw"]}) == [(0.0, 30.0)]
+
+
+def test_plain_clip_end_ignores_word_count():
+    # The defining property of the rework: word count no longer moves any
+    # boundary. Varying ONLY the word count must not change the end.
+    def end_for(text):
+        lines = parse_transcript_lines(
+            f"[0:00] Participant: {text}\n[0:30] Interviewer: Q?")
+        return group_lines_into_segments(lines, {lines[0]["raw"]})[0][1]
+
+    assert end_for("Short.") == end_for(" ".join(["word"] * 80) + ".") == 30.0

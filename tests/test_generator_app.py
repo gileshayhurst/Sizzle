@@ -80,7 +80,10 @@ def test_group_lines_into_segments_two_clusters():
         {"raw": "d", "seconds": 20.0},
     ]
     result = _group_lines_into_segments(lines, {"a", "c", "d"})
-    assert result == [(5.0, 10.0), (15.0, 30.0)]
+    from shared import MAX_CLIP_SECONDS
+    # Cluster 1 ends at the next line's start. Cluster 2 is a trailing run with
+    # no video_duration, so only the ceiling bounds it.
+    assert result == [(5.0, 10.0), (15.0, 15.0 + MAX_CLIP_SECONDS)]
 
 
 def test_group_lines_into_segments_all_selected():
@@ -90,7 +93,10 @@ def test_group_lines_into_segments_all_selected():
         {"raw": "b", "seconds": 10.0},
     ]
     result = _group_lines_into_segments(lines, {"a", "b"})
-    assert result == [(5.0, 20.0)]
+    from shared import MAX_CLIP_SECONDS
+    # One merged segment. Trailing run, no video_duration -> bounded by the
+    # ceiling alone.
+    assert result == [(5.0, 5.0 + MAX_CLIP_SECONDS)]
 
 
 def test_group_lines_into_segments_none_selected():
@@ -127,17 +133,6 @@ def test_group_lines_into_segments_caps_last_segment_at_max_clip_seconds():
     assert result == [(5.0, 5.0 + MAX_CLIP_SECONDS)]
 
 
-def test_group_lines_into_segments_falls_back_to_plus_ten_without_duration():
-    """When video_duration is None, existing +10 behaviour is preserved."""
-    from generator_app import _group_lines_into_segments
-    lines = [
-        {"raw": "a", "seconds": 5.0},
-        {"raw": "b", "seconds": 10.0},
-    ]
-    result = _group_lines_into_segments(lines, {"a", "b"}, video_duration=None)
-    assert result == [(5.0, 20.0)]
-
-
 def test_group_lines_into_segments_extends_short_segment_to_minimum():
     from generator_app import _group_lines_into_segments, MIN_CLIP_SECONDS
     lines = [
@@ -158,39 +153,6 @@ def test_group_lines_into_segments_drops_segment_that_cannot_reach_minimum():
     # possible clip is 0.5s < MIN_CLIP_SECONDS -> drop it entirely (no title card).
     result = _group_lines_into_segments(lines, {"a"}, video_duration=30.0)
     assert result == []
-
-
-def test_group_lines_into_segments_caps_trailing_dead_air():
-    """A selection followed by a long gap ends near the speech, not the next line."""
-    from shared import CLIP_TAIL_RATE, START_BIAS_SECONDS, TAIL_BUFFER
-    from generator_app import _group_lines_into_segments
-    lines = [
-        {"raw": "a", "seconds": 41.0,
-         "text": "one two three four five six seven eight nine ten eleven twelve"},
-        {"raw": "b", "seconds": 59.0, "text": "next speaker"},  # 18s later, unselected
-    ]
-    result = _group_lines_into_segments(lines, {"a"})
-    # Measured from where speech really starts (recorded start + the bias that
-    # normalization applied), at the slower clip-tail rate.
-    expected_end = 41.0 + START_BIAS_SECONDS + 12 / CLIP_TAIL_RATE + TAIL_BUFFER
-    assert expected_end < 59.0, "must still end before the next line, not at it"
-    assert result == [(41.0, expected_end)]
-    assert expected_end < 59.0  # dead air trimmed rather than running to next line
-
-
-def test_group_lines_into_segments_long_line_keeps_full_speech():
-    """A long final line before a big gap keeps its full estimated speech length."""
-    from shared import CLIP_TAIL_RATE, START_BIAS_SECONDS, TAIL_BUFFER
-    from generator_app import _group_lines_into_segments
-    lines = [
-        {"raw": "a", "seconds": 10.0, "text": " ".join(["word"] * 30)},
-        {"raw": "b", "seconds": 60.0, "text": "next"},  # 50s gap
-    ]
-    result = _group_lines_into_segments(lines, {"a"})
-    expected_end = 10.0 + START_BIAS_SECONDS + 30 / CLIP_TAIL_RATE + TAIL_BUFFER
-    assert expected_end < 60.0, "must still trim the gap, not run to the next line"
-    assert result == [(10.0, expected_end)]
-    assert expected_end - 10.0 > 15.0  # scales with word count, not a fixed cap
 
 
 def test_group_lines_into_segments_floor_applies_after_cap():
@@ -770,11 +732,13 @@ def test_failed_clip_skipped_from_reel(client, tmp_path):
 def test_duration_seconds_is_sum_of_clip_durations(client, tmp_path):
     """No title cards → duration_seconds is just the summed clip content."""
     (tmp_path / "vid.mp4").touch()
-    # Single selected line at 0:05. The trailing dead-air cap ends the clip at
-    # the estimated speech end, measured from where speech really starts.
+    # Single selected plain-tier line at 0:05 with no line after it, and the
+    # fixture mp4 is an empty touch()ed file so ffprobe fails and
+    # get_video_duration returns None — the clip therefore runs to the
+    # MAX_CLIP_SECONDS ceiling: 5.0 -> 45.0.
     (tmp_path / "vid.txt").write_text("[0:05] Speaker: Hello.", encoding="utf-8")
-    from shared import CLIP_TAIL_RATE, START_BIAS_SECONDS, TAIL_BUFFER
-    one_word_clip = START_BIAS_SECONDS + 1 / CLIP_TAIL_RATE + TAIL_BUFFER
+    from shared import MAX_CLIP_SECONDS
+    one_clip = MAX_CLIP_SECONDS
 
     from generator_app import _jobs
     with patch("generator_app.extract_clip"), \
@@ -797,11 +761,11 @@ def test_duration_seconds_is_sum_of_clip_durations(client, tmp_path):
 
     result = _jobs[job_id]["result"]
     assert result is not None
-    # 1 segment, clip content only. A title card would have added ~5s on top,
-    # so this stays far below that even as the tail estimate moves.
-    assert result["duration_seconds"] == int(one_word_clip), (
+    # 1 segment, clip content only. The point of this test is that no title-card
+    # time is added on top: a title card would have made this ~5s longer.
+    assert result["duration_seconds"] == int(one_clip), (
         f"duration_seconds={result['duration_seconds']}; "
-        f"expected {int(one_word_clip)} ({one_word_clip}s of content, no title card)"
+        f"expected {int(one_clip)} ({one_clip}s of content, no title card)"
     )
 
 
@@ -956,11 +920,11 @@ def test_duration_seconds_excludes_failed_clip(client, tmp_path):
 
     result = _jobs[job_id]["result"]
     assert result is not None, f"Job should complete, got: {_jobs[job_id]}"
-    # Only segment 1 survives: "First." (1 word). Both clips would roughly
-    # double this, so the assertion still distinguishes the failure case.
-    from shared import CLIP_TAIL_RATE, START_BIAS_SECONDS, TAIL_BUFFER
-    one_word_clip = START_BIAS_SECONDS + 1 / CLIP_TAIL_RATE + TAIL_BUFFER
-    assert result["duration_seconds"] == int(one_word_clip), (
+    # Only segment 1 survives: 0:05 bounded by the next line at 0:15 = 10s. The
+    # failed segment 2 would have added a comparable amount, so the assertion
+    # still distinguishes the failure case.
+    one_clip = 10.0
+    assert result["duration_seconds"] == int(one_clip), (
         f"duration_seconds={result['duration_seconds']}; "
         "failed clip must not contribute to duration"
     )

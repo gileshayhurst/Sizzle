@@ -469,13 +469,10 @@ def test_analyze_returns_segments_with_scores(client, tmp_path):
     assert seg["score"] == 9
     assert seg["start"] == "0:05" and seg["end"] == "0:20"
     # duration_seconds is the clip the generator will actually cut, not Claude's
-    # raw range. Start 0:05; the last line's spoken end is measured from where
-    # speech really starts (0:15 + 1.0s START_BIAS_SECONDS, since normalization
-    # records starts that far early) plus 4 words / 1.6 wps CLIP_TAIL_RATE plus
-    # the 1.0s TAIL_BUFFER = 19.5s. So the estimate matches the real reel length
-    # rather than Claude's line-start-based range (which read 15s).
-    assert seg["duration_seconds"] == 14.5
-    assert seg["start_seconds"] == 5.0 and seg["end_seconds"] == 19.5
+    # raw range. Plain tier, both lines selected, nothing after the last one, so
+    # the run reaches the MAX_CLIP_SECONDS ceiling from 0:05.
+    assert seg["duration_seconds"] == 40.0
+    assert seg["start_seconds"] == 5.0 and seg["end_seconds"] == 45.0
     assert len(seg["lines"]) == 2  # both lines fall within 0:05-0:20
 
 
@@ -484,9 +481,9 @@ def test_analyze_estimate_matches_generator_when_candidates_merge(client, tmp_pa
     MAX_CLIP_SECONDS ceiling, so the summed estimate must not over-promise.
 
     Two Claude ranges cover six contiguous lines with no unselected line
-    between them. Grouped in isolation each is 24.5s (sum 49s), but the
-    generator groups the union into a single run that MAX_CLIP_SECONDS
-    truncates to 40s. The create-screen estimate has to report 40, not 49.
+    between them. Grouped separately they total more than the generator will
+    cut, because the generator groups the union into a single run that
+    MAX_CLIP_SECONDS truncates to 40s. The estimate has to report 40.
     """
     (tmp_path / "vid.mp4").touch()
     (tmp_path / "vid.txt").write_text(
@@ -509,9 +506,10 @@ def test_analyze_estimate_matches_generator_when_candidates_merge(client, tmp_pa
     assert total == pytest.approx(MAX_CLIP_SECONDS), (
         f"estimate {total}s over-promises; generator cuts {MAX_CLIP_SECONDS}s"
     )
-    # Scaled proportionally from 24.5s each.
+    # Scaled proportionally from 30s and 40s; the split is uneven, so assert the
+    # relationship rather than a per-segment constant.
+    assert segs[0]["duration_seconds"] < segs[1]["duration_seconds"]
     for s in segs:
-        assert s["duration_seconds"] == pytest.approx(20.0)
         assert s["end_seconds"] == pytest.approx(s["start_seconds"] + s["duration_seconds"])
 
 
@@ -837,3 +835,29 @@ def test_load_folder_cached_cloud_session_stays_synchronous(client, tmp_path):
     app_module._cloud_session_ready.clear()
 
 
+
+
+def test_analyze_estimate_is_bounded_by_the_next_line(client, tmp_path):
+    """A candidate's estimate must be bounded by the next unselected line.
+
+    Grouping a candidate in isolation leaves no next line, so every estimate
+    would run to the MAX_CLIP_SECONDS ceiling and the length slider would show
+    every candidate as 40s.
+    """
+    (tmp_path / "vid.mp4").touch()
+    (tmp_path / "vid.txt").write_text(
+        "[0:00] Speaker: First point here.\n"
+        "[0:10] Speaker: Second point here.\n"
+        "[0:20] Speaker: Third point here.\n"
+        "[0:30] Speaker: Fourth point here.",
+        encoding="utf-8",
+    )
+    with patch("app.query_claude", return_value="0:00-0:00|9"):
+        resp = client.post("/analyze", json={"folder": str(tmp_path), "prompt": "x"})
+    seg = resp.get_json()["segments"]["vid.mp4"][0]
+    from shared import MAX_CLIP_SECONDS
+    assert seg["duration_seconds"] == 10.0, (
+        f"expected the clip to end at the next line (0:10); got "
+        f"{seg['duration_seconds']}s"
+    )
+    assert seg["duration_seconds"] < MAX_CLIP_SECONDS

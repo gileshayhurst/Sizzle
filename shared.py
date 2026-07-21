@@ -104,25 +104,12 @@ def transcript_tier(lines: list[dict]) -> str:
 # or dropped when the source can't provide it.
 MIN_CLIP_SECONDS = 1.5
 
-# Trailing dead-air cap. A segment's raw end is the next line's start, which
-# overshoots by any interview pause after the last selected line. We instead
-# estimate when that line's speech ends from its word count. Rate is assumed slow
-# and a buffer is added so speech is never cut short (biased toward leaving a
-# sliver of air over clipping a word).
-SPEAKING_RATE = 2.0    # words/sec (conversational English ~2.5; slower = safer)
-TAIL_BUFFER = 1.0      # seconds of grace after the estimated last word
-
-# Rate used ONLY for the clip end in group_lines_into_segments, deliberately
-# slower than SPEAKING_RATE. The two cannot share a value: SPEAKING_RATE also
-# sizes normalize_transcript's interpolation window, where lowering it pushes
-# sentence STARTS later and clips first words -- trading one cut for another.
-#
-# Slower here because the error is asymmetric. The clip end is a min() against
-# the next line's start, so over-estimating costs at most trailing air (bounded
-# by that next start, softened by the 0.4s fade-out), while under-estimating
-# cuts the speaker off mid-point. Measured at 2.0 w/s an emphatic speaker lost
-# their last 2s; people slow down and pause exactly where the content matters.
-CLIP_TAIL_RATE = 1.6   # words/sec
+# Used ONLY by normalize_transcript, to size the interpolation window when
+# splitting a turn into sentences (plain tier only). These no longer influence
+# any clip end: that is real transcript data in the rich tier and the next
+# line's start in the plain tier.
+SPEAKING_RATE = 2.0    # words/sec
+TAIL_BUFFER = 1.0      # seconds
 
 # Hard ceiling on any single clip. Sentence normalization gets most clips to
 # 5-15s; this is the safety net for turns with no terminal punctuation (which
@@ -254,35 +241,26 @@ def group_lines_into_segments(
 ) -> list:
     """Convert selected transcript lines into (start_sec, end_sec) clip ranges.
 
-    Each segment's end is capped near the last selected line's estimated speech
-    end (see SPEAKING_RATE / TAIL_BUFFER) to trim trailing dead air, then capped
-    again at MAX_CLIP_SECONDS as a hard ceiling, then the MIN_CLIP_SECONDS floor
-    is applied — so a lone title card with no clip is never emitted, and short
-    segments are extended (clamped to video duration) or dropped if the source
-    can't reach the floor.
+    Rich transcripts end each clip at the last selected line's real end time.
+    Plain transcripts end at the start of the first line after the run — the
+    only end-adjacent timestamp such a file contains. No word-count estimation
+    in either path.
+
+    MAX_CLIP_SECONDS still applies in BOTH tiers and can truncate a genuinely
+    long run mid-sentence. That is a reel-pacing decision, not a timing guess:
+    a single 40s+ clip is too long for a highlight reel. It is the only
+    remaining path by which a clip can end mid-sentence.
 
     Pure logic shared by the generator (real clip ranges) and the main app's
     analyze (create-screen length estimate), so both compute identical durations.
     """
+    rich = transcript_tier(all_lines) == "rich"
+
     def _finalize(start: float, end: float, last_line: dict):
-        # Cap trailing dead air before applying the floor. `end` is the next
-        # line's start; clip instead at the last selected line's estimated
-        # speech end. min() means this can only ever shorten a clip. Falls back
-        # to `end` when there's no text to estimate from (fail toward keeping
-        # content).
-        words = len(last_line.get("text", "").split())
-        if words:
-            # Add START_BIAS_SECONDS back before estimating the speech end.
-            # normalize_transcript pulls each sentence's recorded start that far
-            # early to protect the FIRST word, so measuring the tail from the
-            # biased start spent the whole TAIL_BUFFER undoing that shift --
-            # leaving an effective margin of TAIL_BUFFER - START_BIAS_SECONDS,
-            # i.e. exactly zero. Any speaker slower than SPEAKING_RATE, or any
-            # pause for emphasis, then lost their last words. Measure the tail
-            # from where speech actually starts so the buffer is real again.
-            speech_start = last_line["seconds"] + START_BIAS_SECONDS
-            speech_end = speech_start + words / CLIP_TAIL_RATE + TAIL_BUFFER
-            end = min(end, speech_end)
+        # Rich: the transcript states when this speaker stopped. Trust it.
+        # Plain: `end` is already the next line's start, the only real signal.
+        if rich and last_line.get("end_seconds") is not None:
+            end = last_line["end_seconds"]
         end = min(end, start + MAX_CLIP_SECONDS)
         if end - start < MIN_CLIP_SECONDS:
             extended = start + MIN_CLIP_SECONDS
@@ -307,7 +285,11 @@ def group_lines_into_segments(
                 current = []
 
     if current:
-        end = video_duration if video_duration is not None else current[-1]["seconds"] + 10.0
+        # No next line. Rich tier gets a real end from _finalize. Plain tier
+        # uses the video duration when known; when it is not (cloud planning),
+        # MAX_CLIP_SECONDS bounds it here and the browser encoder clamps the
+        # range to the real media length via computeDuration().
+        end = video_duration if video_duration is not None else float("inf")
         seg = _finalize(current[0]["seconds"], end, current[-1])
         if seg is not None:
             segments.append(seg)

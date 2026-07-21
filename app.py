@@ -260,11 +260,18 @@ def _run_analyze(folder: str, prompt: str) -> dict:
             if not lines:
                 continue  # segment mapped to no respondent lines — drop it
             # The create-screen length estimate must match the clip the generator
-            # will actually cut. Claude's end timestamp is the *start* of the last
-            # line; the real clip plays that line to its spoken end, so estimate
-            # the duration with the same grouping/tail logic the generator uses
-            # (shared.group_lines_into_segments) rather than end_sec - start_sec.
-            grouped = _group_lines_into_segments(seg_line_dicts, set(lines))
+            # will actually cut. Claude's end timestamp is only the *start* of the
+            # last line, so the duration comes from the same shared grouping the
+            # generator uses (shared.group_lines_into_segments) rather than
+            # end_sec - start_sec.
+            #
+            # Group over the FULL line list, not just this candidate's lines.
+            # The clip end is the first unselected line after the run, which
+            # only exists with full context — in isolation every candidate
+            # would hit the trailing-run path and be estimated at the ceiling.
+            # This also matches how generator_app groups (all_lines), keeping
+            # the create-screen estimate aligned with the real cut.
+            grouped = _group_lines_into_segments(all_lines, set(lines))
             if grouped:
                 clip_start = grouped[0][0]
                 clip_dur = sum(e - s for s, e in grouped)
