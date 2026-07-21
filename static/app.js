@@ -354,7 +354,7 @@ function _saveSelections() {
     // lines that no longer exist — they would restore into state.checked,
     // render nothing, then ship dead raws to the generator and fail with
     // "No segments found in selections". Bumping the prefix orphans them.
-    const key = 'sizzle_sel_v2_' + state.folder;
+    const key = 'sizzle_sel_v3_' + state.folder;
     const payload = {
       checked: {},
       highlighted: {},
@@ -406,7 +406,7 @@ function _restorePool() {
 function _clearSelections() {
   // Remove the persisted payload so a page reload starts empty.
   if (state.folder) {
-    try { localStorage.removeItem('sizzle_sel_v2_' + state.folder); } catch (_) {}
+    try { localStorage.removeItem('sizzle_sel_v3_' + state.folder); } catch (_) {}
   }
   // Reset in-memory Sets so the workspace renders with nothing selected
   // if the user navigates back without reloading.
@@ -789,7 +789,7 @@ async function loadTranscripts(folder) {
 
   // Restore persisted selections for this folder
   try {
-    const key = 'sizzle_sel_v2_' + state.folder;
+    const key = 'sizzle_sel_v3_' + state.folder;
     const raw = localStorage.getItem(key);
     if (raw) {
       const saved = JSON.parse(raw);
