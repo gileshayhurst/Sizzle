@@ -374,7 +374,7 @@ function _saveSelections() {
 function _savePool() {
   if (!state.folder) return;
   try {
-    localStorage.setItem('sizzle_pool_' + state.folder, JSON.stringify({
+    localStorage.setItem('sizzle_pool_v3_' + state.folder, JSON.stringify({
       pool: state.pool,
       sliderValue: parseFloat($('reel-slider')?.value || '0'),
       custom: state.sliderCustom,
@@ -385,7 +385,7 @@ function _savePool() {
 function _restorePool() {
   if (!state.folder) return;
   try {
-    const raw = localStorage.getItem('sizzle_pool_' + state.folder);
+    const raw = localStorage.getItem('sizzle_pool_v3_' + state.folder);
     if (!raw) return;
     const saved = JSON.parse(raw);
     const fileNames = new Set(state.files.map(f => f.name));
@@ -413,7 +413,7 @@ function _clearSelections() {
   for (const filename of Object.keys(state.checked))     state.checked[filename]     = new Set();
   for (const filename of Object.keys(state.highlighted)) state.highlighted[filename] = new Set();
   if (state.folder) {
-    try { localStorage.removeItem('sizzle_pool_' + state.folder); } catch (_) {}
+    try { localStorage.removeItem('sizzle_pool_v3_' + state.folder); } catch (_) {}
   }
   state.pool = [];
   state.poolOrdered = [];
