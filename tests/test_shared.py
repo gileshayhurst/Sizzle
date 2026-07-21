@@ -518,8 +518,11 @@ FIXTURES = Path(__file__).parent / "fixtures"
 
 
 def test_read_transcript_returns_rich_file_unchanged():
-    # Rich files must bypass normalization entirely — asserting byte-identity
-    # (not just idempotence) proves the bypass rather than a coincidence.
+    # Rich files must bypass normalize_transcript — no timestamps are rewritten.
+    # We assert this by checking that the parsed lines from read_transcript are
+    # identical to parsing the raw file directly (byte-identity is no longer the
+    # right check now that read_transcript routes rich files through expand_anchors,
+    # which like normalize_transcript normalises trailing newlines).
     from shared import transcript_tier
 
     path = FIXTURES / "rich_tier.txt"
@@ -528,7 +531,11 @@ def test_read_transcript_returns_rich_file_unchanged():
     # Verify the fixture is genuinely rich, not accidentally plain.
     assert transcript_tier(parse_transcript_lines(text)) == "rich"
 
-    assert read_transcript(path) == text
+    # expand_anchors is a no-op when no inline anchors are present, so every
+    # parsed field (raw, seconds, end_seconds, speaker, text) must be identical.
+    raw_lines = parse_transcript_lines(text)
+    out_lines = parse_transcript_lines(read_transcript(path))
+    assert raw_lines == out_lines
 
 
 def test_read_transcript_still_normalizes_plain_file():
@@ -577,3 +584,85 @@ def test_plain_clip_end_ignores_word_count():
         return group_lines_into_segments(lines, {lines[0]["raw"]})[0][1]
 
     assert end_for("Short.") == end_for(" ".join(["word"] * 80) + ".") == 30.0
+
+
+# ---------------------------------------------------------------------------
+# expand_anchors
+# ---------------------------------------------------------------------------
+
+from shared import expand_anchors
+
+
+def test_expand_anchors_plain_line_passthrough():
+    """Lines with no outer end timestamp are returned unchanged."""
+    raw = "[0:14] Participant: Hello world."
+    assert expand_anchors(raw) == raw
+
+
+def test_expand_anchors_rich_no_inline_anchors_passthrough():
+    """Rich line with no inline anchors is returned unchanged."""
+    raw = "[0:14-0:19] Participant: The service was absolutely exceptional."
+    assert expand_anchors(raw) == raw
+
+
+def test_expand_anchors_three_anchors():
+    """A 3-anchor turn expands into 3 correctly-bounded rich lines."""
+    raw = "[0:04-0:20] Participant: text about thing. [0:09] More detail here. [0:14] Final point."
+    result = expand_anchors(raw)
+    lines = result.splitlines()
+    assert len(lines) == 3
+    assert lines[0] == "[0:04-0:09] Participant: text about thing."
+    assert lines[1] == "[0:09-0:14] Participant: More detail here."
+    assert lines[2] == "[0:14-0:20] Participant: Final point."
+
+
+def test_expand_anchors_empty_leading_chunk_absorbed():
+    """Anchor at position 0 creates empty first chunk; next chunk absorbs its span."""
+    raw = "[0:04-0:20] Participant: [0:09] More detail here. [0:14] Final point."
+    result = expand_anchors(raw)
+    lines = result.splitlines()
+    assert len(lines) == 2
+    # "More detail here." absorbs [0:04, 0:09] span, starts at 0:04
+    assert lines[0] == "[0:04-0:14] Participant: More detail here."
+    assert lines[1] == "[0:14-0:20] Participant: Final point."
+
+
+def test_expand_anchors_empty_trailing_chunk_absorbed():
+    """Trailing anchor with no text; previous chunk absorbs through to line_end."""
+    raw = "[0:04-0:20] Participant: text about thing. [0:09] More detail here. [0:14]"
+    result = expand_anchors(raw)
+    lines = result.splitlines()
+    assert len(lines) == 2
+    assert lines[0] == "[0:04-0:09] Participant: text about thing."
+    # "More detail here." absorbs trailing span, ends at 0:20
+    assert lines[1] == "[0:09-0:20] Participant: More detail here."
+
+
+def test_expand_anchors_anchor_outside_window_falls_back():
+    """Anchor outside [line_start, line_end] keeps the whole turn unchanged."""
+    # 0:25 is outside [0:04, 0:20]
+    raw = "[0:04-0:20] Participant: text [0:25] more."
+    assert expand_anchors(raw) == raw
+
+
+def test_expand_anchors_non_monotonic_falls_back():
+    """Non-monotonic anchors keep the whole turn unchanged."""
+    raw = "[0:04-0:20] Participant: text [0:14] more [0:09] still."
+    assert expand_anchors(raw) == raw
+
+
+def test_expand_anchors_idempotent():
+    """expand_anchors(expand_anchors(x)) == expand_anchors(x)."""
+    raw = "[0:04-0:20] Participant: text [0:09] more [0:14] still."
+    once = expand_anchors(raw)
+    assert expand_anchors(once) == once
+
+
+def test_expand_anchors_multi_line_passthrough_intact():
+    """Multi-line input: only anchored lines change; others pass through."""
+    raw = "[0:00] Interviewer: How was it?\n[0:04-0:20] Participant: Good. [0:09] Very good."
+    result = expand_anchors(raw)
+    lines = result.splitlines()
+    assert lines[0] == "[0:00] Interviewer: How was it?"
+    assert lines[1] == "[0:04-0:09] Participant: Good."
+    assert lines[2] == "[0:09-0:20] Participant: Very good."

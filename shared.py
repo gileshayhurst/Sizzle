@@ -16,6 +16,10 @@ _LINE_RE = _re.compile(r'^\[(\d+:\d{2})(?:-(\d+:\d{2}))?\]\s+(\w[\w ]*?):\s*(.*)
 # clip, which errs toward the finer granularity this function exists to produce.
 _SENTENCE_SPLIT_RE = _re.compile(r'(?<=[.!?])\s+')
 
+# Inline anchor inside an already-parsed rich line: [M:SS] embedded in text.
+# Used by expand_anchors to split anchored turn lines into sentence-level rich lines.
+_INLINE_ANCHOR_RE = _re.compile(r'\[(\d+:\d{2})\]')
+
 # Interpolated sentence starts are pulled this many seconds earlier. Forven
 # turn windows include pauses, so a proportional estimate skews late — and late
 # is the harmful direction (it clips the first word). Erring early costs at
@@ -131,6 +135,90 @@ def _seconds_to_timestamp(seconds: float) -> str:
     return f"{total // 60}:{total % 60:02d}"
 
 
+def expand_anchors(raw_text: str) -> str:
+    """Split anchored turn lines into consecutive sentence-level rich lines.
+
+    An anchored line like:
+        [0:04-0:20] Participant: text [0:09] more [0:14] still more
+
+    becomes:
+        [0:04-0:09] Participant: text
+        [0:09-0:14] Participant: more
+        [0:14-0:20] Participant: still more
+
+    Lines with no inline anchors (including plain-tier lines and sentence-level
+    rich lines) are returned unchanged, making the function idempotent.
+
+    Malformed anchors (outside the line window, non-monotonic) cause the whole
+    line to be returned unchanged — never fabricate a boundary.
+    """
+    out: list[str] = []
+    for raw in raw_text.splitlines():
+        stripped = raw.strip()
+        m = _LINE_RE.match(stripped)
+        # Only expand lines that have a valid outer end timestamp (rich lines).
+        if not m or not m.group(2):
+            out.append(raw)
+            continue
+
+        start_ts, end_ts = m.group(1), m.group(2)
+        speaker, text = m.group(3).strip(), m.group(4)
+        line_start = parse_timestamp_to_seconds(start_ts)
+        line_end = parse_timestamp_to_seconds(end_ts)
+
+        # Split text on inline anchors. re.split with a capturing group
+        # interleaves captured timestamps: ["a ", "0:09", " b ", "0:14", " c"]
+        parts = _INLINE_ANCHOR_RE.split(text)
+        text_chunks = parts[0::2]   # ["a ", " b ", " c"]
+        anchor_strs = parts[1::2]   # ["0:09", "0:14"]
+
+        if not anchor_strs:
+            out.append(raw)
+            continue
+
+        anchor_secs = [parse_timestamp_to_seconds(a) for a in anchor_strs]
+
+        # Validate: strictly increasing, each within [line_start, line_end).
+        valid = (
+            anchor_secs[0] >= line_start
+            and anchor_secs[-1] < line_end
+            and all(anchor_secs[i] < anchor_secs[i + 1] for i in range(len(anchor_secs) - 1))
+        )
+        if not valid:
+            out.append(raw)
+            continue
+
+        # boundaries[i] is the start of text_chunks[i]; boundaries[-1] is line_end.
+        boundaries = [line_start] + anchor_secs + [line_end]
+
+        last_non_empty = max(
+            (i for i, c in enumerate(text_chunks) if c.strip()), default=None
+        )
+        if last_non_empty is None:
+            out.append(raw)
+            continue
+
+        # Build result lines. running_start tracks the accumulated start for
+        # the current non-empty chunk — empty chunks don't advance it, so the
+        # next non-empty chunk absorbs the empty span (spec: "neighbour absorbs").
+        running_start = line_start
+        result_lines: list[str] = []
+        for i, chunk_text in enumerate(text_chunks):
+            chunk_stripped = chunk_text.strip()
+            # Last non-empty chunk always ends at line_end (absorbs trailing empties).
+            chunk_end = line_end if i == last_non_empty else boundaries[i + 1]
+            if chunk_stripped:
+                s_ts = _seconds_to_timestamp(running_start)
+                e_ts = _seconds_to_timestamp(chunk_end)
+                result_lines.append(f"[{s_ts}-{e_ts}] {speaker}: {chunk_stripped}")
+                running_start = boundaries[i + 1]
+            # Empty chunk: running_start stays, next non-empty chunk absorbs the span.
+
+        out.extend(result_lines if result_lines else [raw])
+
+    return "\n".join(out)
+
+
 def normalize_transcript(raw_text: str) -> str:
     """Split multi-sentence turn lines into one line per sentence.
 
@@ -224,15 +312,15 @@ def read_transcript(txt_path: str | _Path) -> str:
     new code path that reads a .txt, call this.) The file on disk is never
     modified; it is client data.
 
-    Routes on tier: a "rich" file already has real per-sentence end times
-    (see transcript_tier) and is returned completely unchanged -- running it
-    through normalize_transcript would overwrite those true timestamps with
-    interpolated guesses. A "plain" file has no such times, so it still goes
-    through sentence normalization as before.
+    Routes on tier:
+      rich  -> expand_anchors: expands any inline anchors into sentence-level
+               rich lines; sentence-level rich lines pass through unchanged.
+      plain -> normalize_transcript: splits turn-level lines by sentence with
+               interpolated timestamps, as before.
     """
     text = _Path(txt_path).read_text(encoding="utf-8")
     if transcript_tier(parse_transcript_lines(text)) == "rich":
-        return text
+        return expand_anchors(text)
     return normalize_transcript(text)
 
 
