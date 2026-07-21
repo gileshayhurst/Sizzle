@@ -673,3 +673,93 @@ def test_expand_anchors_multi_line_passthrough_intact():
     assert lines[0] == "[0:00] Interviewer: How was it?"
     assert lines[1] == "[0:04-0:09] Participant: Good."
     assert lines[2] == "[0:09-0:20] Participant: Very good."
+
+
+# ---------------------------------------------------------------------------
+# lines_in_range
+# ---------------------------------------------------------------------------
+
+from shared import lines_in_range
+
+
+def _make_line(seconds, end_seconds=None, is_interviewer=False):
+    ts = f"{int(seconds) // 60}:{int(seconds) % 60:02d}"
+    end_ts = (f"{int(end_seconds) // 60}:{int(end_seconds) % 60:02d}"
+              if end_seconds is not None else None)
+    raw = (f"[{ts}-{end_ts}] Speaker: text" if end_ts
+           else f"[{ts}] Speaker: text")
+    return {
+        "raw": raw,
+        "seconds": float(seconds),
+        "end_seconds": float(end_seconds) if end_seconds is not None else None,
+        "is_interviewer": is_interviewer,
+    }
+
+
+def test_lines_in_range_plain_includes_start_in_range():
+    """Plain tier: line start inside [start-0.5, end+0.5] is included."""
+    lines = [_make_line(10)]  # no end_seconds → plain tier
+    result = lines_in_range(lines, 9.6, 20.0)
+    assert len(result) == 1
+
+
+def test_lines_in_range_plain_excludes_start_outside_range():
+    """Plain tier: line start well outside the range is excluded."""
+    lines = [_make_line(5)]
+    result = lines_in_range(lines, 10.0, 20.0)
+    assert len(result) == 0
+
+
+def test_lines_in_range_plain_excludes_interviewer():
+    """Interviewer lines are always excluded regardless of tier."""
+    lines = [_make_line(10, is_interviewer=True)]
+    result = lines_in_range(lines, 9.0, 20.0)
+    assert len(result) == 0
+
+
+def test_lines_in_range_rich_long_line_grazing_range_excluded():
+    """Rich tier: a 34s line whose speech overlaps the range by <50% is excluded."""
+    # Line: [0:24-0:58], Claude range: [0:24-0:26]. Overlap = 2s of 34s = 5.9% < 50%.
+    lines = [_make_line(24, end_seconds=58)]
+    result = lines_in_range(lines, 24.0, 26.0)
+    assert len(result) == 0
+
+
+def test_lines_in_range_rich_mostly_inside_included():
+    """Rich tier: a line starting just before the range but 95% inside is included."""
+    # Line: [0:13-0:19], Claude range: [0:14-0:20]. Overlap = 5s of 6s = 83% > 50%.
+    lines = [_make_line(13, end_seconds=19)]
+    result = lines_in_range(lines, 14.0, 20.0)
+    assert len(result) == 1
+
+
+def test_lines_in_range_rich_exactly_half_overlap_excluded():
+    """Rich tier: exactly 50% overlap is excluded (threshold is strictly greater than)."""
+    # Line: [0:10-0:20], Claude range: [0:15-0:25]. Overlap = 5s of 10s = exactly 50%.
+    lines = [_make_line(10, end_seconds=20)]
+    result = lines_in_range(lines, 15.0, 25.0)
+    assert len(result) == 0
+
+
+def test_lines_in_range_rich_fallback_for_missing_end():
+    """Rich file but a line missing end_seconds falls back to plain predicate."""
+    # Mix: one well-formed rich line, one missing end_seconds (e.g. interviewer with no end)
+    rich_line = _make_line(10, end_seconds=20)
+    no_end_line = _make_line(12, end_seconds=None)  # missing end → plain fallback
+    # plain predicate: 12 is inside [11.5, 20.5] → included
+    lines = [rich_line, no_end_line]
+    result = lines_in_range(lines, 12.0, 20.0)
+    # no_end_line at 12s: plain predicate 12 >= 12-0.5=11.5 ✓ and 12 <= 20+0.5 ✓ → included
+    assert no_end_line in result
+
+
+def test_lines_in_range_plain_tier_unchanged_regression():
+    """Plain predicate behaviour is exactly the same as the old inline comprehension."""
+    lines = [
+        _make_line(9),   # inside (9 >= 8.5)
+        _make_line(20),  # inside (20 <= 20.5)
+        _make_line(5),   # outside
+        _make_line(25),  # outside
+    ]
+    result = lines_in_range(lines, 9.0, 20.0)
+    assert set(r["seconds"] for r in result) == {9.0, 20.0}

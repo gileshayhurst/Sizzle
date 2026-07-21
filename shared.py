@@ -104,6 +104,51 @@ def transcript_tier(lines: list[dict]) -> str:
     return "plain"
 
 
+# Lines whose speech overlaps Claude's returned range by less than this fraction
+# of the line's own duration are excluded in rich tier. 0.5 means the majority
+# of a line's speech must fall inside the range to be selected.
+# ponytail: 0.5 is a calibrated starting point — tune against real rich transcripts
+# if clips are too short (raise it) or too long (lower it).
+MIN_LINE_OVERLAP_RATIO = 0.5
+
+
+def lines_in_range(
+    all_lines: list[dict], start_sec: float, end_sec: float
+) -> list[dict]:
+    """Return respondent lines whose speech falls within Claude's returned range.
+
+    Plain tier: a line is included when its start falls within
+    [start_sec - 0.5, end_sec + 0.5]. This is the existing predicate, unchanged.
+
+    Rich tier: a line is included when its speech interval
+    [seconds, end_seconds] overlaps Claude's range by more than
+    MIN_LINE_OVERLAP_RATIO of the line's own duration. This excludes a 34s line
+    that merely grazes the range at its first second, and includes a line that
+    starts just before the range but lies almost entirely inside it.
+
+    A line with end_seconds=None inside a rich file falls back to the plain
+    predicate (possible on interviewer lines whose ends are rarely present).
+
+    Interviewer lines are always excluded.
+    """
+    tier = transcript_tier(all_lines)
+    result = []
+    for line in all_lines:
+        if line.get("is_interviewer"):
+            continue
+        if tier == "rich" and line.get("end_seconds") is not None:
+            line_dur = line["end_seconds"] - line["seconds"]
+            if line_dur <= 0:
+                continue
+            overlap = max(0.0, min(line["end_seconds"], end_sec) - max(line["seconds"], start_sec))
+            if overlap / line_dur > MIN_LINE_OVERLAP_RATIO:
+                result.append(line)
+        else:
+            if start_sec - 0.5 <= line["seconds"] <= end_sec + 0.5:
+                result.append(line)
+    return result
+
+
 # A clip shorter than this is imperceptible. Segments are extended to this floor,
 # or dropped when the source can't provide it.
 MIN_CLIP_SECONDS = 1.5
