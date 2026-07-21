@@ -25,12 +25,26 @@ Rules:
 - Do not fabricate or infer timestamps
 - Do not include any explanation, preamble, or extra punctuation — just the scored segments, one per line, or the word none"""
 
+# Appended to _SYSTEM_PROMPT when the transcript is rich-tier (every respondent line
+# carries a real [M:SS-M:SS] end timestamp). Tells Claude it can use end timestamps
+# as range endpoints and should prefer tight single-sentence ranges over padded spans.
+_RICH_PROMPT_CLAUSE = """
 
-def query_claude(transcript: str, prompt: str) -> str:
+This transcript uses the rich format: each line carries both a start and an end timestamp: [M:SS-M:SS] Speaker: text.
+The end timestamp is the speaker's real stop time — it is exact, not estimated.
+Rules for rich transcripts:
+- Both start and end timestamps on each line are verbatim and may be used in your returned ranges.
+- Prefer to begin a range at a line's start timestamp and end it at that line's end timestamp.
+- Do not pad the range past the last word that directly contributes to the topic.
+- A single sentence is the ideal range. Return it as [line_start]-[line_end] for that sentence."""
+
+
+def query_claude(transcript: str, prompt: str, tier: str = "plain") -> str:
+    system = _SYSTEM_PROMPT if tier != "rich" else _SYSTEM_PROMPT + _RICH_PROMPT_CLAUSE
     message = _client.messages.create(
         model="claude-opus-4-8",
         max_tokens=256,
-        system=_SYSTEM_PROMPT,
+        system=system,
         messages=[
             {
                 "role": "user",

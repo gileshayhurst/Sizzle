@@ -607,7 +607,7 @@ def test_analyze_runs_claude_calls_concurrently(client, tmp_path):
 
     per_call = 0.3
 
-    def slow_claude(transcript, prompt):
+    def slow_claude(transcript, prompt, tier="plain"):
         time.sleep(per_call)
         return "0:05-0:10"
 

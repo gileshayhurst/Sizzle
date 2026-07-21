@@ -77,3 +77,38 @@ def test_transcript_block_is_cached_and_prompt_block_is_not():
     assert blocks[0]["cache_control"] == {"type": "ephemeral"}
     assert "topic prompt" in blocks[1]["text"]
     assert "cache_control" not in blocks[1]
+
+
+def test_rich_tier_appends_rich_clause_to_system_prompt():
+    """query_claude with tier='rich' sends a system prompt that mentions end timestamps."""
+    with patch.object(claude_client, "_client") as mock_client:
+        mock_client.messages.create.return_value = _make_mock_response("none")
+        query_claude("transcript", "prompt", tier="rich")
+        system = mock_client.messages.create.call_args.kwargs["system"]
+    assert "end timestamp" in system.lower() or "start and end" in system.lower()
+
+
+def test_plain_tier_system_prompt_unchanged():
+    """query_claude with default tier='plain' sends the same system prompt as before."""
+    with patch.object(claude_client, "_client") as mock_client:
+        mock_client.messages.create.return_value = _make_mock_response("none")
+        query_claude("transcript", "prompt")
+        system_plain = mock_client.messages.create.call_args.kwargs["system"]
+    with patch.object(claude_client, "_client") as mock_client:
+        mock_client.messages.create.return_value = _make_mock_response("none")
+        query_claude("transcript", "prompt", tier="plain")
+        system_explicit_plain = mock_client.messages.create.call_args.kwargs["system"]
+    assert system_plain == system_explicit_plain
+
+
+def test_rich_system_prompt_is_superset_of_plain():
+    """Rich system prompt contains all of the plain prompt's instructions."""
+    with patch.object(claude_client, "_client") as mock_client:
+        mock_client.messages.create.return_value = _make_mock_response("none")
+        query_claude("t", "p")
+        plain_system = mock_client.messages.create.call_args.kwargs["system"]
+    with patch.object(claude_client, "_client") as mock_client:
+        mock_client.messages.create.return_value = _make_mock_response("none")
+        query_claude("t", "p", tier="rich")
+        rich_system = mock_client.messages.create.call_args.kwargs["system"]
+    assert plain_system in rich_system

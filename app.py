@@ -41,6 +41,7 @@ from shared import (
     filter_generated_reels as _filter_generated_reels,
     group_lines_into_segments as _group_lines_into_segments,
     lines_in_range as _lines_in_range,
+    transcript_tier as _transcript_tier,
 )
 import storage
 
@@ -240,9 +241,10 @@ def _run_analyze(folder: str, prompt: str) -> dict:
 
         transcript = _read_transcript(txt_path)
         all_lines = _parse_transcript_lines(transcript)
+        tier = _transcript_tier(all_lines)
 
         try:
-            response = query_claude(transcript, prompt)
+            response = query_claude(transcript, prompt, tier=tier)
             scored = parse_scored_timestamps(response) or []
         except Exception as exc:
             return vp.name, [], f"{vp.name}: {exc}"
