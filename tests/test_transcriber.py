@@ -27,8 +27,8 @@ def _word(word: str, start: float, end: float):
     return SimpleNamespace(word=word, start=start, end=end)
 
 
-def _segment(start: float, text: str, words=None):
-    return SimpleNamespace(start=start, end=start + 1.0, text=text, words=words)
+def _segment(start: float, text: str, words=None, end: float | None = None):
+    return SimpleNamespace(start=start, end=start + 1.0 if end is None else end, text=text, words=words)
 
 
 def _make_mock_model(segments):
@@ -39,9 +39,11 @@ def _make_mock_model(segments):
 
 
 def test_formats_single_segment():
+    # No word timestamps -> falls back to segment start/end, so the rich
+    # [start-end] range still comes through (segment.end is always present).
     model = _make_mock_model([_segment(5.0, "Hello there")])
     result = transcribe_video("video.mp4", model=model)
-    assert result == "[0:05] Speaker: Hello there"
+    assert result == "[0:05-0:06] Speaker: Hello there"
 
 
 def test_formats_multiple_segments():
@@ -50,13 +52,13 @@ def test_formats_multiple_segments():
         _segment(65.0, "And then she said"),
     ])
     result = transcribe_video("video.mp4", model=model)
-    assert result == "[0:05] Speaker: Hello there\n[1:05] Speaker: And then she said"
+    assert result == "[0:05-0:06] Speaker: Hello there\n[1:05-1:06] Speaker: And then she said"
 
 
 def test_strips_whitespace_from_segment_text():
     model = _make_mock_model([_segment(0.0, "  padded  ")])
     result = transcribe_video("video.mp4", model=model)
-    assert result == "[0:00] Speaker: padded"
+    assert result == "[0:00-0:01] Speaker: padded"
 
 
 def test_requests_word_timestamps():
@@ -80,6 +82,7 @@ def test_segment_to_dict_maps_word_objects():
     d = _segment_to_dict(seg)
     assert d == {
         "start": 2.0,
+        "end": 3.0,
         "text": "Hi there.",
         "words": [
             {"word": "Hi", "start": 2.0, "end": 2.3},
@@ -92,7 +95,7 @@ def test_segment_to_dict_handles_no_words():
     from transcriber import _segment_to_dict
     seg = _segment(1.0, "No words", words=None)
     d = _segment_to_dict(seg)
-    assert d == {"start": 1.0, "text": "No words", "words": []}
+    assert d == {"start": 1.0, "end": 2.0, "text": "No words", "words": []}
 
 
 # --- _split_into_sentences ---
@@ -102,9 +105,11 @@ def _make_word(word: str, start: float, end: float) -> dict:
 
 
 def test_split_falls_back_to_segment_level_when_no_words():
+    # No "end" key in the segment dict either -> end comes back None, which
+    # transcribe_video's caller treats as "no rich range available".
     segment = {"start": 5.0, "text": "Hello there"}
     result = _split_into_sentences(segment)
-    assert result == [(5.0, "Hello there")]
+    assert result == [(5.0, None, "Hello there")]
 
 
 def test_split_single_sentence_with_words():
@@ -117,7 +122,7 @@ def test_split_single_sentence_with_words():
         ],
     }
     result = _split_into_sentences(segment)
-    assert result == [(5.0, "Hello there.")]
+    assert result == [(5.0, 5.8, "Hello there.")]
 
 
 def test_split_two_sentences_use_word_start_times():
@@ -132,7 +137,7 @@ def test_split_two_sentences_use_word_start_times():
         ],
     }
     result = _split_into_sentences(segment)
-    assert result == [(5.0, "First sentence."), (6.0, "Second one.")]
+    assert result == [(5.0, 5.8, "First sentence."), (6.0, 6.8, "Second one.")]
 
 
 def test_split_no_terminal_punctuation_flushes_as_one_entry():
@@ -146,7 +151,7 @@ def test_split_no_terminal_punctuation_flushes_as_one_entry():
         ],
     }
     result = _split_into_sentences(segment)
-    assert result == [(0.0, "No punctuation here")]
+    assert result == [(0.0, 1.0, "No punctuation here")]
 
 
 def test_split_exclamation_mark_ends_sentence():
@@ -159,7 +164,7 @@ def test_split_exclamation_mark_ends_sentence():
         ],
     }
     result = _split_into_sentences(segment)
-    assert result == [(0.0, "Wow!"), (1.0, "Amazing.")]
+    assert result == [(0.0, 0.4, "Wow!"), (1.0, 1.5, "Amazing.")]
 
 
 def test_transcribe_video_uses_word_timestamps_for_sentence_splitting():
@@ -177,4 +182,40 @@ def test_transcribe_video_uses_word_timestamps_for_sentence_splitting():
     ])
     model = _make_mock_model([seg])
     result = transcribe_video("video.mp4", model=model)
-    assert result == "[0:10] Speaker: The miso soup was great.\n[0:12] Speaker: Now for the yellowtail."
+    assert result == (
+        "[0:10-0:12] Speaker: The miso soup was great.\n"
+        "[0:12-0:13] Speaker: Now for the yellowtail."
+    )
+
+
+def test_split_into_sentences_returns_start_and_end():
+    from transcriber import _split_into_sentences
+    seg = {
+        "start": 0.0, "text": "One. Two.",
+        "words": [
+            {"word": "One.", "start": 0.0, "end": 1.5},
+            {"word": " Two.", "start": 2.0, "end": 3.5},
+        ],
+    }
+    assert _split_into_sentences(seg) == [(0.0, 1.5, "One."), (2.0, 3.5, "Two.")]
+
+
+def test_transcribe_emits_rich_lines_with_ceiled_ends():
+    from transcriber import transcribe_video
+
+    class FakeWord:
+        def __init__(self, word, start, end):
+            self.word, self.start, self.end = word, start, end
+
+    class FakeSegment:
+        start, end, text = 0.0, 3.9, "Hello there."
+        words = [FakeWord("Hello", 0.2, 1.0), FakeWord(" there.", 1.1, 3.9)]
+
+    class FakeModel:
+        def transcribe(self, path, **kw):
+            return [FakeSegment()], None
+
+    out = transcribe_video("ignored.mp4", model=FakeModel())
+    # start floors to 0:00, end CEILS to 0:04 — never truncate an end or the
+    # last word is clipped.
+    assert out == "[0:00-0:04] Speaker: Hello there."
