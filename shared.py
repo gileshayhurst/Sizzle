@@ -180,7 +180,7 @@ def expand_anchors(raw_text: str) -> str:
 
         # Validate: strictly increasing, each within [line_start, line_end).
         valid = (
-            anchor_secs[0] >= line_start
+            anchor_secs[0] > line_start
             and anchor_secs[-1] < line_end
             and all(anchor_secs[i] < anchor_secs[i + 1] for i in range(len(anchor_secs) - 1))
         )

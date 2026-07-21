@@ -658,6 +658,13 @@ def test_expand_anchors_idempotent():
     assert expand_anchors(once) == once
 
 
+def test_expand_anchors_anchor_at_turn_start_falls_back():
+    """Anchor exactly at line_start produces a zero-duration first chunk — falls back."""
+    # 0:04 == line_start, so the anchor is degenerate
+    raw = "[0:04-0:20] Participant: text [0:04] more."
+    assert expand_anchors(raw) == raw
+
+
 def test_expand_anchors_multi_line_passthrough_intact():
     """Multi-line input: only anchored lines change; others pass through."""
     raw = "[0:00] Interviewer: How was it?\n[0:04-0:20] Participant: Good. [0:09] Very good."
