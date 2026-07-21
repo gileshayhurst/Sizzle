@@ -767,3 +767,89 @@ def test_lines_in_range_plain_tier_unchanged_regression():
     ]
     result = lines_in_range(lines, 9.0, 20.0)
     assert set(r["seconds"] for r in result) == {9.0, 20.0}
+
+
+# ---------------------------------------------------------------------------
+# Outcome measurement and cross-service determinism
+# ---------------------------------------------------------------------------
+
+
+def test_rich_analysis_yields_shorter_clips_than_plain_for_same_content():
+    """The core claim: rich-tier matching produces less total clip duration than
+    plain-tier for the same content and the same Claude range.
+
+    Uses lines_in_range + group_lines_into_segments directly — no Claude call.
+    """
+    from shared import lines_in_range, group_lines_into_segments, normalize_transcript
+
+    # Rich: three sentence-level lines; only the middle one is relevant.
+    rich_transcript = (
+        "[0:00-0:13] Participant: I don't have strong feelings either way.\n"
+        "[0:14-0:19] Participant: The service was absolutely exceptional.\n"
+        "[0:20-0:30] Participant: Everything else was pretty standard."
+    )
+    # Plain: same content as one turn starting at 0:14.  normalize_transcript
+    # splits it into three sentences with interpolated timestamps (using
+    # SPEAKING_RATE=2.0 and TAIL_BUFFER=1.0, span≈9.5s): sentence 1 lands at
+    # [0:14], sentence 2 at ~[0:16], sentence 3 at ~[0:19].  All three fall
+    # inside the plain predicate range [13.5, 19.5], so the trailing run hits
+    # MAX_CLIP_SECONDS (40s), producing a much longer clip than rich's exact 5s.
+    plain_transcript = (
+        "[0:14] Participant: I don't have strong feelings either way. "
+        "The service was absolutely exceptional. "
+        "Everything else was pretty standard."
+    )
+
+    # Simulate what Claude would return for "service quality": the money quote.
+    claude_start, claude_end = 14.0, 19.0
+
+    rich_lines = parse_transcript_lines(rich_transcript)
+    plain_lines = parse_transcript_lines(normalize_transcript(plain_transcript))
+
+    rich_matched = lines_in_range(rich_lines, claude_start, claude_end)
+    plain_matched = lines_in_range(plain_lines, claude_start, claude_end)
+
+    rich_segs = group_lines_into_segments(rich_lines, {l["raw"] for l in rich_matched})
+    plain_segs = group_lines_into_segments(plain_lines, {l["raw"] for l in plain_matched})
+
+    rich_dur = sum(e - s for s, e in rich_segs)
+    plain_dur = sum(e - s for s, e in plain_segs)
+
+    assert rich_dur < plain_dur, (
+        f"Rich ({rich_dur:.1f}s) should produce shorter clips than plain ({plain_dur:.1f}s)"
+    )
+    # Rich clips the exact sentence: 0:19 - 0:14 = 5s.
+    import pytest
+    assert rich_dur == pytest.approx(5.0, abs=0.1)
+
+
+def test_anchored_transcript_expand_anchors_is_idempotent_cross_service():
+    """expand_anchors must be idempotent — the cross-service safety property.
+
+    Both app.py and generator_app.py call read_transcript independently.
+    If expand_anchors(expand_anchors(x)) != expand_anchors(x), the two
+    services would produce different raw strings and selections would stop
+    matching silently.
+    """
+    from shared import expand_anchors, parse_transcript_lines, transcript_tier
+
+    anchored = (
+        "[0:04-0:20] Participant: text about thing. "
+        "[0:09] More detail here. [0:14] Final point."
+    )
+
+    first_pass = expand_anchors(anchored)
+    second_pass = expand_anchors(first_pass)
+
+    assert first_pass == second_pass, (
+        "expand_anchors is not idempotent — cross-service raw identity will break"
+    )
+
+    # The expanded output must be classified rich (all lines have end timestamps).
+    lines = parse_transcript_lines(first_pass)
+    assert transcript_tier(lines) == "rich"
+
+    # Raw strings must be stable across two independent calls (simulates two services).
+    raws_a = [l["raw"] for l in lines]
+    raws_b = [l["raw"] for l in parse_transcript_lines(expand_anchors(anchored))]
+    assert raws_a == raws_b
