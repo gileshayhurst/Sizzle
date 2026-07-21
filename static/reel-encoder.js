@@ -340,7 +340,9 @@ window.ReelEncoder = {
           ts = next;
           log(`✓ Clip ${i + 1} done`);
         } else {
-          log(`⚠ Clip ${i + 1} skipped — ${seg.video_name} is shorter than ${seg.start_sec.toFixed(1)}s`);
+          // /plan serialises this field as `video` (generator_app.py), not
+          // `video_name` — reading the latter printed "undefined".
+          log(`⚠ Clip ${i + 1} skipped — ${seg.video} is shorter than ${seg.start_sec.toFixed(1)}s`);
         }
       }
 
