@@ -418,6 +418,13 @@ function _clearSelections() {
   state.pool = [];
   state.poolOrdered = [];
   state.sliderCustom = false;
+  // Refresh the UI derived from the Sets we just emptied. Without this the
+  // sidebar badges keep their pre-generation "N checked" text while the
+  // transcript renders nothing selected, and Generate stays enabled with an
+  // empty selection. Done here rather than in the New Reel handler so it
+  // covers both generation paths, which each call this independently.
+  state.files.forEach(f => refreshBadge(f.name));
+  updateGenerateBtn();
   $('reel-length-row')?.classList.add('hidden');
   $('analyze-add-row')?.classList.add('hidden');
   const addInput = $('analyze-add-input');
