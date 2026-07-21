@@ -146,4 +146,42 @@ def test_collect_caption_lines_selected_respondent_in_range():
     ]
     selected = {"a", "c", "d"}
     got = collect_caption_lines(all_lines, selected, 10.0, 16.0)
-    assert got == [{"text": "picked", "seconds": 10.0}]
+    assert got == [{"text": "picked", "seconds": 10.0, "end_seconds": None}]
+
+
+def test_collect_caption_lines_carries_end_seconds():
+    from shared import parse_transcript_lines
+    from captions import collect_caption_lines
+    lines = parse_transcript_lines("[0:05-0:09] Participant: A short answer.")
+    out = collect_caption_lines(lines, {lines[0]["raw"]}, 0.0, 60.0)
+    assert out[0]["end_seconds"] == 9.0
+
+
+def test_rich_cue_ends_at_the_sentence_end_not_the_next_line():
+    from captions import build_webvtt
+    segments = [{
+        "start_sec": 0.0,
+        "end_sec": 30.0,
+        "caption_lines": [
+            {"text": "First answer.", "seconds": 0.0, "end_seconds": 4.0},
+            {"text": "Second answer.", "seconds": 20.0, "end_seconds": 24.0},
+        ],
+    }]
+    vtt = build_webvtt(segments, title_card_duration=0.0)
+    # The first cue must end at 4s (its real end), NOT at 20s (the next line's
+    # start), which is what proportional windowing produced.
+    assert "00:00:00.000 --> 00:00:04.000" in vtt
+
+
+def test_plain_cue_still_runs_to_the_next_line():
+    from captions import build_webvtt
+    segments = [{
+        "start_sec": 0.0,
+        "end_sec": 30.0,
+        "caption_lines": [
+            {"text": "First answer.", "seconds": 0.0},
+            {"text": "Second answer.", "seconds": 20.0},
+        ],
+    }]
+    vtt = build_webvtt(segments, title_card_duration=0.0)
+    assert "00:00:00.000 --> 00:00:06.000" in vtt  # capped by MAX_CUE_SEC

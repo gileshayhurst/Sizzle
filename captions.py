@@ -58,7 +58,11 @@ def collect_caption_lines(all_lines, selected_raws, seg_start, seg_end):
     even if a user manually selected one.
     """
     return [
-        {"text": line["text"], "seconds": line["seconds"]}
+        {
+            "text": line["text"],
+            "seconds": line["seconds"],
+            "end_seconds": line.get("end_seconds"),
+        }
         for line in all_lines
         if line["raw"] in selected_raws
         and not line.get("is_interviewer")
@@ -96,10 +100,12 @@ def build_webvtt(segments, title_card_duration: float = _DEFAULT_TITLE_CARD_DURA
         clip_end = clip_start + clip_dur
         lines = seg.get("caption_lines", [])
         for i, line in enumerate(lines):
-            # The line's on-screen window: from its source time to the next
-            # selected line's start (same segment) or the clip end.
+            # Rich: the sentence's own end. Plain: the next selected line's
+            # start, or the clip end.
             win_start = clip_start + (line["seconds"] - seg["start_sec"])
-            if i + 1 < len(lines):
+            if line.get("end_seconds") is not None:
+                win_end = clip_start + (line["end_seconds"] - seg["start_sec"])
+            elif i + 1 < len(lines):
                 win_end = clip_start + (lines[i + 1]["seconds"] - seg["start_sec"])
             else:
                 win_end = clip_end
@@ -120,7 +126,13 @@ def build_webvtt(segments, title_card_duration: float = _DEFAULT_TITLE_CARD_DURA
                 cue_start = win_start + window * (acc / total)
                 acc += _vlen(c)
                 nominal_end = win_start + window * (acc / total)
-                cue_end = min(nominal_end, cue_start + MAX_CUE_SEC)
+                # MAX_CUE_SEC exists to stop a caption lingering when the window
+                # was guessed. With a real end the window is exact, so the cap
+                # would only truncate a correct cue.
+                if line.get("end_seconds") is not None:
+                    cue_end = nominal_end
+                else:
+                    cue_end = min(nominal_end, cue_start + MAX_CUE_SEC)
                 if cue_end <= cue_start:
                     continue
                 cues.append((cue_start, cue_end, c))
