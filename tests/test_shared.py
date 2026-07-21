@@ -741,16 +741,20 @@ def test_lines_in_range_rich_exactly_half_overlap_excluded():
     assert len(result) == 0
 
 
-def test_lines_in_range_rich_fallback_for_missing_end():
-    """Rich file but a line missing end_seconds falls back to plain predicate."""
-    # Mix: one well-formed rich line, one missing end_seconds (e.g. interviewer with no end)
-    rich_line = _make_line(10, end_seconds=20)
-    no_end_line = _make_line(12, end_seconds=None)  # missing end → plain fallback
-    # plain predicate: 12 is inside [11.5, 20.5] → included
-    lines = [rich_line, no_end_line]
+def test_lines_in_range_mixed_respondents_without_end_degrade_to_plain():
+    """A respondent line without end_seconds causes transcript_tier to return plain,
+    so all lines in that file use the plain predicate (no per-line rich fallback)."""
+    # One line with end, one without — tier will be "plain" because not ALL have ends.
+    line_with_end = _make_line(10, end_seconds=20)
+    line_without_end = _make_line(12, end_seconds=None)
+    lines = [line_with_end, line_without_end]
+
+    # Both use plain predicate: seconds must be in [start-0.5, end+0.5]
+    # line_with_end at 10s: 10 < 12-0.5=11.5 → excluded
+    # line_without_end at 12s: 11.5 ≤ 12 ≤ 20.5 → included
     result = lines_in_range(lines, 12.0, 20.0)
-    # no_end_line at 12s: plain predicate 12 >= 12-0.5=11.5 ✓ and 12 <= 20+0.5 ✓ → included
-    assert no_end_line in result
+    assert line_without_end in result
+    assert line_with_end not in result
 
 
 def test_lines_in_range_plain_tier_unchanged_regression():

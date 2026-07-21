@@ -122,12 +122,8 @@ def lines_in_range(
 
     Rich tier: a line is included when its speech interval
     [seconds, end_seconds] overlaps Claude's range by more than
-    MIN_LINE_OVERLAP_RATIO of the line's own duration. This excludes a 34s line
-    that merely grazes the range at its first second, and includes a line that
-    starts just before the range but lies almost entirely inside it.
-
-    A line with end_seconds=None inside a rich file falls back to the plain
-    predicate (possible on interviewer lines whose ends are rarely present).
+    MIN_LINE_OVERLAP_RATIO of the line's own duration. transcript_tier guarantees
+    every respondent line has end_seconds when tier is "rich".
 
     Interviewer lines are always excluded.
     """
@@ -136,7 +132,7 @@ def lines_in_range(
     for line in all_lines:
         if line.get("is_interviewer"):
             continue
-        if tier == "rich" and line.get("end_seconds") is not None:
+        if tier == "rich":
             line_dur = line["end_seconds"] - line["seconds"]
             if line_dur <= 0:
                 continue
