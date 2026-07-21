@@ -40,6 +40,7 @@ from shared import (
     parse_transcript_lines as _parse_transcript_lines,
     filter_generated_reels as _filter_generated_reels,
     group_lines_into_segments as _group_lines_into_segments,
+    lines_in_range as _lines_in_range,
 )
 import storage
 
@@ -251,19 +252,13 @@ def _run_analyze(folder: str, prompt: str) -> dict:
             start_str, end_str = seg.split("-", 1)
             start_sec = parse_timestamp_to_seconds(start_str)
             end_sec = parse_timestamp_to_seconds(end_str)
-            seg_line_dicts = [
-                line for line in all_lines
-                if not line.get("is_interviewer")  # analyze never auto-selects the interviewer
-                and start_sec - 0.5 <= line["seconds"] <= end_sec + 0.5
-            ]
+            seg_line_dicts = _lines_in_range(all_lines, start_sec, end_sec)
             lines = list(dict.fromkeys(d["raw"] for d in seg_line_dicts))
             if not lines:
                 continue  # segment mapped to no respondent lines — drop it
             # The create-screen length estimate must match the clip the generator
-            # will actually cut. Claude's end timestamp is only the *start* of the
-            # last line, so the duration comes from the same shared grouping the
-            # generator uses (shared.group_lines_into_segments) rather than
-            # end_sec - start_sec.
+            # will actually cut. The clip duration comes from the same shared
+            # grouping the generator uses (shared.group_lines_into_segments).
             #
             # Group over the FULL line list, not just this candidate's lines.
             # The clip end is the first unselected line after the run, which

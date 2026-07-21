@@ -861,3 +861,25 @@ def test_analyze_estimate_is_bounded_by_the_next_line(client, tmp_path):
         f"{seg['duration_seconds']}s"
     )
     assert seg["duration_seconds"] < MAX_CLIP_SECONDS
+
+
+def test_analyze_uses_lines_in_range_not_inline_predicate(tmp_path):
+    """_run_analyze must not use the old inline start-only predicate; it must
+    call lines_in_range from shared so plain-tier results are identical to before."""
+    import app as app_module
+    # A plain-tier transcript: one line at 0:10
+    (tmp_path / "vid.mp4").touch()
+    (tmp_path / "vid.txt").write_text("[0:10] Participant: The food was amazing.", encoding="utf-8")
+
+    with (
+        patch("app.scan_videos", return_value=[tmp_path / "vid.mp4"]),
+        patch("app.query_claude", return_value="0:10-0:15|8"),
+        patch("app._filter_generated_reels", side_effect=lambda v: v),
+        patch("storage.load_library", return_value=[]),
+    ):
+        result = app_module._run_analyze(str(tmp_path), "food quality")
+
+    assert "vid.mp4" in result.get("segments", {})
+    segs = result["segments"]["vid.mp4"]
+    assert len(segs) == 1
+    assert "[0:10] Participant: The food was amazing." in segs[0]["lines"]
