@@ -9,7 +9,8 @@
   <script>
     window.__CONFIG__ = {
       mode: "{{ app_mode }}",
-      generatorUrl: "{{ generator_url }}"
+      generatorUrl: "{{ generator_url }}",
+      encoderUrl: "{{ encoder_url }}"
     };
   </script>
 </head>
@@ -331,5 +332,6 @@
 </div>
 <script src="/static/app.js"></script>
 <script type="module" src="/static/reel-encoder.js"></script>
+<script type="module" src="/static/transcript-encoder.js"></script>
 </body>
 </html>

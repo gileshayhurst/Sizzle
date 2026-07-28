@@ -11,6 +11,8 @@ services:
         sync: false
       - key: GENERATOR_URL
         sync: false
+      - key: ENCODER_URL
+        sync: false
       - key: S3_BUCKET
         sync: false
       - key: S3_ACCESS_KEY
@@ -38,5 +40,23 @@ services:
         sync: false
       # Comma-separated frontend origin(s) allowed for cross-origin requests.
       # Leave unset to keep CORS permissive (e.g. local/dev).
+      - key: ALLOWED_ORIGINS
+        sync: false
+
+  # Transcript encoder. Standalone (see encoder/README.md) — it can be moved to
+  # another host without touching the two services above; the only contract is
+  # the transcript file format.
+  #
+  # NOT on the free plan: the fallback path holds a Whisper model in memory and
+  # will OOM at 512 MB. Once the browser-side ASR path (plan 2b) is primary this
+  # service only handles fallbacks, and the plan is worth revisiting.
+  - type: web
+    name: sizzle-encoder
+    runtime: docker
+    dockerfilePath: ./encoder/Dockerfile
+    plan: starter
+    envVars:
+      - key: ENCODER_MODEL_SIZE
+        value: base
       - key: ALLOWED_ORIGINS
         sync: false
