@@ -145,6 +145,8 @@ Produces the **rich** transcripts `shared.py` consumes. Imports nothing from `ap
 
 **The ASR is an anchor source, not a transcript source.** Forven supplies every word in the output; the ASR only says when it was spoken. This is why `tiny` matches `base` on anchored-sentence count (47/48 on the reference interview), and why the browser path is viable. Measured turn-start drift against Forven's own timestamps is a median −0.06s, so there is **no clock offset to correct** — do not add one.
 
+**`match_rate` is a truncation alarm.** Text that isn't in the video cannot anchor to it, so a low match rate usually means a short recording rather than bad alignment. Ten of the 11 reference interviews scored 90–100%; the outlier at 51.4% is session `4e7ccf39`, an 8:21 recording of a 14:15 conversation. Below ~85%, check the recording is complete before suspecting the encoder.
+
 ## Persistence files (project root, gitignored)
 
 - `sizzle_library.json` — generated reel entries: `id`, `path`, `filename`, `title`, `notes`, `prompt`, `duration_seconds`, `clip_count`, `segment_starts`, `created_at`, `reel_s3_key` (cloud only), `captions_filename` (local `.vtt` sidecar name) / `captions_key` (cloud VTT object key) — both optional, present only when the reel has captions

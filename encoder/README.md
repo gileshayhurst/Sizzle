@@ -42,6 +42,21 @@ matched words, and `tiny` scored the same as `base` on that metric — a sentenc
 needs only one matched word to be pinned. Turn-start drift against Forven's own
 timestamps was a median −0.06s, so there is no clock offset to correct.
 
+## Match rate is a truncation alarm
+
+A low `match_rate` usually means **the video is shorter than the transcript**, not
+that alignment is bad: text that isn't in the video cannot anchor to it.
+
+Measured across the 11 reference interviews, ten scored 90–100%. The one outlier
+scored 51.4% — session `4e7ccf39`, whose recording is 8:21 against a 14:15
+transcript. So treat anything below ~85% as "check whether the recording is
+complete" before suspecting the encoder.
+
+Sentences past the end of the video fall back to interpolated times and can
+therefore point past the media. That degrades safely — `group_lines_into_segments`
+clamps to `video_duration`, and the browser encoder clamps via `computeDuration()`
+— but such clips are worthless, so a truncated source is worth catching here.
+
 ## Env
 
 - `ENCODER_MODEL_SIZE` — whisper size for the fallback path (default `base`)
