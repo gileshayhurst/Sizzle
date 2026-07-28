@@ -11,6 +11,12 @@
 **Spec:** `docs/superpowers/specs/2026-07-28-rich-transcript-encoder-design.md`
 **Precedes:** plan `2026-07-28-rich-transcript-encoder.md` (core, CLI, service — complete)
 
+**Status: 2a and 2b COMPLETE** (2026-07-28, commits `d191948`, `ef9696b`, `b949e7e`). Verified
+in-browser end to end: `path=browser-webgpu`, real word timings, correct rich output. Two defects
+were found only by running it — the `.web.` build's unresolvable bare specifier, and the
+onnx-community export's missing cross-attentions (see CLAUDE.md). Task 8 (right-sizing the encoder
+service now that it only handles fallbacks) is **not** done.
+
 ---
 
 ## Why 2a before 2b
