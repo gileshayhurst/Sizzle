@@ -134,6 +134,17 @@ Switches between local filesystem and S3/R2 based on `APP_MODE` env var. Both ba
 - **`timestamp_parser.py`** — `parse_scored_timestamps()`: extracts `M:SS-M:SS|score` pairs from Claude's response with a regex; missing scores default to 5, out-of-range scores clamp to 1..10.
 - **`video_editor.py`** — `extract_clip()`: re-encodes to H.264/AAC (required — stream copy produces P/B-frame starts that freeze on playback). In one pass it also, when asked, burns the identification overlay (`title_lines`, fading top `drawtext`), a remaining-time countdown timer (`show_timer`, top-right), and symmetric `fade_in_secs`/`fade_out_secs` video+audio fades. `stitch_clips()`: concat demuxer with `-c copy` (safe because clips are I-frame-aligned). `_title_alpha_expr()`, `_timer_drawtext_filters()`, `get_video_dimensions()`, `parse_timestamp_to_seconds()`.
 
+### Transcript encoder — `encoder/` (standalone)
+
+Produces the **rich** transcripts `shared.py` consumes. Imports nothing from `app.py` / `generator_app.py` / `shared.py`; the only contract is the file format, so it deploys independently. See `encoder/README.md`.
+
+- `encoder/core/` — pure: `forven` (parse/split) → `reconcile` (difflib align ASR words onto Forven text) → `emit` (rich lines, ceil-end, monotonicity clamp). `core.encode()` is the public API and the **single implementation** of the algorithm, shared by CLI, service, and the browser path.
+- `encoder/asr/local.py` — faster-whisper word stream. Decodes `.webm`/`.mp4` directly via PyAV, so this package needs **no ffmpeg**.
+- `encoder/service.py` — `POST /encode/words` (browser did the ASR, ~30 KB) and `POST /encode` (audio fallback, ~0.7 MB). **Never send video to it** — keeping video off this service is the reason it exists.
+- `encoder/cli.py` — `python -m encoder <folder>`. Writes `<video>.rich.txt`; `--in-place` preserves the original as `<video>.forven.txt`.
+
+**The ASR is an anchor source, not a transcript source.** Forven supplies every word in the output; the ASR only says when it was spoken. This is why `tiny` matches `base` on anchored-sentence count (47/48 on the reference interview), and why the browser path is viable. Measured turn-start drift against Forven's own timestamps is a median −0.06s, so there is **no clock offset to correct** — do not add one.
+
 ## Persistence files (project root, gitignored)
 
 - `sizzle_library.json` — generated reel entries: `id`, `path`, `filename`, `title`, `notes`, `prompt`, `duration_seconds`, `clip_count`, `segment_starts`, `created_at`, `reel_s3_key` (cloud only), `captions_filename` (local `.vtt` sidecar name) / `captions_key` (cloud VTT object key) — both optional, present only when the reel has captions
