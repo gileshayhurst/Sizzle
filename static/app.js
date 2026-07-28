@@ -2702,11 +2702,21 @@ $('folder-badge').addEventListener('click', async (e) => {
       try {
         setBar('transcribe-bar', 0);
         $('transcribe-log').textContent = `⟳ ${label} — extracting audio`;
-        const pcm = await enc.extractAudio(video, p => setBar('transcribe-bar', Math.round(p * 60)));
 
-        $('transcribe-log').textContent = `⟳ ${label} — aligning to the transcript`;
-        setBar('transcribe-bar', 70);
-        const { rich, stats } = await enc.encodeViaServer(pcm, text, ENCODER_URL);
+        const { rich, stats, path } = await enc.encodePair(video, text, ENCODER_URL, {
+          onProgress: (m) => {
+            if (m.phase === 'audio') {
+              setBar('transcribe-bar', Math.round(m.fraction * 30));
+            } else if (m.phase === 'model') {
+              $('transcribe-log').textContent = `⟳ ${label} — loading the speech model (first run only)`;
+              setBar('transcribe-bar', 30 + Math.round(m.fraction * 30));
+            } else {
+              $('transcribe-log').textContent = `⟳ ${label} — finding word timings`;
+              setBar('transcribe-bar', 70);
+            }
+          },
+          onLog: (m) => { $('transcribe-log').textContent = `⟳ ${label} — ${m}`; },
+        });
 
         await _putText(uploads[transcript.name], rich);
         const originalKey = `${enc.stem(transcript.name)}.forven.txt`;
@@ -2719,7 +2729,7 @@ $('folder-badge').addEventListener('click', async (e) => {
         const pct = Math.round((stats.match_rate || 0) * 100);
         const warning = pct < 85 ? ' ⚠ low match — check the recording is complete' : '';
         $('transcribe-log').textContent =
-          `✓ ${label} — ${stats.sentences} sentences, ${pct}% match${warning}`;
+          `✓ ${label} — ${stats.sentences} sentences, ${pct}% match (${path})${warning}`;
       } catch (err) {
         $('transcribe-log').textContent = `⚠ ${label} — timing pass skipped (${err.message})`;
       }

@@ -83,21 +83,99 @@ export async function encodeViaServer(pcm, transcriptText, encoderUrl, signal) {
   return response.json();
 }
 
+/** Whether this browser can run the ASR locally, and on what device. */
+export async function asrDevice() {
+  if (typeof Worker === 'undefined') return null;
+  if (typeof navigator !== 'undefined' && navigator.gpu) {
+    try {
+      if (await navigator.gpu.requestAdapter()) return 'webgpu';
+    } catch { /* fall through to wasm */ }
+  }
+  return typeof WebAssembly !== 'undefined' ? 'wasm' : null;
+}
+
+/**
+ * Run Whisper in a Worker and return a word stream.
+ *
+ * The audio never leaves the browser on this path -- only the resulting word
+ * list does, which is ~30 KB against ~8 MB of WAV.
+ */
+export function wordsInBrowser(pcm, device, onProgress = () => {}) {
+  return new Promise((resolve, reject) => {
+    const worker = new Worker('/static/transcript-asr-worker.js', { type: 'module' });
+    const finish = (fn, value) => { worker.terminate(); fn(value); };
+
+    worker.onmessage = (event) => {
+      const msg = event.data;
+      if (msg.type === 'progress') onProgress(msg);
+      else if (msg.type === 'done') finish(resolve, msg.words);
+      else if (msg.type === 'error') finish(reject, new Error(msg.message));
+    };
+    worker.onerror = (err) => finish(reject, new Error(err.message || 'ASR worker failed'));
+
+    // Transfer the PCM buffer rather than copying it -- it is ~28 MB for a
+    // 15-minute interview.
+    worker.postMessage({ pcm, device }, [pcm.buffer]);
+  });
+}
+
+/** Send a word stream plus the plain transcript to the encoder service. */
+export async function encodeViaWords(words, transcriptText, encoderUrl, signal) {
+  const response = await fetch(`${encoderUrl.replace(/\/$/, '')}/encode/words`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ transcript: transcriptText, words }),
+    signal,
+  });
+  if (!response.ok) {
+    const detail = await response.text().catch(() => '');
+    throw new Error(`Encoder failed (${response.status}) ${detail.slice(0, 200)}`);
+  }
+  return response.json();
+}
+
 /**
  * Encode one video/transcript pair end to end.
- * Returns { rich, stats } or null when the transcript is already rich.
+ * Returns { rich, stats, path } or null when the transcript is already rich.
+ *
+ * Prefers the browser path: zero server CPU, and the audio never leaves the
+ * client. Falls back to shipping the audio when the browser cannot run the
+ * model. Both paths hit the same encoder.core.encode on the server, so the
+ * alignment algorithm never forks.
  */
 export async function encodePair(video, transcriptText, encoderUrl, callbacks = {}) {
-  const { onProgress = () => {}, signal } = callbacks;
+  const { onProgress = () => {}, onLog = () => {}, signal } = callbacks;
   if (isRich(transcriptText)) return null;
 
-  const pcm = await extractAudio(video, onProgress);
-  return encodeViaServer(pcm, transcriptText, encoderUrl, signal);
+  const pcm = await extractAudio(video, p => onProgress({ phase: 'audio', fraction: p }));
+
+  const device = await asrDevice();
+  if (device) {
+    try {
+      const words = await wordsInBrowser(pcm, device, onProgress);
+      if (words.length) {
+        const result = await encodeViaWords(words, transcriptText, encoderUrl, signal);
+        return { ...result, path: `browser-${device}` };
+      }
+      onLog('Local transcription produced no words; sending audio instead.');
+    } catch (err) {
+      onLog(`Local transcription unavailable (${err.message}); sending audio instead.`);
+    }
+  }
+
+  // Fallback. pcm.buffer may have been transferred to the worker above, in
+  // which case re-extract rather than posting an empty buffer.
+  const audio = pcm.length ? pcm : await extractAudio(video);
+  const result = await encodeViaServer(audio, transcriptText, encoderUrl, signal);
+  return { ...result, path: 'server' };
 }
 
 window.TranscriptEncoder = {
   isSupported,
+  asrDevice,
   extractAudio,
+  wordsInBrowser,
+  encodeViaWords,
   encodeViaServer,
   encodePair,
   isRich,

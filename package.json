@@ -1,5 +1,6 @@
 {
   "dependencies": {
+    "@huggingface/transformers": "^4.2.0",
     "mediabunny": "^1.50.7"
   }
 }
