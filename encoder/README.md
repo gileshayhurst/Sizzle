@@ -42,6 +42,14 @@ matched words, and `tiny` scored the same as `base` on that metric — a sentenc
 needs only one matched word to be pinned. Turn-start drift against Forven's own
 timestamps was a median −0.06s, so there is no clock offset to correct.
 
+## Browser path dependencies
+
+Nothing for the ASR is vendored: the transformers.js library, the ONNX runtime and
+the whisper-tiny weights all load from the CDN, version-pinned in
+`static/transcript-asr-worker.js`. If the CDN is unreachable the browser path
+fails and the client falls back to `POST /encode` (or keeps its plain transcript
+when the fallback is disabled) — degraded, never broken.
+
 ## Match rate is a truncation alarm
 
 A low `match_rate` usually means **the video is shorter than the transcript**, not

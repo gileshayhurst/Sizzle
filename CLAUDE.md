@@ -146,10 +146,10 @@ Produces the **rich** transcripts `shared.py` consumes. Imports nothing from `ap
 - `static/transcript-encoder.js` + `static/transcript-asr-worker.js` — the cloud path. mediabunny extracts mono 16 kHz audio, whisper-tiny runs in a module Worker, and only a **~30 KB word list** goes to `/encode/words`. Falls back to posting ~8 MB of WAV to `/encode` when the browser can't run the model. Wired into `doUpload` in `app.js`; failure is non-fatal and leaves the plain transcript in place.
 
 **Two browser-only traps, both found by testing and both easy to reintroduce:**
-- Vendor `dist/transformers.min.js`, **not** `dist/transformers.web.min.js`. The `.web.` build carries a bare specifier (`from"onnxruntime-web/webgpu"`) that no browser resolves, and import maps do **not** apply to module workers.
+- Import `dist/transformers.min.js`, **not** `dist/transformers.web.min.js`. The `.web.` build carries a bare specifier (`from"onnxruntime-web/webgpu"`) that no browser resolves, and import maps do **not** apply to module workers. The worker pins the explicit dist path for this reason — don't "simplify" it to the bare package URL.
 - Use the **`Xenova/whisper-tiny.en`** export. `onnx-community/whisper-tiny.en` q8 is exported without cross-attentions, so `return_timestamps: 'word'` fails at inference with "Model outputs must contain cross attentions".
 
-Only the 558 KB library is vendored. The ONNX runtime (12–25 MB per variant) and model weights load from the transformers.js CDN — the app sets no CSP. Move both behind R2 if self-hosting is ever required.
+**Nothing for the ASR is vendored.** The library, the ONNX runtime (12–25 MB per variant) and the model weights all load from the transformers.js CDN, version-pinned — the app sets no CSP. Vendoring the 558 KB library while its runtime and weights came from the CDN anyway bought nothing, and GitHub secret-scanning false-positives on the minified blob (it reads WebGPU identifiers as a Mistral key). To self-host, move all three behind R2 and set `env.remoteHost` / `env.backends.onnx.wasm.wasmPaths`.
 
 **The ASR is an anchor source, not a transcript source.** Forven supplies every word in the output; the ASR only says when it was spoken. This is why `tiny` matches `base` on anchored-sentence count (47/48 on the reference interview), and why the browser path is viable. Measured turn-start drift against Forven's own timestamps is a median −0.06s, so there is **no clock offset to correct** — do not add one.
 

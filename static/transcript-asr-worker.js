@@ -10,11 +10,19 @@
  * interview it anchored as many sentences as `base` (47 of 48), because a
  * sentence needs only one matched word to be pinned.
  *
- * Model weights and the ONNX runtime load from the transformers.js default CDN.
- * The app sets no CSP, so this needs no build step. To self-host, put both
+ * The library, the ONNX runtime and the model weights all load from the CDN.
+ * The app sets no CSP, so this needs no build step. Vendoring only the 558 KB
+ * library while its 12-25 MB runtime and ~40 MB of weights came from the CDN
+ * anyway bought nothing, so it is not vendored. To self-host, put all three
  * behind R2 and set env.remoteHost / env.backends.onnx.wasm.wasmPaths.
+ *
+ * The explicit dist path is deliberate: dist/transformers.min.js bundles the
+ * ONNX runtime, whereas dist/transformers.web.min.js carries a bare specifier
+ * ("onnxruntime-web/webgpu") that no browser can resolve -- and import maps do
+ * not apply to module workers. Pinned to an exact version so a CDN-side major
+ * bump cannot silently change inference behaviour.
  */
-import { pipeline, env } from '/static/vendor/transformers.mjs';
+import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0/dist/transformers.min.js';
 
 // No local model server; fetch from the hub.
 env.allowLocalModels = false;
