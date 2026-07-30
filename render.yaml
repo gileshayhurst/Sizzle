@@ -79,11 +79,23 @@ services:
       - key: ENCODER_MODEL_SIZE
         value: tiny
       # Disabled: the free plan's 512 MB cannot safely hold a Whisper model, and
-      # an OOM would take the container down and interrupt other requests, where
-      # a 503 fails only that caller — who keeps their plain transcript and still
-      # gets a working reel. Set to 1 (and raise the plan) to serve browsers that
-      # cannot run the model at all.
+      # an OOM would take the whole container down. Nothing calls POST /encode
+      # since the browser ASR path was removed — it survives only as a manual
+      # escape hatch, so leave it off unless you deliberately want it and have
+      # raised the plan to suit.
       - key: ENCODER_AUDIO_FALLBACK
         value: "0"
       - key: ALLOWED_ORIGINS
+        sync: false
+      # ⚠️ REQUIRED BY THE ONE-OFF JOB, not by this web service.
+      # A job inherits its base service's environment, and encoder/job.py reads
+      # the session's videos and transcripts straight from R2. Without these the
+      # job dies immediately on a missing-key error.
+      - key: S3_BUCKET
+        sync: false
+      - key: S3_ACCESS_KEY
+        sync: false
+      - key: S3_SECRET_KEY
+        sync: false
+      - key: S3_ENDPOINT_URL
         sync: false
