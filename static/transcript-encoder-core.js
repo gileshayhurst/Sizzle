@@ -17,15 +17,20 @@ export const VIDEO_EXTS = ['.mp4', '.mov', '.avi', '.mkv', '.webm'];
 // stall with. Timing out instead degrades to a plain transcript, which still
 // produces a working reel.
 //
-// Measured on a 16-core desktop, single-threaded WASM: 6s of audio took ~5s,
-// so roughly 0.85x realtime. The 3x multiplier gives a weak client generous
-// headroom over that, and the base absorbs the one-off model download.
+// Calibrated against a REAL full-length interview, not extrapolated: a 19.4
+// minute interview (1164s of audio) took 1918s end to end on a 16-core desktop
+// with WebGPU -- about 1.65x realtime.
 //
-// ponytail: these are extrapolated from a 6-SECOND clip -- no full-length
-// interview has been measured. Calibrate once one has, rather than trusting
-// this arithmetic.
-export const ASR_TIMEOUT_BASE_MS = 120_000;
-export const ASR_TIMEOUT_PER_AUDIO_SEC_MS = 3_000;
+// That is roughly double what a 6-second clip predicted (0.85x), because
+// long-form chunked decoding does not scale linearly. The earlier 3s multiplier
+// left only 1.9x headroom, so a client merely twice as slow as that desktop
+// would have been cut off mid-encode. 8s ≈ 4.8x the measured rate.
+//
+// The budget is a backstop against an indefinite hang, not a UX target -- at
+// 1.65x realtime the browser path is slow enough that the server path is worth
+// preferring for long files regardless of this number.
+export const ASR_TIMEOUT_BASE_MS = 180_000;
+export const ASR_TIMEOUT_PER_AUDIO_SEC_MS = 8_000;
 
 /** Time budget for transcribing `audioSeconds` of audio in the browser. */
 export function asrTimeoutMs(audioSeconds) {

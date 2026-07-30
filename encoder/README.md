@@ -56,12 +56,37 @@ scale", which broke every browser without WebGPU. fp32 costs nothing at this
 model size — measured on a 6s clip, WASM (5.3s) beat WebGPU (6.4s) with identical
 output.
 
-**The browser ASR is time-bounded** (`asrTimeoutMs`: 120s base + 3s per second of
-audio, ~3.5x the measured rate). On expiry the worker is *terminated* — not just
-rejected, or it would keep burning CPU — and the client degrades to the audio
-fallback, or to its plain transcript. Calibrate these constants once a
-full-length interview has actually been measured; they are extrapolated from a
-6-second clip.
+**The browser ASR is time-bounded** (`asrTimeoutMs`: 180s base + 8s per second of
+audio). On expiry the worker is *terminated* — not just rejected, or it would keep
+burning CPU — and the client degrades to the audio fallback, or to its plain
+transcript.
+
+## ⚠️ Measured cost of the browser path at production length
+
+A **19.4 minute** interview, on a 16-core desktop with WebGPU:
+
+| | Browser (`tiny`, WebGPU) | Server (`base`, faster-whisper) |
+|---|---|---|
+| Wall time | **1918s (32 min)** | ~90s |
+| Rate | 1.65x realtime | ~0.08x realtime |
+| Sentences | 200 | 200 |
+| Exact anchors | 198 | 198 |
+| Word match | 93.13% | 93.1% |
+
+**Output is equivalent; speed is not.** The server is roughly **20x faster** for
+the same result, because `faster-whisper`/CTranslate2 is far better optimised than
+ONNX-in-a-browser.
+
+Two consequences:
+
+- The anchor-sufficiency thesis holds at full length — `tiny` in a browser matched
+  `base` on the server exactly (200/198/93.1%). Model size genuinely does not
+  matter for this job.
+- Making the browser primary trades ~90s of server CPU for **32 minutes of the
+  client's** time and battery, and a mid-range laptop or a WASM-only browser will
+  be slower still. For long interviews the server path is worth preferring; the
+  browser path is most defensible for short clips, for privacy-sensitive audio, or
+  when server CPU genuinely cannot be paid for.
 
 ## Match rate is a truncation alarm
 
