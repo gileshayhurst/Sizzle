@@ -1,5 +1,4 @@
 const GENERATOR_URL = (window.__CONFIG__ || {}).generatorUrl || 'http://localhost:5001';
-const ENCODER_URL   = (window.__CONFIG__ || {}).encoderUrl   || 'http://localhost:5002';
 const APP_MODE      = (window.__CONFIG__ || {}).mode || 'local';
 
 // ─── State ────────────────────────────────────────────────────────────────────
@@ -2655,84 +2654,64 @@ $('folder-badge').addEventListener('click', async (e) => {
   btnLoad.onclick = () => doUpload();
 
   /**
-   * Decide which uploads need a timing pass.
+   * Ask the server to encode this session's transcripts, and wait for it.
    *
-   * Reads each .txt (a few KB) to check whether it is already rich. Runs BEFORE
-   * /upload/prepare so the extra <stem>.forven.txt keys are presigned in the
-   * same round trip -- prepare mints a fresh session_key every call, so it
-   * cannot be asked for more URLs later in the same session.
+   * The work runs in a Render one-off job (encoder/job.py) rather than in this
+   * tab: ~20x faster for identical output, billed per second, scaling to zero.
+   * See sizzle_reel_design.md D5/D6.
+   *
+   * Waiting is the point. Selections are keyed by raw line text, so if the
+   * folder opened on plain transcripts and the job rewrote them to rich
+   * underneath, every restored selection would reference a line that no longer
+   * exists. Encoding before the folder opens removes that race entirely.
+   *
+   * Failure is non-fatal: a plain transcript still produces a working reel with
+   * looser clip boundaries, so nothing here may cost the user their upload.
    */
-  async function _planEncoding(files) {
-    const enc = window.TranscriptEncoder;
-    if (!enc || !enc.isSupported()) return [];
-    const pending = [];
-    for (const { video, transcript } of enc.pairFiles(files)) {
-      const text = await transcript.text();
-      if (!enc.isRich(text)) pending.push({ video, transcript, text });
-    }
-    return pending;
-  }
+  async function _encodeSession(sessionKey) {
+    const setLog = (msg) => { $('transcribe-log').textContent = msg; };
+    const POLL_MS = 5000;
+    const GIVE_UP_MS = 45 * 60 * 1000;
 
-  async function _putText(url, text) {
-    const resp = await fetch(url, {
-      method: 'PUT',
-      body: new Blob([text], { type: 'text/plain' }),
-    });
-    if (!resp.ok) throw new Error(`upload failed (${resp.status})`);
-  }
+    try {
+      $('transcribe-subtitle').textContent = 'Deriving precise transcript timings…';
+      setBar('transcribe-bar', 0);
+      setLog('⟳ starting the encoder…');
 
-  /**
-   * Turn plain transcripts into rich ones, in the browser, before the folder opens.
-   *
-   * Audio is extracted here and only the AUDIO reaches the encoder service --
-   * the video goes browser → R2 and nowhere else.
-   *
-   * Failure is deliberately non-fatal. A plain transcript still produces a
-   * working reel, just with looser clip boundaries, so a flaky encoder must
-   * never cost the user an upload they have already paid the bandwidth for.
-   */
-  async function _encodeTranscripts(pending, uploads) {
-    const enc = window.TranscriptEncoder;
-    if (!enc || !pending.length) return;
+      const resp = await fetch('/encode-session', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_key: sessionKey }),
+      });
+      const data = await _safeJson(resp);
+      if (!resp.ok) throw new Error(data.error || `dispatch failed (${resp.status})`);
+      if (data.skipped) { setLog('✓ transcripts already carry precise timings'); return; }
 
-    $('transcribe-subtitle').textContent = 'Deriving precise transcript timings…';
-    for (let i = 0; i < pending.length; i++) {
-      const { video, transcript, text } = pending[i];
-      const label = `${video.name} (${i + 1} / ${pending.length})`;
-      try {
-        setBar('transcribe-bar', 0);
-        $('transcribe-log').textContent = `⟳ ${label} — extracting audio`;
+      // The job is idempotent (it skips already-rich transcripts), so a lost
+      // poll or a duplicated dispatch cannot double-encode anything.
+      const started = Date.now();
+      while (Date.now() - started < GIVE_UP_MS) {
+        await new Promise(r => setTimeout(r, POLL_MS));
+        const statusResp = await fetch(`/encode-status/${encodeURIComponent(data.job_id)}`);
+        const status = await _safeJson(statusResp);
+        if (!statusResp.ok) throw new Error(status.error || 'lost track of the encoder');
 
-        const { rich, stats, path } = await enc.encodePair(video, text, ENCODER_URL, {
-          onProgress: (m) => {
-            if (m.phase === 'audio') {
-              setBar('transcribe-bar', Math.round(m.fraction * 30));
-            } else if (m.phase === 'model') {
-              $('transcribe-log').textContent = `⟳ ${label} — loading the speech model (first run only)`;
-              setBar('transcribe-bar', 30 + Math.round(m.fraction * 30));
-            } else {
-              $('transcribe-log').textContent = `⟳ ${label} — finding word timings`;
-              setBar('transcribe-bar', 70);
-            }
-          },
-          onLog: (m) => { $('transcribe-log').textContent = `⟳ ${label} — ${m}`; },
-        });
-
-        await _putText(uploads[transcript.name], rich);
-        const originalKey = `${enc.stem(transcript.name)}.forven.txt`;
-        if (uploads[originalKey]) await _putText(uploads[originalKey], text);
-
-        setBar('transcribe-bar', 100);
-        // A low match rate usually means the recording is SHORTER than the
-        // transcript, not that alignment went wrong -- text that isn't in the
-        // video cannot anchor to it.
-        const pct = Math.round((stats.match_rate || 0) * 100);
-        const warning = pct < 85 ? ' ⚠ low match — check the recording is complete' : '';
-        $('transcribe-log').textContent =
-          `✓ ${label} — ${stats.sentences} sentences, ${pct}% match (${path})${warning}`;
-      } catch (err) {
-        $('transcribe-log').textContent = `⚠ ${label} — timing pass skipped (${err.message})`;
+        if (status.status === 'succeeded') {
+          setBar('transcribe-bar', 100);
+          setLog('✓ precise timings derived');
+          return;
+        }
+        if (status.status === 'failed' || status.status === 'canceled') {
+          throw new Error(`encoder ${status.status}`);
+        }
+        const elapsed = Math.floor((Date.now() - started) / 60000);
+        setLog(`⟳ deriving timings… ${elapsed}m elapsed`);
+        setBar('transcribe-bar', Math.min(90, Math.round((Date.now() - started) / 3000)));
       }
+      throw new Error('encoder did not finish within 45 minutes');
+    } catch (err) {
+      setLog(`⚠ precise timings skipped (${err.message}) — using turn-level timings`);
+      await new Promise(r => setTimeout(r, 2500));
     }
   }
 
@@ -2747,19 +2726,14 @@ $('folder-badge').addEventListener('click', async (e) => {
     btnLoad.disabled = true;
 
     try {
-      // Step 0: work out which transcripts need a timing pass, so their
-      // <stem>.forven.txt keys can be presigned alongside everything else.
-      btnLoad.textContent = 'Preparing upload…';
-      const pending = await _planEncoding(selectedFiles);
-      const originalKeys = pending.map(
-        p => `${window.TranscriptEncoder.stem(p.transcript.name)}.forven.txt`
-      );
-
       // Step 1: validate filenames and get one presigned PUT URL per file.
+      // The encoder writes its own keys server-side, so nothing extra is
+      // presigned here.
+      btnLoad.textContent = 'Preparing upload…';
       const prepResp = await fetch('/upload/prepare', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ files: [...selectedFiles.map(f => f.name), ...originalKeys] }),
+        body: JSON.stringify({ files: selectedFiles.map(f => f.name) }),
       });
       const prepData = await _safeJson(prepResp);
       if (!prepResp.ok) {
@@ -2795,10 +2769,8 @@ $('folder-badge').addEventListener('click', async (e) => {
         $('transcribe-log').textContent = `✓ ${file.name} (${i + 1} / ${selectedFiles.length})`;
       }
 
-      // Step 2b: derive rich transcripts in the browser. Overwrites each
-      // <stem>.txt with the rich version and preserves the client's original
-      // as <stem>.forven.txt, mirroring the CLI's --in-place semantics.
-      await _encodeTranscripts(pending, uploads);
+      // Step 2b: encode this session's transcripts BEFORE the folder opens.
+      await _encodeSession(session_key);
 
       // Step 3: tell the server all uploads are done
       $('transcribe-subtitle').textContent = 'Finalising…';

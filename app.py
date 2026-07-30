@@ -5,7 +5,7 @@ import shutil
 import tempfile
 import threading
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 # Load ANTHROPIC_API_KEY from a .env file in the project root if not already set.
@@ -30,6 +30,7 @@ from flask import Flask, jsonify, render_template, request, send_file
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 
+import render_jobs
 from claude_client import query_claude
 from loader import scan_videos
 from timestamp_parser import parse_scored_timestamps
@@ -62,6 +63,33 @@ _model_lock = threading.Lock()
 _WHISPER_CACHE_DIR = os.environ.get(
     "WHISPER_CACHE_DIR", str(Path(__file__).parent / ".whisper_cache")
 )
+
+
+_VIDEO_KEY_SUFFIXES = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
+
+
+def _sessions_needing_encode(keys: list[str]) -> list[str]:
+    """Video keys in a session whose transcript is still plain-tier.
+
+    Mirrors encoder.job.find_pairs, but decides tier through
+    shared.transcript_tier so this app and the encoder agree on what "rich"
+    means. Used to check whether dispatching a job would do any work at all —
+    which keeps a repeat call free and stops an unauthenticated caller
+    manufacturing cost against arbitrary session keys.
+    """
+    texts = {k.rsplit(".", 1)[0]: k for k in keys if k.lower().endswith(".txt")}
+    pending = []
+    for key in keys:
+        stem, _, suffix = key.rpartition(".")
+        if f".{suffix.lower()}" not in _VIDEO_KEY_SUFFIXES or stem not in texts:
+            continue
+        try:
+            text = storage.read_file_bytes(texts[stem]).decode("utf-8-sig")
+        except Exception:
+            continue  # unreadable transcript: leave it alone rather than guess
+        if _transcript_tier(_parse_transcript_lines(text)) != "rich":
+            pending.append(key)
+    return sorted(pending)
 
 
 def _compute_transcription_parallelism(cpu_count: int, num_videos: int) -> tuple[int, int]:
@@ -497,7 +525,6 @@ def create_app(testing: bool = False) -> Flask:
             "index.html",
             app_mode=os.environ.get("APP_MODE", "local"),
             generator_url=os.environ.get("GENERATOR_URL", "http://localhost:5001"),
-            encoder_url=os.environ.get("ENCODER_URL", "http://localhost:5002"),
         )
 
     _VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
@@ -606,6 +633,78 @@ def create_app(testing: bool = False) -> Flask:
             "folder": session_key,
             "uploads": uploads,
         })
+
+    @app.post("/encode-session")
+    @limiter.limit("6 per minute")
+    def encode_session():
+        """Launch a Render one-off job that turns this session's plain Forven
+        transcripts into rich ones (design doc D5/D6).
+
+        Returns {"job_id": ..., "status": ...}, or {"skipped": true} when there is
+        nothing to do — which makes a repeat call free rather than expensive.
+
+        ⚠️ This app has no authentication, so §10's "platform-admin only" control
+        does not exist. What guards it: a rate limit, a fixed command template, a
+        validated session key, the requirement that the session exist and
+        actually need work, and a concurrency cap inside render_jobs.
+        """
+        if not storage.is_cloud():
+            return jsonify({"error": "This endpoint is only available in cloud mode"}), 400
+        if not render_jobs.is_configured():
+            return jsonify({"error": "Encoder jobs are not configured on this deployment"}), 503
+
+        session_key = (request.get_json(silent=True) or {}).get("session_key", "")
+        if not render_jobs.SESSION_KEY_RE.match(session_key):
+            return jsonify({"error": "A valid session_key is required"}), 400
+
+        # Only dispatch when the session really contains work. This is what stops
+        # an unauthenticated caller manufacturing cost against arbitrary keys, and
+        # it makes re-dispatch a no-op rather than a duplicate encode.
+        try:
+            keys = storage.list_keys(session_key)
+        except Exception as exc:
+            return jsonify({"error": f"Could not read the session: {exc}"}), 502
+        if not keys:
+            return jsonify({"error": "No such session"}), 404
+
+        pending = _sessions_needing_encode(keys)
+        if not pending:
+            return jsonify({"skipped": True, "reason": "all transcripts already rich"})
+
+        try:
+            job = render_jobs.create_encode_job(session_key)
+        except render_jobs.RenderError as exc:
+            return jsonify({"error": str(exc)}), 503
+
+        # Recorded so Render's job list can be reconciled against jobs this app
+        # launched — anything unmatched was started outside it (§10 detection).
+        try:
+            storage.write_json(f"{session_key}/encode_job.json", {
+                "job_id": job["job_id"],
+                "start_command": job["start_command"],
+                "plan_id": job["plan_id"],
+                "interviews": pending,
+                "dispatched_at": datetime.now(timezone.utc).isoformat(),
+            })
+        except Exception:
+            pass  # the job is already running; losing the audit note must not fail the request
+
+        return jsonify({"job_id": job["job_id"], "status": job["status"],
+                        "interviews": len(pending)})
+
+    @app.get("/encode-status/<job_id>")
+    @limiter.limit("120 per minute")
+    def encode_status(job_id):
+        """Poll an encoder job. The frontend blocks on this before opening the
+        folder, so a plain→rich swap can never land under an active session."""
+        if not render_jobs.is_configured():
+            return jsonify({"error": "Encoder jobs are not configured"}), 503
+        try:
+            return jsonify(render_jobs.get_job(job_id))
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        except render_jobs.RenderError as exc:
+            return jsonify({"error": str(exc)}), 502
 
     @app.post("/upload/commit")
     def upload_commit():

@@ -11,7 +11,13 @@ services:
         sync: false
       - key: GENERATOR_URL
         sync: false
-      - key: ENCODER_URL
+      # Launches the encoder one-off job (design doc D6). Without these,
+      # /encode-session returns 503 and uploads keep plain transcripts.
+      - key: RENDER_API_KEY
+        sync: false
+      - key: RENDER_ENCODER_SERVICE_ID
+        sync: false
+      - key: ENCODER_JOB_PLAN_ID
         sync: false
       - key: S3_BUCKET
         sync: false
