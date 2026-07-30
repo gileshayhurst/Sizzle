@@ -41,6 +41,12 @@ def encode_folder(folder, in_place: bool = False, size: str = DEFAULT_MODEL_SIZE
         log(f"encoding {video.name}")
         result = encode(text, words(video, size=size))
 
+        # Nothing anchored: writing an empty transcript would be worse than
+        # leaving the working plain one alone.
+        if result["stats"]["emitted"] == 0:
+            log(f"  no sentences anchored — leaving {plain.name} untouched")
+            continue
+
         if in_place:
             plain.replace(video.with_suffix(".forven.txt"))
             output = plain
@@ -49,7 +55,8 @@ def encode_folder(folder, in_place: bool = False, size: str = DEFAULT_MODEL_SIZE
         output.write_text(result["rich"] + "\n", encoding="utf-8")
 
         stats = result["stats"]
-        log(f"  {stats['sentences']} sentences, {stats['exact']} exact, "
+        dropped = f", {stats['dropped']} dropped" if stats["dropped"] else ""
+        log(f"  {stats['emitted']} of {stats['sentences']} sentences{dropped}, "
             f"{stats['match_rate']:.1%} word match -> {output.name}")
         results.append({"video": video, "output": output, "stats": stats})
     return results

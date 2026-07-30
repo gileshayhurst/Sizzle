@@ -37,11 +37,35 @@ def rich(aligned: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def measured(aligned: list[dict]) -> list[dict]:
+    """Only the sentences whose BOTH boundaries came from matched ASR words.
+
+    A sentence the ASR never matched gets an interpolated span in reconcile —
+    which is precisely the proportional interpolation D1 rejected as "will clip
+    words mid-syllable. Unacceptable for customer-facing output." Rather than
+    emit that alongside real timings and hope nobody selects it, it is dropped.
+
+    This is what makes transcript_tier == "rich" honest: the format promises
+    measured end times, so every line in the file must actually have one. Text
+    that failed to anchor is text that is not in the video, and is not clippable
+    in any case — the truncated reference interview drops 54 of 145 lines for
+    exactly that reason, and match_rate flags the file.
+    """
+    return [s for s in aligned if s["anchor"] == "exact"]
+
+
 def stats(aligned: list[dict], match_rate: float) -> dict:
-    """Per-file confidence summary, surfaced to the operator rather than stored."""
+    """Per-file summary, surfaced to the operator rather than stored.
+
+    `emitted` is what reaches the file; `exact`/`partial`/`unanchored` explain
+    why, and `dropped` is what did not survive.
+    """
+    exact = sum(1 for s in aligned if s["anchor"] == "exact")
     return {
         "sentences": len(aligned),
-        "exact": sum(1 for s in aligned if s["anchor"] == "exact"),
+        "emitted": exact,
+        "dropped": len(aligned) - exact,
+        "exact": exact,
         "partial": sum(1 for s in aligned if s["anchor"] == "partial"),
         "unanchored": sum(1 for s in aligned if s["anchor"] == "none"),
         "match_rate": round(match_rate, 4),

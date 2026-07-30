@@ -1,4 +1,4 @@
-from encoder.core.emit import rich, stats
+from encoder.core.emit import measured, rich, stats
 
 
 def sentence(text, start, end, role="Participant", anchor="exact", confidence=1.0):
@@ -58,5 +58,35 @@ def test_stats_counts_anchor_kinds():
         sentence("c", 2, 3, anchor="none", confidence=0.0),
     ], 0.9612)
     assert result == {
-        "sentences": 3, "exact": 1, "partial": 1, "unanchored": 1, "match_rate": 0.9612,
+        "sentences": 3, "emitted": 1, "dropped": 2,
+        "exact": 1, "partial": 1, "unanchored": 1, "match_rate": 0.9612,
     }
+
+
+# ── measured: never emit a timing we did not measure ──────────────────────────
+
+def test_measured_keeps_only_fully_anchored_sentences():
+    """An interpolated span is the very thing D1 rejected; it must not ship."""
+    aligned = [
+        sentence("real", 0, 1),
+        sentence("guessed", 1, 2, anchor="none", confidence=0.0),
+        sentence("half", 2, 3, anchor="partial", confidence=0.4),
+    ]
+    assert [s["text"] for s in measured(aligned)] == ["real"]
+
+
+def test_measured_of_nothing_anchored_is_empty():
+    aligned = [sentence("a", 0, 1, anchor="none"), sentence("b", 1, 2, anchor="none")]
+    assert measured(aligned) == []
+
+
+def test_rich_of_measured_lines_only():
+    aligned = [
+        sentence("Kept.", 4.0, 6.0),
+        sentence("Invented.", 6.0, 9.0, anchor="none"),
+        sentence("Also kept.", 10.0, 12.0),
+    ]
+    assert rich(measured(aligned)).splitlines() == [
+        "[0:04-0:06] Participant: Kept.",
+        "[0:10-0:12] Participant: Also kept.",
+    ]

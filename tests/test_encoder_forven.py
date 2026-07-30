@@ -1,4 +1,36 @@
-from encoder.core.forven import parse, sentences
+from encoder.core.forven import parse, repair, sentences
+
+
+# ── repair: re-insert spaces dropped after a clause separator ─────────────────
+
+def test_repair_inserts_the_dropped_space():
+    assert repair("um,he's really lazy") == "um, he's really lazy"
+    assert repair("s,because") == "s, because"
+
+
+def test_repair_leaves_correct_text_alone():
+    text = "Um, we got him as a rescue; he's lovely."
+    assert repair(text) == text
+
+
+def test_repair_ignores_numbers_and_times():
+    """1,000 and 4:00 are digits after the separator, not letters."""
+    assert repair("about 1,000 calories at 4:00 p.m.") == "about 1,000 calories at 4:00 p.m."
+
+
+def test_repair_does_not_touch_full_stops():
+    """The same rule on '.' would wreck initials and acronyms."""
+    assert repair("U.S.A") == "U.S.A"
+    assert repair("He is 10.5 years old.") == "He is 10.5 years old."
+
+
+def test_repair_leaves_merged_words_alone():
+    """havesome and wholesome are indistinguishable — never auto-split."""
+    assert repair("we havesome food") == "we havesome food"
+
+
+def test_parse_repairs_turn_text():
+    assert parse("[00:13] Participant: Um,he's lazy.")[0]["text"] == "Um, he's lazy."
 
 
 def test_parse_single_turn():

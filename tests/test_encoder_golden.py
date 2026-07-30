@@ -34,9 +34,17 @@ def test_golden_sentence_and_anchor_counts(result):
     assert result["stats"]["match_rate"] >= 0.90
 
 
+def test_golden_emits_only_measured_lines(result):
+    """48 sentences parse; the 1 the ASR never matched is dropped rather than
+    shipped with an interpolated span."""
+    assert result["stats"]["emitted"] == 47
+    assert result["stats"]["dropped"] == 1
+    assert len(result["rich"].splitlines()) == result["stats"]["emitted"]
+
+
 def test_golden_every_line_is_valid_rich_format(result):
     lines = result["rich"].splitlines()
-    assert len(lines) == 48
+    assert len(lines) == 47
     for line in lines:
         assert RICH_LINE_RE.match(line), line
 

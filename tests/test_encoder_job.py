@@ -56,6 +56,18 @@ def test_encode_one_writes_rich_and_preserves_the_original():
     assert uploads[f"{SESSION}/a.forven.txt"] == PLAIN
 
 
+def test_encode_one_leaves_the_transcript_alone_when_nothing_anchors():
+    """An empty rich file is worse than the working plain one it would replace."""
+    with patch("encoder.job.r2.read_text", return_value=PLAIN), \
+         patch("encoder.job.r2.download"), \
+         patch("encoder.job.r2.upload_text") as up, \
+         patch("encoder.job.words", return_value=[{"w": "unrelated", "s": 1.0, "e": 2.0}]), \
+         patch("encoder.job._model"):
+        assert encode_one(f"{SESSION}/a.mp4", f"{SESSION}/a.txt", "tiny",
+                          log=lambda m: None) is None
+    up.assert_not_called()
+
+
 def test_encode_one_skips_an_already_rich_transcript():
     with patch("encoder.job.r2.read_text", return_value=RICH), \
          patch("encoder.job.r2.download") as dl, \

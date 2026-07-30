@@ -86,6 +86,14 @@ def encode_one(video_key: str, text_key: str, size: str, log=print) -> dict | No
     finally:
         os.unlink(temp)
 
+    stats = result["stats"]
+    # Nothing anchored: leave the working plain transcript alone rather than
+    # replacing it with an empty file.
+    if stats["emitted"] == 0:
+        log(f"skip {video_key}: no sentences anchored "
+            f"({stats['match_rate']:.1%} word match) — transcript left untouched")
+        return None
+
     # Preserve the client's original before overwriting, mirroring the CLI's
     # --in-place semantics. Written FIRST so a failure between the two writes
     # cannot lose it.
@@ -93,9 +101,9 @@ def encode_one(video_key: str, text_key: str, size: str, log=print) -> dict | No
     r2.upload_text(f"{stem}.forven.txt", plain)
     r2.upload_text(text_key, result["rich"] + "\n")
 
-    stats = result["stats"]
-    log(f"done {video_key}: {stats['sentences']} sentences, {stats['exact']} exact, "
-        f"{stats['match_rate']:.1%} word match")
+    dropped = f", {stats['dropped']} dropped" if stats["dropped"] else ""
+    log(f"done {video_key}: {stats['emitted']} of {stats['sentences']} sentences"
+        f"{dropped}, {stats['match_rate']:.1%} word match")
     return stats
 
 

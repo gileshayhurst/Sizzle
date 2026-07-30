@@ -48,6 +48,16 @@ def test_encode_folder_in_place_preserves_the_original_as_forven_txt(tmp_path):
     assert is_rich((folder / "interview.txt").read_text(encoding="utf-8"))
 
 
+def test_encode_folder_leaves_the_original_when_nothing_anchors(tmp_path):
+    """A failed encode must not replace a working transcript with an empty file."""
+    folder = _folder(tmp_path)
+    with patch("encoder.cli.words", return_value=[{"w": "unrelated", "s": 1.0, "e": 2.0}]):
+        results = encode_folder(folder, in_place=True)
+    assert results == []
+    assert (folder / "interview.txt").read_text(encoding="utf-8") == TRANSCRIPT
+    assert not (folder / "interview.forven.txt").exists()
+
+
 def test_encode_folder_skips_videos_with_no_transcript(tmp_path):
     (tmp_path / "orphan.mp4").write_bytes(b"fake")
     with patch("encoder.cli.words", return_value=WORDS) as asr:
