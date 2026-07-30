@@ -706,7 +706,9 @@ def create_app(testing: bool = False) -> Flask:
         try:
             job = render_jobs.create_encode_job(session_key)
         except render_jobs.RenderError as exc:
-            _record({"error": str(exc)})
+            _record({"error": str(exc),
+                     "plan_id": render_jobs.configured_plan_id(),
+                     "service_id": os.environ.get("RENDER_ENCODER_SERVICE_ID")})
             return jsonify({"error": str(exc)}), 503
 
         _record({

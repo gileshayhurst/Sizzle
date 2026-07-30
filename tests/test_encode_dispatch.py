@@ -74,6 +74,29 @@ def test_running_job_count_ignores_finished_jobs(monkeypatch):
         assert render_jobs.running_job_count() == 2
 
 
+def test_dispatch_error_says_what_plan_was_sent(monkeypatch):
+    """"free tier not supported" is ambiguous unless we report what we sent."""
+    monkeypatch.setenv("RENDER_API_KEY", "k")
+    monkeypatch.setenv("RENDER_ENCODER_SERVICE_ID", "srv-1")
+    monkeypatch.setenv("ENCODER_JOB_PLAN_ID", "plan-srv-010")
+    with patch("render_jobs.running_job_count", return_value=0), \
+         patch("render_jobs._request",
+               side_effect=render_jobs.RenderError("free tier plans are not supported")):
+        with pytest.raises(render_jobs.RenderError, match=r"planId=plan-srv-010"):
+            render_jobs.create_encode_job(SESSION)
+
+
+def test_dispatch_error_says_when_no_plan_was_sent(monkeypatch):
+    monkeypatch.setenv("RENDER_API_KEY", "k")
+    monkeypatch.setenv("RENDER_ENCODER_SERVICE_ID", "srv-1")
+    monkeypatch.delenv("ENCODER_JOB_PLAN_ID", raising=False)
+    with patch("render_jobs.running_job_count", return_value=0), \
+         patch("render_jobs._request",
+               side_effect=render_jobs.RenderError("free tier plans are not supported")):
+        with pytest.raises(render_jobs.RenderError, match=r"no planId sent"):
+            render_jobs.create_encode_job(SESSION)
+
+
 def test_create_job_omits_plan_id_when_unset(monkeypatch):
     monkeypatch.setenv("RENDER_API_KEY", "k")
     monkeypatch.setenv("RENDER_ENCODER_SERVICE_ID", "srv-1")

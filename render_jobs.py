@@ -97,6 +97,16 @@ def start_command(session_key: str) -> str:
     return f"python -m encoder.job {session_key} --workers {workers}"
 
 
+def configured_plan_id() -> str | None:
+    """The instance type this process will request for a job, if any.
+
+    Read from the WEB app's environment — it is the dispatcher. Setting this on
+    the encoder service instead has no effect, because that process never runs
+    this code.
+    """
+    return os.environ.get("ENCODER_JOB_PLAN_ID") or None
+
+
 def running_job_count() -> int:
     """How many encoder jobs are currently pending or running."""
     jobs = _request("GET", f"/services/{_service_id()}/jobs?limit=50")
@@ -119,15 +129,24 @@ def create_encode_job(session_key: str) -> dict:
             f"{cap} encoder job(s) already in flight; refusing to launch another")
 
     body = {"startCommand": command}
-    # Without a planId the job inherits the base service's instance type, which
-    # is the free plan — enough to run, far too small to be quick. Set
-    # ENCODER_JOB_PLAN_ID to buy speed; per-second billing makes a bigger
-    # instance roughly cost-neutral for CPU-bound work (design doc §8).
-    plan_id = os.environ.get("ENCODER_JOB_PLAN_ID")
+    # Without a planId the job inherits the base service's instance type. Render
+    # REFUSES a job whose resolved plan is free ("free tier plans are not
+    # supported for jobs", verified 2026-07-30), so this is not merely a speed
+    # dial — with a free base service it is the difference between working and
+    # not. Per-second billing makes a bigger instance roughly cost-neutral for
+    # CPU-bound work (design doc §8).
+    plan_id = configured_plan_id()
     if plan_id:
         body["planId"] = plan_id
 
-    result = _request("POST", f"/services/{_service_id()}/jobs", body)
+    try:
+        result = _request("POST", f"/services/{_service_id()}/jobs", body)
+    except RenderError as exc:
+        # Say what we actually sent. "free tier not supported" is ambiguous
+        # otherwise: it cannot be told apart from ENCODER_JOB_PLAN_ID being
+        # unset, or set on the wrong service and so never reaching this process.
+        sent = f"planId={plan_id}" if plan_id else "no planId sent (job inherits the base service plan)"
+        raise RenderError(f"{exc} [{sent}]") from exc
     job = result.get("job", result) if isinstance(result, dict) else {}
     return {
         "job_id": job.get("id"),
