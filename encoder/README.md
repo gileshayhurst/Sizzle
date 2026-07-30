@@ -17,6 +17,38 @@ Writes `<video>.rich.txt`. With `--in-place`, writes `<video>.txt` and preserves
 the original as `<video>.forven.txt` — the `.txt` beside a video is client data
 and is never overwritten silently.
 
+## Bulk encoding: the one-off job (fastest path)
+
+```
+python -m encoder.job sessions/<uuid> --workers 8 --model tiny
+```
+
+Encodes every un-encoded interview in an R2 session **in parallel**, writing the
+rich transcript back to `<stem>.txt` and preserving the client's original as
+`<stem>.forven.txt`.
+
+Run it as a **Render one-off job** against the `sizzle-encoder` service, requesting
+a generous `planId` (up to 32 GB / 16 CPU). Rationale is `sizzle_reel_design.md` §8:
+
+- A persistent service billed at rest is the wrong shape for work this bursty.
+- One-off jobs are **billed per second while running** and scale to zero, so an
+  oversized instance is roughly cost-neutral and far faster for CPU-bound work.
+- So: request lots of CPU, encode the whole folder at once, pay pennies.
+
+Measured server rate is ~90s per interview on one core (~13x realtime), so a dozen
+interviews across 8 workers is a few minutes of wall clock rather than the ~6 hours
+the browser path would take for the same folder.
+
+**Pulling video from R2 into the job is free** — R2 egress costs nothing and Render
+bills outbound, not inbound. The "never send video to the encoder" rule protects
+the always-on web service, whose metered egress and 512 MB ceiling are the real
+constraints; it does not apply to a big one-off job reading object storage.
+
+**Triggering is deliberately manual** (dashboard → *Run a one-off job*), matching
+D9 "encoding is ALWAYS admin-initiated". Direct launch from the web app needs a
+`RENDER_API_KEY` on an internet-facing service plus the §10 security controls —
+not worth building until manual triggering proves insufficient.
+
 ## Service
 
 ```

@@ -47,6 +47,14 @@ services:
   # another host without touching the two services above; the only contract is
   # the transcript file format.
   #
+  # This service has TWO roles:
+  #   1. Serves POST /encode/words for the browser path (no model, no real CPU).
+  #   2. Acts as the BASE SERVICE for bulk one-off jobs. Render one-off jobs
+  #      inherit a base service's build artifact and env vars, so this is what
+  #      gives `python -m encoder.job <session_key>` its image and credentials.
+  #      Free plan is fine for both: the job requests its own instance size via
+  #      planId and is billed per second only while running.
+  #
   # Sizing note: ONLY the audio fallback (POST /encode) loads a Whisper model.
   # The primary path (POST /encode/words) is pure text processing and needs no
   # model — it is lazy-loaded behind a double-checked lock — which is why the

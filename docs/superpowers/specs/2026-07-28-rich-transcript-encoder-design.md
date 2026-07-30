@@ -216,7 +216,8 @@ see §8.
 
 | That design | Here | Why |
 |---|---|---|
-| Hosted forced-alignment API (D1), with vendor limits as the #1 unknown | Local/browser Whisper as an anchor source | Spike: 47/48 exact boundaries free. No vendor, key, or per-minute cost. |
+| Hosted forced-alignment API (D1), with vendor limits as the #1 unknown | Local/browser Whisper as an anchor source | Spike: 47/48 exact boundaries free. No vendor, key, or per-minute cost. **Amended 2026-07-28:** this justification weighed only vendor cost and quality. D1's other claim — that alignment is "a far easier and *cheaper* problem than transcription" — is about **compute**, and it is correct: transcription costs ~20x alignment, which is why the browser path takes 32 minutes on a 19-minute interview. Quality was never the reason to prefer alignment. A CTC forced aligner remains the only route to a fast client-side encode. |
+| Render one-off jobs (D5), rejecting a persistent service | ~~A persistent web service~~ → **one-off jobs, per D5 after all** | Initially built as an always-on service. Corrected: the doc's reasoning ("a persistent service billed at rest for bursty work") holds here too, and per-second billing means a 16-CPU job encodes a whole folder in minutes for pennies. `encoder/job.py`. |
 | Two-stage clock-offset recovery (D1a) | None | Spike: drift is median −0.06s with no systematic bias. Forven's clock already matches the video. |
 | Align participant turns only (D1a) | Both roles | That rule exists because HumanLens' agent audio is often absent from the recording. Forven exports have both roles present; both are needed for captions and context anyway. |
 | Render one-off jobs, `media_jobs`, concurrency caps, admin job UI (D5, D6, §10, §13) | None | Each encode runs in its own tab against no shared resource. There is no queue to manage. |
