@@ -49,9 +49,8 @@ services:
   #
   # Sizing note: ONLY the audio fallback (POST /encode) loads a Whisper model.
   # The primary path (POST /encode/words) is pure text processing and needs no
-  # model, so this can run on the free plan by setting ENCODER_AUDIO_FALLBACK=0
-  # — the fallback then returns 503 instead of risking an OOM, which would take
-  # the container down and interrupt other requests. `starter` is only needed to
+  # model — it is lazy-loaded behind a double-checked lock — which is why the
+  # free plan is viable here with the fallback off. `starter` is only needed to
   # actually SERVE the fallback for browsers that can't run the model.
   #
   # ENCODER_MODEL_SIZE=tiny is deliberate: measured on a real interview, tiny
@@ -61,11 +60,16 @@ services:
     name: sizzle-encoder
     runtime: docker
     dockerfilePath: ./encoder/Dockerfile
-    plan: starter
+    plan: free
     envVars:
       - key: ENCODER_MODEL_SIZE
         value: tiny
+      # Disabled: the free plan's 512 MB cannot safely hold a Whisper model, and
+      # an OOM would take the container down and interrupt other requests, where
+      # a 503 fails only that caller — who keeps their plain transcript and still
+      # gets a working reel. Set to 1 (and raise the plan) to serve browsers that
+      # cannot run the model at all.
       - key: ENCODER_AUDIO_FALLBACK
-        sync: false
+        value: "0"
       - key: ALLOWED_ORIGINS
         sync: false
