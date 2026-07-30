@@ -40,5 +40,9 @@ FORVEN VIDEOS/
 chicken_tutorials/
 test_videos/
 
+# Encoder output. Contains participant speech, so it stays local — and it is
+# reproducible from the source video plus its plain transcript anyway.
+ForvenRich/
+
 # npm workspace — exists only to vendor mediabunny into static/vendor/
 node_modules/
