@@ -34,13 +34,23 @@ env.allowLocalModels = false;
 // without re-testing word timestamps.
 export const MODEL_ID = 'Xenova/whisper-tiny.en';
 
+// The WASM backend cannot load this model's quantised weights: both q8 and
+// fp16 fail at session creation with "TransposeDQWeightsForMatMulNBits Missing
+// required scale". fp32 works, and for a model this small it is not even slower
+// -- measured on a 6s clip it beat WebGPU (4.7s vs 7.8s). WebGPU keeps the
+// library default, which works there.
+// Verified in-browser 2026-07-28. Do NOT set a quantised dtype for wasm.
+const DEVICE_DTYPE = { wasm: 'fp32' };
+
 let transcriber = null;
 let loadedDevice = null;
 
 async function getTranscriber(device) {
   if (transcriber && loadedDevice === device) return transcriber;
+  const dtype = DEVICE_DTYPE[device];
   transcriber = await pipeline('automatic-speech-recognition', MODEL_ID, {
     device,
+    ...(dtype ? { dtype } : {}),
     progress_callback: (report) => {
       if (report.status === 'progress' && report.total) {
         self.postMessage({
