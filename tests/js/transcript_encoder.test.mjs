@@ -1,6 +1,9 @@
 import assert from 'node:assert';
 
 import {
+  ASR_TIMEOUT_BASE_MS,
+  ASR_TIMEOUT_PER_AUDIO_SEC_MS,
+  asrTimeoutMs,
   concatPcm,
   downmixResample,
   isRich,
@@ -54,6 +57,26 @@ export function test_pair_files_handles_every_video_extension() {
     files.push({ name: `clip.${ext}` }, { name: 'clip.txt' });
   }
   assert.strictEqual(pairFiles(files).length, 5);
+}
+
+// ── asrTimeoutMs ──────────────────────────────────────────────────────────────
+
+export function test_asr_timeout_scales_with_audio_length() {
+  assert.strictEqual(asrTimeoutMs(0), ASR_TIMEOUT_BASE_MS);
+  assert.strictEqual(asrTimeoutMs(10), ASR_TIMEOUT_BASE_MS + 10 * ASR_TIMEOUT_PER_AUDIO_SEC_MS);
+}
+
+export function test_asr_timeout_gives_a_long_interview_real_headroom() {
+  // A 15-minute interview measured at ~0.85x realtime must not be cut off.
+  const budget = asrTimeoutMs(900);
+  assert.ok(budget > 900 * 1000, `budget ${budget}ms must exceed realtime`);
+}
+
+export function test_asr_timeout_never_returns_zero_for_bad_input() {
+  // A detached buffer yields length 0, and NaN must not disable the timeout.
+  for (const bad of [0, -5, NaN, undefined, Infinity]) {
+    assert.strictEqual(asrTimeoutMs(bad), ASR_TIMEOUT_BASE_MS, String(bad));
+  }
 }
 
 // ── downmixResample ───────────────────────────────────────────────────────────

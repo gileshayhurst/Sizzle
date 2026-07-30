@@ -50,6 +50,19 @@ the whisper-tiny weights all load from the CDN, version-pinned in
 fails and the client falls back to `POST /encode` (or keeps its plain transcript
 when the fallback is disabled) — degraded, never broken.
 
+**The WASM backend needs `dtype: 'fp32'`.** The quantised weights (`q8`, `fp16`)
+fail at session creation with "TransposeDQWeightsForMatMulNBits Missing required
+scale", which broke every browser without WebGPU. fp32 costs nothing at this
+model size — measured on a 6s clip, WASM (5.3s) beat WebGPU (6.4s) with identical
+output.
+
+**The browser ASR is time-bounded** (`asrTimeoutMs`: 120s base + 3s per second of
+audio, ~3.5x the measured rate). On expiry the worker is *terminated* — not just
+rejected, or it would keep burning CPU — and the client degrades to the audio
+fallback, or to its plain transcript. Calibrate these constants once a
+full-length interview has actually been measured; they are extrapolated from a
+6-second clip.
+
 ## Match rate is a truncation alarm
 
 A low `match_rate` usually means **the video is shorter than the transcript**, not

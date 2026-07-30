@@ -11,6 +11,28 @@ export const TARGET_SAMPLE_RATE = 16000;
 
 export const VIDEO_EXTS = ['.mp4', '.mov', '.avi', '.mkv', '.webm'];
 
+// ── Browser ASR time budget ───────────────────────────────────────────────────
+// Without a bound, a slow client grinds on the upload screen indefinitely: the
+// ASR reports no progress during inference, so there is nothing to detect a
+// stall with. Timing out instead degrades to a plain transcript, which still
+// produces a working reel.
+//
+// Measured on a 16-core desktop, single-threaded WASM: 6s of audio took ~5s,
+// so roughly 0.85x realtime. The 3x multiplier gives a weak client generous
+// headroom over that, and the base absorbs the one-off model download.
+//
+// ponytail: these are extrapolated from a 6-SECOND clip -- no full-length
+// interview has been measured. Calibrate once one has, rather than trusting
+// this arithmetic.
+export const ASR_TIMEOUT_BASE_MS = 120_000;
+export const ASR_TIMEOUT_PER_AUDIO_SEC_MS = 3_000;
+
+/** Time budget for transcribing `audioSeconds` of audio in the browser. */
+export function asrTimeoutMs(audioSeconds) {
+  const seconds = Number.isFinite(audioSeconds) && audioSeconds > 0 ? audioSeconds : 0;
+  return ASR_TIMEOUT_BASE_MS + Math.ceil(seconds) * ASR_TIMEOUT_PER_AUDIO_SEC_MS;
+}
+
 /** True when a transcript already carries end timestamps (mirrors encoder.cli.is_rich). */
 export function isRich(text) {
   return /^\[\d+:\d{2}-\d+:\d{2}\]/m.test(text);

@@ -20,6 +20,7 @@ import { Input, BlobSource, ALL_FORMATS, AudioBufferSink } from '/static/vendor/
 
 import {
   TARGET_SAMPLE_RATE,
+  asrTimeoutMs,
   concatPcm,
   downmixResample,
   isRich,
@@ -100,10 +101,30 @@ export async function asrDevice() {
  * The audio never leaves the browser on this path -- only the resulting word
  * list does, which is ~30 KB against ~8 MB of WAV.
  */
-export function wordsInBrowser(pcm, device, onProgress = () => {}) {
+export function wordsInBrowser(pcm, device, onProgress = () => {}, timeoutMs = null) {
+  // Computed BEFORE postMessage: transferring the buffer detaches it and
+  // pcm.length becomes 0.
+  const budget = timeoutMs === null ? asrTimeoutMs(pcm.length / TARGET_SAMPLE_RATE) : timeoutMs;
+
   return new Promise((resolve, reject) => {
     const worker = new Worker('/static/transcript-asr-worker.js', { type: 'module' });
-    const finish = (fn, value) => { worker.terminate(); fn(value); };
+
+    let settled = false;
+    const finish = (fn, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      worker.terminate();
+      fn(value);
+    };
+
+    // Terminating the worker is what actually stops the work -- a rejected
+    // promise alone would leave it burning CPU for the rest of the session.
+    const timer = setTimeout(
+      () => finish(reject, new Error(
+        `local transcription exceeded its ${Math.round(budget / 1000)}s budget`)),
+      budget,
+    );
 
     worker.onmessage = (event) => {
       const msg = event.data;
@@ -144,7 +165,7 @@ export async function encodeViaWords(words, transcriptText, encoderUrl, signal) 
  * alignment algorithm never forks.
  */
 export async function encodePair(video, transcriptText, encoderUrl, callbacks = {}) {
-  const { onProgress = () => {}, onLog = () => {}, signal } = callbacks;
+  const { onProgress = () => {}, onLog = () => {}, signal, timeoutMs = null } = callbacks;
   if (isRich(transcriptText)) return null;
 
   const pcm = await extractAudio(video, p => onProgress({ phase: 'audio', fraction: p }));
@@ -152,7 +173,7 @@ export async function encodePair(video, transcriptText, encoderUrl, callbacks = 
   const device = await asrDevice();
   if (device) {
     try {
-      const words = await wordsInBrowser(pcm, device, onProgress);
+      const words = await wordsInBrowser(pcm, device, onProgress, timeoutMs);
       if (words.length) {
         const result = await encodeViaWords(words, transcriptText, encoderUrl, signal);
         return { ...result, path: `browser-${device}` };
@@ -173,6 +194,7 @@ export async function encodePair(video, transcriptText, encoderUrl, callbacks = 
 window.TranscriptEncoder = {
   isSupported,
   asrDevice,
+  asrTimeoutMs,
   extractAudio,
   wordsInBrowser,
   encodeViaWords,
