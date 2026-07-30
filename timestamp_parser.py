@@ -1,6 +1,11 @@
 import re
 
-_RANGE_RE = re.compile(r'(\d+:\d{2}-\d+:\d{2})(?:\s*\|\s*([^\s,]+))?')
+# The optional `\]?` matters: rich-tier responses come back bracketed
+# (`[2:18-2:30]|9`) because the transcript itself uses [M:SS-M:SS] and
+# _RICH_PROMPT_CLAUSE's example reinforces it. Without it the range still
+# matched but the score group did not, so EVERY rich segment silently took the
+# default of 5 and nothing could clear a score threshold.
+_RANGE_RE = re.compile(r'(\d+:\d{2}-\d+:\d{2})\]?(?:\s*\|\s*([^\s,]+))?')
 
 
 def parse_scored_timestamps(response: str) -> list[tuple[str, int]] | None:
