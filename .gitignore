@@ -44,5 +44,10 @@ test_videos/
 # reproducible from the source video plus its plain transcript anyway.
 ForvenRich/
 
+# Plain-vs-rich comparison workspace: hardlinked source video, copied
+# transcripts, analysis JSON quoting participants verbatim, and caption tracks.
+# Same participant-speech reason as ForvenRich/ above.
+Compare/
+
 # npm workspace — exists only to vendor mediabunny into static/vendor/
 node_modules/
