@@ -625,12 +625,82 @@ $('btn-loading-folder-cancel').addEventListener('click', () => {
   showScreen('screen-folder-picker');
 });
 
+/**
+ * Ask the server to encode this session's transcripts, and wait for it.
+ *
+ * The work runs in a Render one-off job (encoder/job.py) rather than in this
+ * tab: ~20x faster for identical output, billed per second, scaling to zero.
+ * See sizzle_reel_design.md D5/D6.
+ *
+ * Waiting is the point. Selections are keyed by raw line text, so if the folder
+ * opened on plain transcripts and the job rewrote them to rich underneath,
+ * every restored selection would reference a line that no longer exists.
+ *
+ * Failure is non-fatal: a plain transcript still produces a working reel with
+ * looser clip boundaries, so nothing here may cost the user their upload.
+ */
+async function _encodeSession(sessionKey) {
+  const setLog = (msg) => { $('transcribe-log').textContent = msg; };
+  const POLL_MS = 5000;
+  const GIVE_UP_MS = 45 * 60 * 1000;
+
+  try {
+    $('transcribe-subtitle').textContent = 'Deriving precise transcript timings…';
+    setBar('transcribe-bar', 0);
+    setLog('⟳ starting the encoder…');
+    showScreen('screen-transcribing');
+
+    const resp = await fetch('/encode-session', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_key: sessionKey }),
+    });
+    const data = await _safeJson(resp);
+    if (!resp.ok) throw new Error(data.error || `dispatch failed (${resp.status})`);
+    if (data.skipped) { setLog('✓ transcripts already carry precise timings'); return; }
+
+    // The job is idempotent (it skips already-rich transcripts), so a lost poll
+    // or a duplicated dispatch cannot double-encode anything.
+    const started = Date.now();
+    while (Date.now() - started < GIVE_UP_MS) {
+      await new Promise(r => setTimeout(r, POLL_MS));
+      const statusResp = await fetch(`/encode-status/${encodeURIComponent(data.job_id)}`);
+      const status = await _safeJson(statusResp);
+      if (!statusResp.ok) throw new Error(status.error || 'lost track of the encoder');
+
+      if (status.status === 'succeeded') {
+        setBar('transcribe-bar', 100);
+        setLog('✓ precise timings derived');
+        return;
+      }
+      if (status.status === 'failed' || status.status === 'canceled') {
+        throw new Error(`encoder ${status.status}`);
+      }
+      const elapsed = Math.floor((Date.now() - started) / 60000);
+      setLog(`⟳ deriving timings… ${elapsed}m elapsed`);
+      setBar('transcribe-bar', Math.min(90, Math.round((Date.now() - started) / 3000)));
+    }
+    throw new Error('encoder did not finish within 45 minutes');
+  } catch (err) {
+    setLog(`⚠ precise timings skipped (${err.message}) — using turn-level timings`);
+    await new Promise(r => setTimeout(r, 2500));
+  }
+}
+
 async function openFolder(folder, displayName) {
   const folderErr = $('folder-error');
   const btnLoad   = $('btn-load-folder');
   const name = displayName || folder.split(/[\\/]/).pop() || folder;
   folderErr.classList.add('hidden');
   if (btnLoad) btnLoad.disabled = true;
+
+  // Encode BEFORE the folder renders, on every path that opens a cloud session
+  // — fresh upload and reopened-from-recents alike. This lives here rather than
+  // at the call sites because it was originally wired only into doUpload, so
+  // reopening a session silently skipped encoding entirely.
+  if (APP_MODE === 'cloud' && String(folder).startsWith('sessions/')) {
+    await _encodeSession(folder);
+  }
 
   const ctx = _showLoadingModal(name + '/');
   ctx.abort = new AbortController();
@@ -2610,9 +2680,29 @@ $('folder-badge').addEventListener('click', async (e) => {
   pathInput.addEventListener('keydown', e => e.preventDefault());
 
   // Folder selected via picker
-  folderPicker.addEventListener('change', () => {
+  folderPicker.addEventListener('change', async () => {
     const all = Array.from(folderPicker.files);
-    selectedFiles = all.filter(f => VALID_EXTS.has(ext(f.name)));
+    let picked = all.filter(f => VALID_EXTS.has(ext(f.name)));
+
+    // Drop previously generated reels BEFORE uploading them. The generator
+    // writes sizzle_generated_reels.txt into the folder it renders into, and
+    // that marker travels with the folder — but until now it was only read
+    // server-side, i.e. after every reel had already been transferred. On the
+    // reference folder that is ~1.5 GB of upload for files the server then
+    // discards. The server-side filter stays as defence in depth.
+    const marker = all.find(f => f.name === window.UploadFilters.GENERATED_REELS_MARKER);
+    if (marker) {
+      try {
+        const before = picked.length;
+        picked = window.UploadFilters.excludeGeneratedReels(picked, await marker.text());
+        const skipped = before - picked.length;
+        if (skipped) console.info(`Skipping ${skipped} previously generated reel(s)`);
+      } catch {
+        // Unreadable marker: fall through and let the server filter instead.
+      }
+    }
+
+    selectedFiles = picked;
     if (all.length > 0) {
       selectedFolderName = all[0].webkitRelativePath.split('/')[0] || 'folder';
       pathInput.value = selectedFolderName;
@@ -2652,68 +2742,6 @@ $('folder-badge').addEventListener('click', async (e) => {
   // Open Folder → upload
   btnLoad.textContent = 'Upload';
   btnLoad.onclick = () => doUpload();
-
-  /**
-   * Ask the server to encode this session's transcripts, and wait for it.
-   *
-   * The work runs in a Render one-off job (encoder/job.py) rather than in this
-   * tab: ~20x faster for identical output, billed per second, scaling to zero.
-   * See sizzle_reel_design.md D5/D6.
-   *
-   * Waiting is the point. Selections are keyed by raw line text, so if the
-   * folder opened on plain transcripts and the job rewrote them to rich
-   * underneath, every restored selection would reference a line that no longer
-   * exists. Encoding before the folder opens removes that race entirely.
-   *
-   * Failure is non-fatal: a plain transcript still produces a working reel with
-   * looser clip boundaries, so nothing here may cost the user their upload.
-   */
-  async function _encodeSession(sessionKey) {
-    const setLog = (msg) => { $('transcribe-log').textContent = msg; };
-    const POLL_MS = 5000;
-    const GIVE_UP_MS = 45 * 60 * 1000;
-
-    try {
-      $('transcribe-subtitle').textContent = 'Deriving precise transcript timings…';
-      setBar('transcribe-bar', 0);
-      setLog('⟳ starting the encoder…');
-
-      const resp = await fetch('/encode-session', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_key: sessionKey }),
-      });
-      const data = await _safeJson(resp);
-      if (!resp.ok) throw new Error(data.error || `dispatch failed (${resp.status})`);
-      if (data.skipped) { setLog('✓ transcripts already carry precise timings'); return; }
-
-      // The job is idempotent (it skips already-rich transcripts), so a lost
-      // poll or a duplicated dispatch cannot double-encode anything.
-      const started = Date.now();
-      while (Date.now() - started < GIVE_UP_MS) {
-        await new Promise(r => setTimeout(r, POLL_MS));
-        const statusResp = await fetch(`/encode-status/${encodeURIComponent(data.job_id)}`);
-        const status = await _safeJson(statusResp);
-        if (!statusResp.ok) throw new Error(status.error || 'lost track of the encoder');
-
-        if (status.status === 'succeeded') {
-          setBar('transcribe-bar', 100);
-          setLog('✓ precise timings derived');
-          return;
-        }
-        if (status.status === 'failed' || status.status === 'canceled') {
-          throw new Error(`encoder ${status.status}`);
-        }
-        const elapsed = Math.floor((Date.now() - started) / 60000);
-        setLog(`⟳ deriving timings… ${elapsed}m elapsed`);
-        setBar('transcribe-bar', Math.min(90, Math.round((Date.now() - started) / 3000)));
-      }
-      throw new Error('encoder did not finish within 45 minutes');
-    } catch (err) {
-      setLog(`⚠ precise timings skipped (${err.message}) — using turn-level timings`);
-      await new Promise(r => setTimeout(r, 2500));
-    }
-  }
 
   async function doUpload() {
     if (!selectedFiles.length) {
@@ -2768,9 +2796,6 @@ $('folder-badge').addEventListener('click', async (e) => {
         setBar('transcribe-bar', pct);
         $('transcribe-log').textContent = `✓ ${file.name} (${i + 1} / ${selectedFiles.length})`;
       }
-
-      // Step 2b: encode this session's transcripts BEFORE the folder opens.
-      await _encodeSession(session_key);
 
       // Step 3: tell the server all uploads are done
       $('transcribe-subtitle').textContent = 'Finalising…';
