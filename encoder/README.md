@@ -28,7 +28,16 @@ rich transcript back to `<stem>.txt` and preserving the client's original as
 `<stem>.forven.txt`.
 
 Run it as a **Render one-off job** against the `sizzle-encoder` service, requesting
-a generous `planId` (up to 32 GB / 16 CPU). Rationale is `sizzle_reel_design.md` §8:
+a generous `planId` (up to 32 GB / 16 CPU).
+
+> ⚠️ **A paid plan is mandatory for jobs.** Verified 2026-07-30: Render rejects
+> `POST /services/{id}/jobs` with *"free tier plans are not supported for jobs"*
+> when the job's resolved plan is free. Without `ENCODER_JOB_PLAN_ID` the job
+> inherits the base service's instance type, so a free `sizzle-encoder` fails
+> every dispatch. Setting a paid `ENCODER_JOB_PLAN_ID` is the cheaper fix — the
+> service stays free and you pay per second only while a job runs.
+
+Rationale is `sizzle_reel_design.md` §8:
 
 - A persistent service billed at rest is the wrong shape for work this bursty.
 - One-off jobs are **billed per second while running** and scale to zero, so an

@@ -61,11 +61,16 @@ services:
   #      Free plan is fine for both: the job requests its own instance size via
   #      planId and is billed per second only while running.
   #
+  # ⚠️ VERIFIED 2026-07-30: Render REFUSES one-off jobs whose resolved plan is
+  # free — "free tier plans are not supported for jobs" (HTTP error from
+  # POST /services/{id}/jobs). Bulk encoding therefore needs a paid plan
+  # SOMEWHERE: either ENCODER_JOB_PLAN_ID on sizzle-app (per-second billed, the
+  # service itself can stay free), or this service on `starter`.
+  #
   # Sizing note: ONLY the audio fallback (POST /encode) loads a Whisper model.
   # The primary path (POST /encode/words) is pure text processing and needs no
-  # model — it is lazy-loaded behind a double-checked lock — which is why the
-  # free plan is viable here with the fallback off. `starter` is only needed to
-  # actually SERVE the fallback for browsers that can't run the model.
+  # model — it is lazy-loaded behind a double-checked lock — so free is fine for
+  # SERVING. It is jobs, not the service, that the free plan blocks.
   #
   # ENCODER_MODEL_SIZE=tiny is deliberate: measured on a real interview, tiny
   # anchors as many sentences as base (47/48), because the ASR is only an anchor
