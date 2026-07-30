@@ -61,16 +61,21 @@ services:
   #      Free plan is fine for both: the job requests its own instance size via
   #      planId and is billed per second only while running.
   #
-  # ⚠️ VERIFIED 2026-07-30: Render REFUSES one-off jobs whose resolved plan is
-  # free — "free tier plans are not supported for jobs" (HTTP error from
-  # POST /services/{id}/jobs). Bulk encoding therefore needs a paid plan
-  # SOMEWHERE: either ENCODER_JOB_PLAN_ID on sizzle-app (per-second billed, the
-  # service itself can stay free), or this service on `starter`.
+  # ⚠️ `plan: starter` is REQUIRED, and not for capacity. Verified 2026-07-30:
+  # Render refuses one-off jobs against a free-plan base service — "free tier
+  # plans are not supported for jobs" — and a paid ENCODER_JOB_PLAN_ID does NOT
+  # buy past it: a dispatch sending planId=plan-srv-014 was refused just the
+  # same. Render checks the BASE SERVICE's plan, not the job's. So this service
+  # must be paid purely in order to exist as a job target.
   #
-  # Sizing note: ONLY the audio fallback (POST /encode) loads a Whisper model.
-  # The primary path (POST /encode/words) is pure text processing and needs no
-  # model — it is lazy-loaded behind a double-checked lock — so free is fine for
-  # SERVING. It is jobs, not the service, that the free plan blocks.
+  # It still does no work: the audio fallback is off and the primary endpoint
+  # loads no model, so Starter's 512 MB is ample. The job requests its own,
+  # larger instance via ENCODER_JOB_PLAN_ID and is billed per second while it
+  # runs.
+  #
+  # The £0 alternative is to skip dispatch entirely and run
+  # `python -m encoder.job sessions/<uuid>` locally against R2 — same code, no
+  # paid plan. See encoder/README.md.
   #
   # ENCODER_MODEL_SIZE=tiny is deliberate: measured on a real interview, tiny
   # anchors as many sentences as base (47/48), because the ASR is only an anchor
@@ -79,7 +84,7 @@ services:
     name: sizzle-encoder
     runtime: docker
     dockerfilePath: ./encoder/Dockerfile
-    plan: free
+    plan: starter
     envVars:
       - key: ENCODER_MODEL_SIZE
         value: tiny

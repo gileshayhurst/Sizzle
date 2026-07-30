@@ -30,12 +30,17 @@ rich transcript back to `<stem>.txt` and preserving the client's original as
 Run it as a **Render one-off job** against the `sizzle-encoder` service, requesting
 a generous `planId` (up to 32 GB / 16 CPU).
 
-> ⚠️ **A paid plan is mandatory for jobs.** Verified 2026-07-30: Render rejects
+> ⚠️ **The BASE SERVICE must be on a paid plan, and `planId` will not get you
+> out of it.** Verified 2026-07-30 against the live API: Render rejects
 > `POST /services/{id}/jobs` with *"free tier plans are not supported for jobs"*
-> when the job's resolved plan is free. Without `ENCODER_JOB_PLAN_ID` the job
-> inherits the base service's instance type, so a free `sizzle-encoder` fails
-> every dispatch. Setting a paid `ENCODER_JOB_PLAN_ID` is the cheaper fix — the
-> service stays free and you pay per second only while a job runs.
+> against a free base service, and rejects it identically when a paid
+> `planId=plan-srv-014` is supplied. It checks the base service's plan, not the
+> job's. `sizzle-encoder` therefore runs on `starter` solely to be a valid job
+> target — it does no work.
+>
+> **To avoid that cost entirely, run this command locally instead.** It needs
+> only R2 credentials, runs the same code, and is typically faster than a Render
+> instance. The dispatch path exists for clients self-serving, not for you.
 
 Rationale is `sizzle_reel_design.md` §8:
 
