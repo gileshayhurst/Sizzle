@@ -21,6 +21,13 @@ from .core import encode
 MAX_CONTENT_LENGTH = 64 * 1024 * 1024
 
 
+def _enabled(name: str, default: bool = True) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() not in {"0", "false", "no", "off", ""}
+
+
 def _validate_words(payload):
     """Return an error string, or None when the word stream is usable."""
     if not isinstance(payload, list):
@@ -39,9 +46,18 @@ def create_app(testing: bool = False) -> Flask:
 
     model_size = os.environ.get("ENCODER_MODEL_SIZE", DEFAULT_MODEL_SIZE)
 
+    # The audio fallback is the ONLY thing in this service that loads a Whisper
+    # model. /encode/words needs no model at all, so a memory-constrained
+    # deployment (Render free tier, 512 MB) can serve the primary path safely
+    # and refuse the fallback rather than being OOM-killed by it -- an OOM takes
+    # the whole container down, interrupting other requests, where a 503 fails
+    # just the one caller. Clients that get the 503 keep their plain transcript,
+    # which still produces a working reel.
+    audio_fallback = _enabled("ENCODER_AUDIO_FALLBACK", True)
+
     @app.get("/health")
     def health():
-        return jsonify({"ok": True})
+        return jsonify({"ok": True, "audio_fallback": audio_fallback})
 
     @app.post("/encode/words")
     def encode_words():
@@ -56,6 +72,14 @@ def create_app(testing: bool = False) -> Flask:
 
     @app.post("/encode")
     def encode_audio():
+        # Checked before touching the upload so a disabled deployment never
+        # allocates the model, and never buffers the audio either.
+        if not audio_fallback:
+            return jsonify({
+                "error": "audio fallback is disabled on this deployment; "
+                         "use POST /encode/words with browser-side word timings",
+            }), 503
+
         transcript = request.form.get("transcript")
         if not transcript:
             return jsonify({"error": "transcript is required"}), 400

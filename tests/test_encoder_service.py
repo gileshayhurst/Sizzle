@@ -20,7 +20,38 @@ def client():
 
 
 def test_health(client):
-    assert client.get("/health").get_json() == {"ok": True}
+    assert client.get("/health").get_json() == {"ok": True, "audio_fallback": True}
+
+
+def test_health_reports_a_disabled_audio_fallback(monkeypatch):
+    monkeypatch.setenv("ENCODER_AUDIO_FALLBACK", "0")
+    body = create_app(testing=True).test_client().get("/health").get_json()
+    assert body["audio_fallback"] is False
+
+
+def test_audio_fallback_disabled_returns_503_without_loading_the_model(monkeypatch):
+    """A 512 MB deployment must refuse this, not be OOM-killed loading Whisper."""
+    monkeypatch.setenv("ENCODER_AUDIO_FALLBACK", "off")
+    client = create_app(testing=True).test_client()
+    with patch("encoder.service.words") as asr:
+        response = client.post(
+            "/encode",
+            data={"transcript": TRANSCRIPT,
+                  "audio": (io.BytesIO(b"fake audio"), "align.opus")},
+            content_type="multipart/form-data",
+        )
+    assert response.status_code == 503
+    assert "encode/words" in response.get_json()["error"]
+    asr.assert_not_called()
+
+
+def test_words_endpoint_still_works_with_the_fallback_disabled(monkeypatch):
+    """Disabling the fallback must not touch the primary path."""
+    monkeypatch.setenv("ENCODER_AUDIO_FALLBACK", "0")
+    client = create_app(testing=True).test_client()
+    response = client.post("/encode/words", json={"transcript": TRANSCRIPT, "words": WORDS})
+    assert response.status_code == 200
+    assert response.get_json()["rich"] == "[0:13-0:16] Participant: He's a Corgi mix."
 
 
 def test_encode_words_returns_rich_and_stats(client):

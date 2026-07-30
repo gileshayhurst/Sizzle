@@ -47,9 +47,16 @@ services:
   # another host without touching the two services above; the only contract is
   # the transcript file format.
   #
-  # NOT on the free plan: the fallback path holds a Whisper model in memory and
-  # will OOM at 512 MB. Once the browser-side ASR path (plan 2b) is primary this
-  # service only handles fallbacks, and the plan is worth revisiting.
+  # Sizing note: ONLY the audio fallback (POST /encode) loads a Whisper model.
+  # The primary path (POST /encode/words) is pure text processing and needs no
+  # model, so this can run on the free plan by setting ENCODER_AUDIO_FALLBACK=0
+  # — the fallback then returns 503 instead of risking an OOM, which would take
+  # the container down and interrupt other requests. `starter` is only needed to
+  # actually SERVE the fallback for browsers that can't run the model.
+  #
+  # ENCODER_MODEL_SIZE=tiny is deliberate: measured on a real interview, tiny
+  # anchors as many sentences as base (47/48), because the ASR is only an anchor
+  # source. base costs more RAM and a slower cold start for no boundary gain.
   - type: web
     name: sizzle-encoder
     runtime: docker
@@ -57,6 +64,8 @@ services:
     plan: starter
     envVars:
       - key: ENCODER_MODEL_SIZE
-        value: base
+        value: tiny
+      - key: ENCODER_AUDIO_FALLBACK
+        sync: false
       - key: ALLOWED_ORIGINS
         sync: false

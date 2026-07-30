@@ -59,5 +59,23 @@ clamps to `video_duration`, and the browser encoder clamps via `computeDuration(
 
 ## Env
 
-- `ENCODER_MODEL_SIZE` — whisper size for the fallback path (default `base`)
+- `ENCODER_MODEL_SIZE` — whisper size for the fallback path (default `base`; `tiny`
+  anchors just as well, see above, and is the better choice when memory is tight)
+- `ENCODER_AUDIO_FALLBACK` — set `0`/`false`/`off` to make `POST /encode` return
+  `503` instead of loading Whisper (default on)
 - `ALLOWED_ORIGINS` — comma-separated CORS origins (default `*`)
+
+## Sizing: the model is only needed by the fallback
+
+`/encode/words` loads **no model** — it is pure text processing, and the Whisper
+model is lazy-loaded behind a double-checked lock so importing the service costs
+nothing. Only `POST /encode` allocates it.
+
+So a memory-constrained deployment (Render free tier, 512 MB) can serve the
+primary path safely by setting `ENCODER_AUDIO_FALLBACK=0`. That matters because
+an OOM takes the whole container down and interrupts other requests, whereas a
+`503` fails only the one caller — and that caller keeps its plain transcript,
+which still produces a working reel, just with looser clip boundaries.
+
+Enable the fallback (and size the instance for it) when you need to support
+browsers that cannot run the model at all.
