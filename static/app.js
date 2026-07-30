@@ -682,6 +682,10 @@ async function _encodeSession(sessionKey) {
     }
     throw new Error('encoder did not finish within 45 minutes');
   } catch (err) {
+    // The on-screen message survives ~2.5s and is then gone, which made a real
+    // dispatch failure impossible to read. Keep the full error in the console
+    // where it persists and can be pasted.
+    console.error('[encode-session] failed for', sessionKey, err);
     setLog(`⚠ precise timings skipped (${err.message}) — using turn-level timings`);
     await new Promise(r => setTimeout(r, 2500));
   }

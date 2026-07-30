@@ -135,6 +135,34 @@ def test_encode_session_404s_for_an_unknown_session(client):
     assert resp.status_code == 404
 
 
+def test_encode_session_reports_no_transcripts_as_an_error_not_a_tick(client):
+    """A session with videos but no .txt is misconfigured, not already encoded."""
+    with patch("app.storage.is_cloud", return_value=True), \
+         patch("app.storage.list_keys", return_value=[f"{SESSION}/a.mp4", f"{SESSION}/b.mp4"]), \
+         patch("app.render_jobs.create_encode_job") as create:
+        resp = client.post("/encode-session", json={"session_key": SESSION})
+    assert resp.status_code == 422
+    assert "transcript" in resp.get_json()["error"]
+    create.assert_not_called()
+
+
+def test_encode_session_records_a_failed_dispatch_for_later_diagnosis(client):
+    """The browser's error vanishes in seconds; the failure must leave a trace."""
+    written = {}
+    with patch("app.storage.is_cloud", return_value=True), \
+         patch("app.storage.list_keys", return_value=[f"{SESSION}/a.mp4", f"{SESSION}/a.txt"]), \
+         patch("app.storage.read_file_bytes", return_value=PLAIN.encode()), \
+         patch("app.storage.write_json", side_effect=lambda k, d: written.__setitem__(k, d)), \
+         patch("app.render_jobs.create_encode_job",
+               side_effect=render_jobs.RenderError("service srv-xyz not found")):
+        resp = client.post("/encode-session", json={"session_key": SESSION})
+
+    assert resp.status_code == 503
+    record = written[f"{SESSION}/encode_job.json"]
+    assert record["error"] == "service srv-xyz not found"
+    assert record["interviews"] == [f"{SESSION}/a.mp4"]
+
+
 def test_encode_session_skips_when_everything_is_already_rich(client):
     """A repeat call must be free, not a duplicate encode."""
     with patch("app.storage.is_cloud", return_value=True), \

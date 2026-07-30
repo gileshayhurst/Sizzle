@@ -68,27 +68,39 @@ _WHISPER_CACHE_DIR = os.environ.get(
 _VIDEO_KEY_SUFFIXES = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
 
 
+def _session_video_pairs(keys: list[str]) -> list[tuple[str, str]]:
+    """(video_key, transcript_key) for every video with a same-stem .txt.
+
+    Mirrors encoder.job.find_pairs. Kept separate from the tier check so callers
+    can distinguish "this session has no transcripts at all" from "its
+    transcripts are already rich" — two very different situations that were
+    previously reported to the user with the same cheerful message.
+    """
+    texts = {k.rsplit(".", 1)[0]: k for k in keys if k.lower().endswith(".txt")}
+    pairs = []
+    for key in keys:
+        stem, _, suffix = key.rpartition(".")
+        if f".{suffix.lower()}" in _VIDEO_KEY_SUFFIXES and stem in texts:
+            pairs.append((key, texts[stem]))
+    return sorted(pairs)
+
+
 def _sessions_needing_encode(keys: list[str]) -> list[str]:
     """Video keys in a session whose transcript is still plain-tier.
 
-    Mirrors encoder.job.find_pairs, but decides tier through
-    shared.transcript_tier so this app and the encoder agree on what "rich"
-    means. Used to check whether dispatching a job would do any work at all —
-    which keeps a repeat call free and stops an unauthenticated caller
-    manufacturing cost against arbitrary session keys.
+    Decides tier through shared.transcript_tier so this app and the encoder
+    agree on what "rich" means. Used to check whether dispatching a job would do
+    any work at all — which keeps a repeat call free and stops an
+    unauthenticated caller manufacturing cost against arbitrary session keys.
     """
-    texts = {k.rsplit(".", 1)[0]: k for k in keys if k.lower().endswith(".txt")}
     pending = []
-    for key in keys:
-        stem, _, suffix = key.rpartition(".")
-        if f".{suffix.lower()}" not in _VIDEO_KEY_SUFFIXES or stem not in texts:
-            continue
+    for video_key, text_key in _session_video_pairs(keys):
         try:
-            text = storage.read_file_bytes(texts[stem]).decode("utf-8-sig")
+            text = storage.read_file_bytes(text_key).decode("utf-8-sig")
         except Exception:
             continue  # unreadable transcript: leave it alone rather than guess
         if _transcript_tier(_parse_transcript_lines(text)) != "rich":
-            pending.append(key)
+            pending.append(video_key)
     return sorted(pending)
 
 
@@ -667,28 +679,41 @@ def create_app(testing: bool = False) -> Flask:
         if not keys:
             return jsonify({"error": "No such session"}), 404
 
+        # A session with no video/transcript pairs is NOT "already encoded" — it
+        # has nothing to encode from. Reporting both as a success made a real
+        # misconfiguration look like a tick.
+        if not _session_video_pairs(keys):
+            return jsonify({"error": "No video/transcript pairs in this session — "
+                                     "upload a .txt transcript alongside each video"}), 422
+
         pending = _sessions_needing_encode(keys)
         if not pending:
             return jsonify({"skipped": True, "reason": "all transcripts already rich"})
 
+        def _record(payload):
+            # Recorded so Render's job list can be reconciled against jobs this
+            # app launched (§10 detection) — and so a FAILED dispatch leaves a
+            # trace, since the browser's error message is gone in seconds.
+            try:
+                storage.write_json(f"{session_key}/encode_job.json", {
+                    **payload,
+                    "interviews": pending,
+                    "recorded_at": datetime.now(timezone.utc).isoformat(),
+                })
+            except Exception:
+                pass  # never fail the request over the audit note
+
         try:
             job = render_jobs.create_encode_job(session_key)
         except render_jobs.RenderError as exc:
+            _record({"error": str(exc)})
             return jsonify({"error": str(exc)}), 503
 
-        # Recorded so Render's job list can be reconciled against jobs this app
-        # launched — anything unmatched was started outside it (§10 detection).
-        try:
-            storage.write_json(f"{session_key}/encode_job.json", {
-                "job_id": job["job_id"],
-                "start_command": job["start_command"],
-                "plan_id": job["plan_id"],
-                "interviews": pending,
-                "dispatched_at": datetime.now(timezone.utc).isoformat(),
-            })
-        except Exception:
-            pass  # the job is already running; losing the audit note must not fail the request
-
+        _record({
+            "job_id": job["job_id"],
+            "start_command": job["start_command"],
+            "plan_id": job["plan_id"],
+        })
         return jsonify({"job_id": job["job_id"], "status": job["status"],
                         "interviews": len(pending)})
 
