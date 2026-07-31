@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 from subprocess import CalledProcessError
 from video_editor import (
+    AUDIO_FADE_SECONDS,
     check_ffmpeg,
     parse_timestamp_to_seconds,
     extract_clip,
@@ -165,8 +166,40 @@ def test_extract_clip_fade_out_adds_vf_and_af():
     assert "-af" in cmd
     af_val = cmd[cmd.index("-af") + 1]
     assert "afade=t=out" in af_val
-    assert "st=8.0" in af_val
-    assert "d=2.0" in af_val
+    # Audio ramps over AUDIO_FADE_SECONDS, not the video's 2.0s: it starts at
+    # 10.0 - 0.1 rather than 10.0 - 2.0.
+    assert "st=9.9" in af_val
+    assert "d=0.1" in af_val
+
+
+def test_audio_fade_is_shorter_than_video_fade():
+    """The video dip is the transition; the audio only needs a de-click ramp.
+
+    Coupling them clipped speech: clips start on the speaker's first word and
+    (rich tier) end on their last, so a 0.4s audio ramp attenuates real speech.
+    """
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = type("R", (), {"returncode": 0})()
+        extract_clip("input.mp4", 0.0, 8.0, "out.mp4",
+                     fade_out_secs=0.4, fade_in_secs=0.4)
+    cmd = _captured_cmd(mock_run)
+    vf_val = cmd[cmd.index("-vf") + 1]
+    af_val = cmd[cmd.index("-af") + 1]
+    assert "fade=t=in:st=0:d=0.4" in vf_val
+    assert "fade=t=out:st=7.6:d=0.4" in vf_val
+    assert f"afade=t=in:st=0:d={AUDIO_FADE_SECONDS}" in af_val
+    assert f"afade=t=out:st=7.9:d={AUDIO_FADE_SECONDS}" in af_val
+
+
+def test_audio_fade_never_exceeds_requested_fade():
+    """A caller asking for a fade shorter than AUDIO_FADE_SECONDS gets theirs."""
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = type("R", (), {"returncode": 0})()
+        extract_clip("input.mp4", 0.0, 8.0, "out.mp4",
+                     fade_in_secs=0.05, fade_out_secs=0.05)
+    af_val = _captured_cmd(mock_run)[_captured_cmd(mock_run).index("-af") + 1]
+    assert "afade=t=in:st=0:d=0.05" in af_val
+    assert "afade=t=out:st=7.95:d=0.05" in af_val
 
 
 def test_extract_clip_fade_clamped_for_short_clip():
@@ -236,7 +269,7 @@ def test_extract_clip_fade_in_and_out():
     assert "fade=t=in:st=0:d=0.4" in vf_val
     assert "fade=t=out" in vf_val
     af_val = cmd[cmd.index("-af") + 1]
-    assert "afade=t=in:st=0:d=0.4" in af_val
+    assert f"afade=t=in:st=0:d={AUDIO_FADE_SECONDS}" in af_val
     assert "afade=t=out" in af_val
 
 

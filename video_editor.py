@@ -4,6 +4,19 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+# Audio fades are deliberately far shorter than the video dip they accompany.
+# The video fade IS the transition between clips; audio only needs enough of a
+# ramp to avoid a click at the splice.
+#
+# They used to share one duration, which clipped speech at both ends. Clips
+# start on the speaker's first word (measured head slack is 0.00s on every clip
+# of every reel) and, in rich tier, end on their last -- encoder.core.emit
+# rounds an end up specifically to protect the final word, but then clamps it
+# to the next line's start, so a consecutive sentence removes that slack again.
+# A 0.4s ramp over either boundary attenuates real speech and the word audibly
+# drops.
+AUDIO_FADE_SECONDS = 0.1
+
 
 def _title_alpha_expr(duration: float) -> str:
     """drawtext `alpha` expression for a traditional title: fade in 0.3s, hold,
@@ -143,13 +156,16 @@ def extract_clip(video_path: str, start_sec: float, end_sec: float, output_path:
             vf.extend(_timer_drawtext_filters(duration, out_dir, prefix, fontfile_arg, fontsize))
 
     # Fades come after the overlays so a boundary dip also dims the text.
+    # Video and audio fade durations are independent — see AUDIO_FADE_SECONDS.
     if fade_in_secs > 0.0:
         vf.append(f"fade=t=in:st=0:d={fade_in_secs}")
-        af.append(f"afade=t=in:st=0:d={fade_in_secs}")
+        a_in = min(AUDIO_FADE_SECONDS, fade_in_secs)
+        af.append(f"afade=t=in:st=0:d={a_in}")
     if fade_out_secs > 0.0:
         fade_start = max(0.0, duration - fade_out_secs)
         vf.append(f"fade=t=out:st={fade_start}:d={fade_out_secs}")
-        af.append(f"afade=t=out:st={fade_start}:d={fade_out_secs}")
+        a_out = min(AUDIO_FADE_SECONDS, fade_out_secs)
+        af.append(f"afade=t=out:st={max(0.0, duration - a_out)}:d={a_out}")
 
     if vf:
         cmd += ["-vf", ",".join(vf)]

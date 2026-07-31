@@ -37,7 +37,11 @@ import {
 
 const TITLE_SHOW_SEC = 3.0;   // how long the identification overlay stays up
 const TITLE_FADE_SEC = 0.3;   // fade in / fade out duration
-const TRANSITION_FADE_SEC = 0.4;  // symmetric head/tail dip between clips
+const TRANSITION_FADE_SEC = 0.4;  // symmetric head/tail dip between clips (video)
+// Audio ramps far faster than the video dip: just enough to avoid a click at
+// the splice. Clips begin on the speaker's first word and end on their last, so
+// a 0.4s audio ramp attenuates real speech. Mirrors video_editor.AUDIO_FADE_SECONDS.
+const AUDIO_FADE_SEC = 0.1;
 const FPS = 30;
 const SAMPLE_RATE = 48000;
 const CHANNELS = 2;
@@ -48,15 +52,17 @@ function _throwIfAborted(signal) {
   if (signal?.aborted) throw new DOMException('Cancelled', 'AbortError');
 }
 
-// Symmetric transition: fade in over the head, fade out over the tail. Applied
-// to both video (canvas alpha) and audio (sample gain) so clips dip between each
-// other now that there is no title card separating them.
-function _transitionGain(relSec, clipDurationSec) {
-  const fadeIn = Math.min(1.0, relSec / TRANSITION_FADE_SEC);
-  const outStart = Math.max(0, clipDurationSec - TRANSITION_FADE_SEC);
+// Symmetric transition: fade in over the head, fade out over the tail, so clips
+// dip between each other now that there is no title card separating them.
+// `fadeSec` is the caller's choice — video uses TRANSITION_FADE_SEC for the
+// visible dip, audio uses the much shorter AUDIO_FADE_SEC so the ramp does not
+// eat the speaker's first and last word.
+function _transitionGain(relSec, clipDurationSec, fadeSec) {
+  const fadeIn = Math.min(1.0, relSec / fadeSec);
+  const outStart = Math.max(0, clipDurationSec - fadeSec);
   const fadeOut = relSec < outStart
     ? 1.0
-    : Math.max(0, 1.0 - (relSec - outStart) / TRANSITION_FADE_SEC);
+    : Math.max(0, 1.0 - (relSec - outStart) / fadeSec);
   return Math.min(fadeIn, fadeOut);
 }
 
@@ -223,7 +229,7 @@ async function _encodeClip(url, startSec, endSec, titleLines, width, height, ctx
           haveFrame = true;
           nextSrc = await srcIter.next();
         }
-        const alpha = _transitionGain(relSec, clipDurationSec);
+        const alpha = _transitionGain(relSec, clipDurationSec, TRANSITION_FADE_SEC);
         ctx.fillStyle = '#000';
         ctx.fillRect(0, 0, width, height);
         if (haveFrame) {
@@ -245,7 +251,7 @@ async function _encodeClip(url, startSec, endSec, titleLines, width, height, ctx
       for await (const { buffer, timestamp } of audioSink.buffers(startSec, endSec)) {
         _throwIfAborted(signal);
         const relSec = timestamp - startSec;
-        const gain = _transitionGain(relSec, clipDurationSec);
+        const gain = _transitionGain(relSec, clipDurationSec, AUDIO_FADE_SEC);
         if (gain < 1.0) {
           for (let ch = 0; ch < buffer.numberOfChannels; ch++) {
             const data = buffer.getChannelData(ch);
