@@ -40,7 +40,7 @@ def test_check_ffmpeg_passes_when_found():
 def test_extract_clip_calls_correct_ffmpeg_args():
     with patch("video_editor.subprocess.run") as mock_run:
         extract_clip("input.mp4", 5.0, 30.0, "clip.mp4")
-    args = mock_run.call_args[0][0]
+    args = _captured_cmd(mock_run)
     assert args == [
         "ffmpeg", "-y",
         "-ss", "5.0",
@@ -62,7 +62,7 @@ def test_extract_clip_normalises_audio_to_48k_stereo():
     so the concat demuxer sees a single consistent audio timebase and doesn't drift."""
     with patch("video_editor.subprocess.run") as mock_run:
         extract_clip("input.mp4", 0.0, 10.0, "clip.mp4")
-    args = mock_run.call_args[0][0]
+    args = _captured_cmd(mock_run)
     joined = " ".join(args)
     assert "-ar 48000" in joined, "extract_clip must force 48 kHz to match title cards"
     assert "-ac 2" in joined, "extract_clip must force stereo to match title cards"
@@ -73,7 +73,7 @@ def test_extract_clip_does_not_use_stream_copy():
     causing a visible freeze at every clip transition when the output is assembled."""
     with patch("video_editor.subprocess.run") as mock_run:
         extract_clip("input.mp4", 5.0, 30.0, "clip.mp4")
-    args = mock_run.call_args[0][0]
+    args = _captured_cmd(mock_run)
     assert "-c" not in args or args[args.index("-c") + 1] != "copy", \
         "extract_clip must not use -c copy: it produces non-keyframe clip starts that freeze on playback"
 
@@ -141,8 +141,22 @@ def test_stitch_clips_propagates_ffmpeg_error(tmp_path):
 
 
 def _captured_cmd(mock_run):
-    """Return the ffmpeg argv list from the first subprocess.run call."""
-    return mock_run.call_args[0][0]
+    """Return the ffmpeg argv list.
+
+    extract_clip calls subprocess.run twice — ffmpeg to encode, then ffprobe to
+    verify the output has a video stream — so select by program name rather than
+    taking the last call.
+    """
+    return _captured_call(mock_run)[0][0]
+
+
+def _captured_call(mock_run):
+    """The subprocess.run call object for the ffmpeg (not ffprobe) invocation."""
+    for call in mock_run.call_args_list:
+        argv = call[0][0]
+        if argv and argv[0] == "ffmpeg":
+            return call
+    raise AssertionError("no ffmpeg invocation captured")
 
 
 def test_extract_clip_no_fade_has_no_vf():
@@ -191,6 +205,39 @@ def test_audio_fade_is_shorter_than_video_fade():
     assert f"afade=t=out:st=7.9:d={AUDIO_FADE_SECONDS}" in af_val
 
 
+def test_extract_clip_rejects_audio_only_output():
+    """A range starting past the source's video track yields an audio-only clip.
+
+    ffmpeg succeeds (the audio really is there), but stitch_clips then concats a
+    1-stream clip with 2-stream clips under -c copy and the reel's timeline is
+    stamped over the audio duration — a 126s reel encoded as 394s at 10.4fps.
+    Raising routes into the caller's per-clip skip instead.
+    """
+    class _Result:
+        returncode = 0
+        stdout = ""      # ffprobe prints nothing when there is no v:0 stream
+
+    with patch("subprocess.run", return_value=_Result()):
+        with pytest.raises(RuntimeError, match="no video stream"):
+            extract_clip("truncated.mp4", 593.0, 607.0, "out.mp4")
+
+
+def test_extract_clip_accepts_output_with_video():
+    class _Result:
+        returncode = 0
+        stdout = "video\n"
+
+    with patch("subprocess.run", return_value=_Result()):
+        extract_clip("fine.mp4", 0.0, 10.0, "out.mp4")   # must not raise
+
+
+def test_extract_clip_fails_open_when_probe_gives_no_capture():
+    """Guard must never fail a clip it cannot actually check."""
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = type("R", (), {"returncode": 0})()  # no stdout
+        extract_clip("input.mp4", 0.0, 10.0, "out.mp4")   # must not raise
+
+
 def test_audio_fade_never_exceeds_requested_fade():
     """A caller asking for a fade shorter than AUDIO_FADE_SECONDS gets theirs."""
     with patch("subprocess.run") as mock_run:
@@ -230,7 +277,7 @@ def test_extract_clip_burns_title_overlay():
     assert vf_val.count("drawtext=") == 2
     assert "alpha=" in vf_val
     assert "\\," in vf_val        # commas in the alpha expr are escaped
-    assert mock_run.call_args.kwargs.get("cwd") == tmp  # relative paths resolve here
+    assert _captured_call(mock_run).kwargs.get("cwd") == tmp  # relative paths resolve here
 
 
 def test_extract_clip_no_title_lines_no_drawtext():

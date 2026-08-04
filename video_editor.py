@@ -40,6 +40,42 @@ def _fmt_mmss(seconds: int) -> str:
     return f"{m}:{s:02d}"
 
 
+def _assert_has_video(output_path: str) -> None:
+    """Raise if the encoded clip came out with no video stream.
+
+    A source whose video track is shorter than its audio track (a truncated or
+    badly muxed recording) yields an audio-only clip when the requested range
+    starts past the video's end — ffmpeg succeeds, because the audio really is
+    there. stitch_clips then concatenates that 1-stream clip with normal
+    2-stream clips using `-c copy`, which cannot reconcile the mismatch: the
+    reel's video timeline is stamped over the audio's duration and the whole
+    thing plays in slow motion. Observed on a 628s container whose video stream
+    ended at 357s — a 126s reel encoded as 394s at 10.4fps.
+
+    Raising here routes into the caller's existing per-clip failure handling,
+    which drops the clip and keeps the rest of the reel intact.
+    """
+    try:
+        probe = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=codec_type", "-of", "default=nw=1:nk=1",
+             output_path],
+            capture_output=True, text=True,
+        )
+    except Exception:
+        return  # ffprobe unavailable — never fail a clip we cannot check
+    stdout = getattr(probe, "stdout", None)
+    if not isinstance(stdout, str):
+        return  # no real capture to inspect; fail open
+    # ffprobe prints nothing (exit 0) when the file has no v:0 stream, so an
+    # empty stdout IS the audio-only signal, not an error.
+    if "video" not in stdout:
+        raise RuntimeError(
+            f"{Path(output_path).name}: encoded clip has no video stream — the "
+            f"source's video track likely ends before the requested range"
+        )
+
+
 def _timer_drawtext_filters(duration, out_dir, prefix, fontfile_arg, fontsize):
     """Per-second countdown of the clip's remaining time, pinned top-right.
 
@@ -178,6 +214,7 @@ def extract_clip(video_path: str, start_sec: float, end_sec: float, output_path:
         capture_output=True,
         cwd=run_cwd,
     )
+    _assert_has_video(output_path)
 
 
 def stitch_clips(clip_paths: list[str], output_path: str) -> None:
