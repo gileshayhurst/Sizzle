@@ -14,11 +14,20 @@ def client():
     global _client
     if _client is None:
         import boto3
+        from botocore.config import Config
         _client = boto3.client(
             "s3",
             endpoint_url=os.environ.get("S3_ENDPOINT_URL") or None,
             aws_access_key_id=os.environ["S3_ACCESS_KEY"],
             aws_secret_access_key=os.environ["S3_SECRET_KEY"],
+            # R2 only accepts SigV4. The ordinary calls here sign V4 anyway, so
+            # this was dormant until presigned_url arrived -- botocore falls back
+            # to SigV2 specifically for presigning, and R2 answers 401. storage.py
+            # carries the same pin for the same reason; duplicated rather than
+            # imported because this package ships without the app (see module
+            # docstring).
+            region_name="auto",
+            config=Config(signature_version="s3v4"),
         )
     return _client
 
@@ -42,8 +51,26 @@ def list_keys(prefix: str) -> list[str]:
         token = page.get("NextContinuationToken")
 
 
-def download(key: str, local_path) -> None:
-    client().download_file(bucket(), key, str(local_path))
+def presigned_url(key: str, expires: int = 21600) -> str:
+    """A time-limited GET URL for `key`, for streaming rather than downloading.
+
+    This replaced a download-to-temp-file step. Render one-off jobs get a **2 GB
+    /tmp**, and a single interview here reaches 1.4 GB, so a temp file was not
+    just wasteful: 8 workers blew the volume instantly, and anything over 2 GB
+    would fail even at --workers 1. faster-whisper decodes the source itself via
+    PyAV, and PyAV opens an HTTP URL as readily as a path, so handing it this
+    keeps peak disk at zero. Measured slightly FASTER too (0.86x), because the
+    network read overlaps demux instead of paying a separate decode pass over
+    bytes that had to be written and re-read.
+
+    6h is far longer than any single encode needs; the URL never leaves this
+    process.
+    """
+    return client().generate_presigned_url(
+        "get_object",
+        Params={"Bucket": bucket(), "Key": key},
+        ExpiresIn=expires,
+    )
 
 
 def read_text(key: str) -> str:

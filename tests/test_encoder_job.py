@@ -5,6 +5,7 @@ import pytest
 from encoder.job import encode_one, find_pairs, run
 
 SESSION = "sessions/2f8a1c40-1111-2222-3333-444455556666"
+URL = "https://r2.example/signed"
 PLAIN = "[00:13] Participant: He's a Corgi mix."
 RICH = "[0:13-0:16] Participant: He's a Corgi mix."
 WORDS = [
@@ -45,7 +46,7 @@ def test_find_pairs_does_not_pair_a_forven_sidecar_as_a_video():
 def test_encode_one_writes_rich_and_preserves_the_original():
     uploads = {}
     with patch("encoder.job.r2.read_text", return_value=PLAIN), \
-         patch("encoder.job.r2.download"), \
+         patch("encoder.job.r2.presigned_url", return_value=URL), \
          patch("encoder.job.r2.upload_text", side_effect=lambda k, t: uploads.__setitem__(k, t)), \
          patch("encoder.job.words", return_value=WORDS), \
          patch("encoder.job._model"):
@@ -59,7 +60,7 @@ def test_encode_one_writes_rich_and_preserves_the_original():
 def test_encode_one_leaves_the_transcript_alone_when_nothing_anchors():
     """An empty rich file is worse than the working plain one it would replace."""
     with patch("encoder.job.r2.read_text", return_value=PLAIN), \
-         patch("encoder.job.r2.download"), \
+         patch("encoder.job.r2.presigned_url", return_value=URL), \
          patch("encoder.job.r2.upload_text") as up, \
          patch("encoder.job.words", return_value=[{"w": "unrelated", "s": 1.0, "e": 2.0}]), \
          patch("encoder.job._model"):
@@ -70,27 +71,38 @@ def test_encode_one_leaves_the_transcript_alone_when_nothing_anchors():
 
 def test_encode_one_skips_an_already_rich_transcript():
     with patch("encoder.job.r2.read_text", return_value=RICH), \
-         patch("encoder.job.r2.download") as dl, \
+         patch("encoder.job.r2.presigned_url", return_value=URL) as url, \
          patch("encoder.job.r2.upload_text") as up, \
          patch("encoder.job.words") as asr:
         assert encode_one(f"{SESSION}/a.mp4", f"{SESSION}/a.txt", "tiny", log=lambda m: None) is None
-    dl.assert_not_called()
+    url.assert_not_called()
     asr.assert_not_called()
     up.assert_not_called()
 
 
-def test_encode_one_deletes_its_temp_file_even_when_asr_fails():
+def test_encode_one_streams_the_video_and_never_writes_it_to_disk():
+    """Render one-off jobs get a 2 GB /tmp and one real interview reaches 1.4 GB,
+    so downloading to a temp file was fatal rather than merely wasteful: 8 workers
+    blew the volume on the first wave, and a >2 GB file would fail even at
+    --workers 1. PyAV opens an HTTP URL as readily as a path, so the ASR reads the
+    presigned URL directly and peak disk stays at zero."""
     seen = {}
-    with patch("encoder.job.r2.read_text", return_value=PLAIN), \
-         patch("encoder.job.r2.download", side_effect=lambda k, p: seen.__setitem__("path", p)), \
-         patch("encoder.job.r2.upload_text"), \
-         patch("encoder.job.words", side_effect=RuntimeError("boom")), \
-         patch("encoder.job._model"):
-        with pytest.raises(RuntimeError):
-            encode_one(f"{SESSION}/a.mp4", f"{SESSION}/a.txt", "tiny", log=lambda m: None)
 
-    import os
-    assert not os.path.exists(seen["path"]), "temp video must not be left behind"
+    def no_temp_files(*args, **kwargs):
+        raise AssertionError("the video must never be written to disk")
+
+    with patch("encoder.job.r2.read_text", return_value=PLAIN), \
+         patch("encoder.job.r2.presigned_url", return_value=URL) as url, \
+         patch("encoder.job.r2.upload_text"), \
+         patch("encoder.job.words",
+               side_effect=lambda src, model=None: seen.__setitem__("src", src) or WORDS), \
+         patch("encoder.job._model"), \
+         patch("tempfile.mkstemp", side_effect=no_temp_files), \
+         patch("tempfile.NamedTemporaryFile", side_effect=no_temp_files):
+        encode_one(f"{SESSION}/a.mp4", f"{SESSION}/a.txt", "tiny", log=lambda m: None)
+
+    url.assert_called_once_with(f"{SESSION}/a.mp4")
+    assert seen["src"] == URL, "the ASR must read straight from the presigned URL"
 
 
 # ── run ───────────────────────────────────────────────────────────────────────

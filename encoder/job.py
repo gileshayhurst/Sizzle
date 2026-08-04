@@ -13,15 +13,19 @@ Video is pulled from R2 into the job, which costs nothing: R2 egress is free and
 Render bills outbound, not inbound. The "never send video to the encoder" rule
 applies to the always-on web service, whose metered egress and 512 MB ceiling are
 the actual constraints -- not to a 16-CPU job pulling from object storage.
+
+It is STREAMED, not downloaded. That distinction is load-bearing: bandwidth and
+RAM were costed when this was designed, but disk never was, and Render one-off
+jobs get only a **2 GB /tmp**. Writing each video to a temp file blew that volume
+on the first wave of workers. Peak disk is now zero, so folder size and file size
+stop being disk questions entirely, and worker count is bounded by RAM and cores.
 """
 import argparse
 import os
 import re
 import sys
-import tempfile
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
 
 from . import r2
 from .asr.local import DEFAULT_MODEL_SIZE, words
@@ -75,16 +79,10 @@ def encode_one(video_key: str, text_key: str, size: str, log=print) -> dict | No
         log(f"skip {video_key}: already rich")
         return None
 
-    suffix = Path(video_key).suffix or ".mp4"
-    handle, temp = tempfile.mkstemp(suffix=suffix)
-    os.close(handle)
-    try:
-        log(f"downloading {video_key}")
-        r2.download(video_key, temp)
-        log(f"encoding {video_key}")
-        result = encode(plain, words(temp, model=_model(size)))
-    finally:
-        os.unlink(temp)
+    # Streamed, never downloaded -- see r2.presigned_url. /tmp is 2 GB and one
+    # interview can be 1.4 GB, so a temp file here is what killed the job.
+    log(f"encoding {video_key}")
+    result = encode(plain, words(r2.presigned_url(video_key), model=_model(size)))
 
     stats = result["stats"]
     # Nothing anchored: leave the working plain transcript alone rather than
