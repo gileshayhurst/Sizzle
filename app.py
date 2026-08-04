@@ -636,8 +636,15 @@ def create_app(testing: bool = False) -> Flask:
             return jsonify({"error": "At least one video file is required."}), 400
 
         session_key = storage.new_session_key()
+        # 24h, not 2h. Every URL is minted here, up front, but the browser uploads
+        # them one at a time — so the LAST file's URL has to outlive the whole
+        # transfer. The reference folder is 3.3 GB across 8 interviews (largest
+        # single file 1.4 GB); a 35-interview study on a 20 Mbps line runs past
+        # two hours and the tail URLs start 403ing mid-upload, stranding a
+        # half-populated session. Expiry is the wrong thing to be tight about
+        # here: the key is already unguessable and scoped to one object.
         uploads = {
-            name: storage.presigned_put_url(f"{session_key}/{Path(name).name}", expires=7200)
+            name: storage.presigned_put_url(f"{session_key}/{Path(name).name}", expires=86400)
             for name in filenames
         }
         return jsonify({

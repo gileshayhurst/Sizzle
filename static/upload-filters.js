@@ -43,10 +43,53 @@ export function excludeGeneratedReels(files, markerText) {
   return files.filter(file => !generated.has(file.name));
 }
 
+/**
+ * PUT one file to its presigned R2 URL, retrying transient failures.
+ *
+ * Interviews here run to 1.4 GB, and the browser uploads them sequentially, so a
+ * single dropped connection used to throw straight out of doUpload -- back to
+ * the folder picker, with a half-populated session still sitting in R2 and
+ * showing up in the recent list. Minutes of transfer lost to one blip.
+ *
+ * Retries a thrown fetch (network drop) and 5xx/429. Everything else is
+ * terminal: a 403 means the signature is expired or wrong, and re-sending 1.4 GB
+ * to be refused again helps nobody.
+ *
+ * `fetchImpl` and `sleep` are injected so the node runner can exercise this
+ * without a network or a real delay -- this file still imports nothing.
+ */
+export async function putWithRetry(url, file, {
+  attempts = 3,
+  fetchImpl = (typeof fetch !== 'undefined' ? fetch : null),
+  sleep = ms => new Promise(r => setTimeout(r, ms)),
+} = {}) {
+  let lastError;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    let resp;
+    try {
+      resp = await fetchImpl(url, { method: 'PUT', body: file });
+    } catch (err) {
+      lastError = err;
+      if (attempt === attempts) throw err;
+      await sleep(attempt * 1000);
+      continue;
+    }
+    if (resp.ok) return resp;
+    if (resp.status !== 429 && resp.status < 500) {
+      throw new Error(`upload refused (${resp.status})`);
+    }
+    lastError = new Error(`upload failed (${resp.status})`);
+    if (attempt === attempts) throw lastError;
+    await sleep(attempt * 1000);
+  }
+  throw lastError;
+}
+
 if (typeof window !== 'undefined') {
   window.UploadFilters = {
     GENERATED_REELS_MARKER,
     parseGeneratedReels,
     excludeGeneratedReels,
+    putWithRetry,
   };
 }

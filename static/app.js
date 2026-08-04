@@ -2792,9 +2792,10 @@ $('folder-badge').addEventListener('click', async (e) => {
         if (!putUrl) {
           throw new Error(`No upload URL was issued for ${file.name}`);
         }
-        const resp = await fetch(putUrl, { method: 'PUT', body: file });
-        if (!resp.ok) {
-          throw new Error(`Failed to upload ${file.name}: ${resp.status}`);
+        try {
+          await window.UploadFilters.putWithRetry(putUrl, file);
+        } catch (err) {
+          throw new Error(`Failed to upload ${file.name}: ${err.message}`);
         }
         const pct = Math.round(((i + 1) / selectedFiles.length) * 100);
         setBar('transcribe-bar', pct);
