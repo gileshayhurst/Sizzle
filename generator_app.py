@@ -596,10 +596,18 @@ def _run_generation_impl(job_id: str, folder: str,
         # the library endpoint would redirect to a non-existent R2 object.
         library_entry["reel_s3_key"] = f"{session_key}/{output_filename}"
 
-    # ── Captions: derive a WebVTT track from the same segments ───────────
+    # ── Captions: derive a WebVTT track from the segments that SURVIVED ──
     # No title cards → clips start at reel_t, so the caption timeline has no
     # title-card offset.
-    vtt = build_webvtt(segments, title_card_duration=0.0)
+    #
+    # Must be the ENCODED segments, not the planned ones. build_webvtt walks a
+    # cumulative timeline, so a segment whose clip failed to extract — and was
+    # therefore skipped in Phase 3 — must not occupy a slot: every later cue
+    # would be late by that clip's duration and the tail would run past the end
+    # of the reel. Measured before this fix: a 108s reel whose last cue ended at
+    # 122.0s. plan[i] corresponds to segments[i] (Phase 1 builds it in order).
+    encoded_segments = [seg for seg, item in zip(segments, plan) if item["ok"]]
+    vtt = build_webvtt(encoded_segments, title_card_duration=0.0)
     if vtt:
         stem = Path(output_filename).stem
         if storage.is_cloud() and session_key:

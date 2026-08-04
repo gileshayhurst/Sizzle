@@ -1334,6 +1334,60 @@ def test_local_generation_writes_vtt_sidecar(client, tmp_path):
     assert captured["entry"]["captions_filename"] == "reel.vtt"
 
 
+def test_vtt_excludes_segments_whose_clip_failed(client, tmp_path):
+    """A dropped clip must not occupy a slot on the caption timeline.
+
+    build_webvtt walks cumulatively, so counting a segment that never made it
+    into the reel puts every later cue late by that clip's duration and runs the
+    tail past the end. Measured before the fix: a 108s reel whose last cue ended
+    at 122.0s.
+    """
+    video = tmp_path / "clip.mp4"
+    video.touch()
+    txt = tmp_path / "clip.txt"
+    # Three separated sentences -> three segments, so the middle one can fail.
+    txt.write_text(
+        "[0:00] Speaker: First line here.\n"
+        "[0:10] Speaker: Unused filler.\n"
+        "[0:20] Speaker: Second line here.\n"
+        "[0:30] Speaker: More filler.\n"
+        "[0:40] Speaker: Third line here.\n"
+        "[0:50] Speaker: Tail filler.\n",
+        encoding="utf-8")
+
+    # Fail the extraction of the SECOND clip only.
+    calls = {"n": 0}
+
+    def flaky_extract(*a, **k):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise RuntimeError("encoded clip has no video stream")
+
+    with patch("generator_app._library_add"), \
+         patch("generator_app.extract_clip", side_effect=flaky_extract), \
+         patch("generator_app.stitch_clips"), \
+         patch("generator_app.check_ffmpeg"), \
+         patch("generator_app.get_video_dimensions", return_value=(1920, 1080)):
+        resp = client.post("/generate", json={
+            "folder": str(tmp_path),
+            "prompt": "test",
+            "output_filename": "reel.mp4",
+            "selections": {"clip.mp4": [
+                "[0:00] Speaker: First line here.",
+                "[0:20] Speaker: Second line here.",
+                "[0:40] Speaker: Third line here.",
+            ]},
+        })
+        assert resp.status_code == 200
+
+    vtt = (tmp_path / "reel.vtt").read_text(encoding="utf-8")
+    # The failed clip's text must not appear, and no cue may start beyond the
+    # surviving clips' combined duration.
+    assert "Second line here" not in vtt
+    assert "First line here" in vtt
+    assert "Third line here" in vtt
+
+
 def test_download_captioned_runs_ffmpeg_subtitles(tmp_path, monkeypatch):
     import generator_app, subprocess, unittest.mock as m
     reel = tmp_path / "reel.mp4"; reel.write_bytes(b"x")
