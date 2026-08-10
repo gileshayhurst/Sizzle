@@ -596,6 +596,12 @@ body {
 #library-grid {
   flex: 1; overflow-y: auto; padding: 18px;
   display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 14px;
+  /* Rows must be content-sized, not stretched to fit. The grid has a definite
+     height (flex item) and .reel-card sets overflow:hidden, which zeroes a grid
+     item's automatic minimum size — so once the reels overflow one screenful,
+     the browser squashes every row to fit and each card clips to its thumbnail.
+     Only shows up past ~1 screen of reels, which is why it appeared late. */
+  grid-auto-rows: max-content;
 }
 .reel-card {
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg);
