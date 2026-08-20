@@ -220,18 +220,35 @@ the ratio is the one DESIGN.md already validates.
 ## Component 4 — Read-only transcript
 
 `renderTranscript(filename)` toggles a `readonly` class on `#transcript-scroll`
-when the file is excluded. One CSS rule does the rest:
+when the file is excluded.
 
-```css
-.transcript-scroll.readonly .transcript-line,
-.transcript-scroll.readonly .minute-label-cb { pointer-events: none; }
-```
+**CSS alone is not sufficient here.** An earlier draft of this design proposed a
+single `pointer-events: none` rule in place of JS guards. That is wrong: every
+selectable element also carries a `keydown` handler for Enter/Space
+(`static/app.js:1308`, `1367`, `1461`) and `tabindex="0"`, and
+`pointer-events` does not affect the keyboard. A CSS-only gate would leave
+keyboard users able to check lines in a file that is switched off — both a
+correctness hole and an inconsistency between input methods.
 
-Targeting the children rather than the container disables both the checkbox
-clicks and the highlight-mode drag-brush while leaving the container itself
-scrollable, so the transcript is still readable. This is one rule instead of
-guards in `toggleLine`, `toggleGroup`, the `mousedown` brush handler and the
-minute-header handler.
+So the read-only state is enforced in three places:
+
+1. **JS guards** at the top of the shared toggle functions, so both the click
+   and keydown paths are covered by one check each:
+   - `toggleGroup` and `toggleLine` in `renderCheckboxMode`
+   - the line `keydown` handler and the `mousedown` brush in `renderHighlightMode`
+
+   ```js
+   function _isEditable(filename) { return state.included.has(filename); }
+   ```
+
+2. **Keyboard reachability** — when the file is excluded, lines render with
+   `tabindex="-1"` and `aria-disabled="true"` instead of `tabindex="0"`, so
+   they are skipped by tab order rather than being focusable dead controls.
+
+3. **CSS affordance** — `.transcript-scroll.readonly` suppresses hover states
+   and sets `cursor: default` on `.transcript-line-cb`, `.transcript-line-hl`
+   and `.minute-label-cb`, so the pane visibly reads as inert. The container
+   itself is untouched and stays scrollable.
 
 `updateSelectAllBtn` and `updateClearAllBtn` set `disabled` on their buttons
 when the active file is excluded.
@@ -287,21 +304,32 @@ folder has always been allowed to contain videos with no selections.
 
 Existing tests mock `query_claude`; these follow the same pattern.
 
-### What is not covered by an automated test
+### `tests/js/inclusion.test.mjs`
 
-The repo has no JS test framework and this design does not add one, so the
-client-side half — `_reorderPool`, the toggle handler, the read-only class, the
-generate-payload filter — has no automated coverage. That is a real gap, stated
-rather than papered over.
+The repo **does** have a JS test harness — `tests/js/run.mjs`, a dependency-free
+node runner over `*.test.mjs` files, invoked as `node tests/js/run.mjs`
+(27 tests currently pass). An earlier draft of this design wrongly stated there
+was none.
 
-It is an acceptable one here because the risky logic was deliberately kept out
-of JS: the slider maths (`sortByPriority`, `cumulativeDurations`,
-`optimalDuration`, `prefixForDuration`) is untouched, and `_reorderPool` only
-changes which array is handed to it. The failure mode of a bug in that one-line
-filter is visible immediately in the sidebar and the slider label, not silent.
+`static/app.js` is a classic script that wires DOM listeners at the top level,
+so it cannot be imported into node. The established house pattern is therefore
+**static assertions over the source text**, scoped to a single function body
+(see `tests/js/clear_selections.test.mjs`, which slices out `_clearSelections`
+by brace-matching so an assertion cannot be satisfied by an unrelated call
+elsewhere in the file). New tests follow that pattern:
 
-If this filter later grows conditions, that is the point to add a JS test
-runner rather than keep extending an untested path.
+- `_clearSelections` does **not** reference `sizzle_excl_v1_` — the guard for
+  the "exclusions survive generation" decision, which is the one rule in this
+  design that is easy to break later and silent when broken.
+- The `#btn-generate` click handler body references `state.included`.
+- `_postAnalyze` sends a `files` key.
+- Exactly one place filters the pool by `state.included` — the `_reorderPool`
+  body — so the filter cannot drift out of sync by being duplicated.
+
+These verify the three enforcement boundaries stay wired. They do not execute
+the slider maths, which is unchanged by this work: `sortByPriority`,
+`cumulativeDurations`, `optimalDuration` and `prefixForDuration` are untouched,
+and `_reorderPool` only changes which array is handed to them.
 
 ### Manual verification
 
