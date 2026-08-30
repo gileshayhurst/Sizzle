@@ -189,3 +189,30 @@ def test_contract_text_skips_entries_without_a_message():
 def test_contract_text_of_nothing_is_empty():
     assert forven_api.entries_to_contract_text([]) == ""
     assert forven_api.entries_to_contract_text(None) == ""
+
+
+def test_media_link_requests_the_asked_for_disposition(monkeypatch):
+    captured = {}
+
+    def fake_urlopen(request_obj, timeout=None):
+        captured["url"] = request_obj.full_url
+        return _FakeResponse(
+            {"tenant": {"public_id": "t", "name": "n"},
+             "url": "https://s3.example/signed", "expires_at": "2026-08-30T12:00:00+00:00"}
+        )
+
+    monkeypatch.setattr(forven_api.urlrequest, "urlopen", fake_urlopen)
+    client = forven_api.ForvenClient("https://www.forven.ai/api/v1", "fvk_abc")
+
+    link = client.media_link("tenant-1", "AAAA1111", disposition="attachment")
+
+    assert link["url"] == "https://s3.example/signed"
+    assert "disposition=attachment" in captured["url"]
+
+
+def test_expired_presigned_url_is_recognised():
+    xml = b"<Error><Code>AccessDenied</Code><Message>Request has expired</Message></Error>"
+
+    assert forven_api.is_presigned_expiry(403, xml) is True
+    assert forven_api.is_presigned_expiry(403, b'{"error": "forbidden"}') is False
+    assert forven_api.is_presigned_expiry(200, xml) is False

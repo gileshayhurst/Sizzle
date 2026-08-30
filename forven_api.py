@@ -150,6 +150,19 @@ class ForvenClient:
             "GET", f"/tenants/{tenant_public_id}/interviews/{interview_ref}/transcript"
         )
 
+    def media_link(self, tenant_public_id: str, interview_ref: str, *,
+                   disposition: str = "inline") -> dict:
+        """A presigned media URL, valid 60 minutes. Never store these - re-mint.
+
+        disposition='attachment' downloads and needs the key's allow_download;
+        without it the API returns 403 (CapabilityError).
+        """
+        return self._request(
+            "GET",
+            f"/tenants/{tenant_public_id}/interviews/{interview_ref}/media-link",
+            query={"disposition": disposition},
+        )
+
 
 # The API's roles, mapped to the labels the existing pipeline expects.
 _ROLE_LABELS = {"agent": "Interviewer", "user": "Participant"}
@@ -172,3 +185,14 @@ def entries_to_contract_text(entries) -> str:
         label = _ROLE_LABELS.get(entry.get("role"), "Participant")
         lines.append(f"[{seconds // 60:02d}:{seconds % 60:02d}] {label}: {message}")
     return "".join(f"{line}\n" for line in lines)
+
+
+def is_presigned_expiry(status_code: int, body: bytes) -> bool:
+    """True when a 403 came from S3 for an expired presigned URL.
+
+    The API answers JSON; S3 answers XML. A 403 with an XML AccessDenied body
+    means the 60-minute window closed, NOT that the key lacks a capability.
+    """
+    if status_code != 403:
+        return False
+    return b"<Code>AccessDenied</Code>" in body or b"<Error>" in body
