@@ -108,3 +108,27 @@ def test_page_size_is_clamped_to_the_documented_maximum(monkeypatch):
     client.list_interviews("tenant-1", page_size=5000)
 
     assert "page_size=200" in captured["url"]
+
+
+def test_iter_interviews_drains_every_page(monkeypatch):
+    pages = [
+        {"tenant": {"public_id": "t", "name": "n"},
+         "interviews": [{"interview_ref": "A"}, {"interview_ref": "B"}],
+         "next_cursor": "B"},
+        {"tenant": {"public_id": "t", "name": "n"},
+         "interviews": [{"interview_ref": "C"}],
+         "next_cursor": None},
+    ]
+    calls = []
+
+    def fake_urlopen(request_obj, timeout=None):
+        calls.append(request_obj.full_url)
+        return _FakeResponse(pages[len(calls) - 1])
+
+    monkeypatch.setattr(forven_api.urlrequest, "urlopen", fake_urlopen)
+    client = forven_api.ForvenClient("https://staging.forven.ai/api/v1", "fvk_abc")
+
+    refs = [row["interview_ref"] for row in client.iter_interviews("tenant-1")]
+
+    assert refs == ["A", "B", "C"]
+    assert "cursor=B" in calls[1]

@@ -124,3 +124,22 @@ class ForvenClient:
             rows=payload.get("interviews") or [],
             next_cursor=payload.get("next_cursor"),
         )
+
+    def iter_interviews(self, tenant_public_id: str, *, since: str | None = None,
+                        source: str | None = None, page_size: int = 100):
+        """Yield every visible interview row, draining the cursor.
+
+        Rows arrive in stable insertion order, NOT sorted by interview_date.
+        Callers must not stop early on a date heuristic - drain to exhaustion.
+        """
+        cursor = None
+        while True:
+            page = self.list_interviews(
+                tenant_public_id, since=since, source=source,
+                page_size=page_size, cursor=cursor,
+            )
+            for row in page.rows:
+                yield row
+            cursor = page.next_cursor
+            if not cursor:
+                return
