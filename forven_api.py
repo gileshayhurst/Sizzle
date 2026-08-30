@@ -143,3 +143,32 @@ class ForvenClient:
             cursor = page.next_cursor
             if not cursor:
                 return
+
+    def get_transcript(self, tenant_public_id: str, interview_ref: str) -> dict:
+        """Transcript, entries, metadata and compiled script for one interview."""
+        return self._request(
+            "GET", f"/tenants/{tenant_public_id}/interviews/{interview_ref}/transcript"
+        )
+
+
+# The API's roles, mapped to the labels the existing pipeline expects.
+_ROLE_LABELS = {"agent": "Interviewer", "user": "Participant"}
+
+
+def entries_to_contract_text(entries) -> str:
+    """Render transcript_entries as the tool's '[MM:SS] Role: text' contract.
+
+    These timings are TURN-level and on a different clock than the video - they
+    are a starting point for forced alignment, never a basis for cutting clips.
+    Minutes are not wrapped at 60: an hour-long interview reads [62:03], which
+    the downstream parser handles.
+    """
+    lines = []
+    for entry in entries or []:
+        message = (entry.get("message") or "").strip()
+        if not message:
+            continue
+        seconds = int(entry.get("time_in_call_secs") or 0)
+        label = _ROLE_LABELS.get(entry.get("role"), "Participant")
+        lines.append(f"[{seconds // 60:02d}:{seconds % 60:02d}] {label}: {message}")
+    return "".join(f"{line}\n" for line in lines)

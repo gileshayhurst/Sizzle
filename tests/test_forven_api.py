@@ -132,3 +132,60 @@ def test_iter_interviews_drains_every_page(monkeypatch):
 
     assert refs == ["A", "B", "C"]
     assert "cursor=B" in calls[1]
+
+
+def test_get_transcript_returns_text_entries_and_script(monkeypatch):
+    monkeypatch.setattr(
+        forven_api.urlrequest,
+        "urlopen",
+        lambda r, timeout=None: _FakeResponse(
+            {
+                "tenant": {"public_id": "t", "name": "n"},
+                "interview_ref": "AAAA1111",
+                "transcript_status": "done",
+                "transcript_text": "Interviewer: Hi\nParticipant: Hello",
+                "transcript_entries": [
+                    {"role": "agent", "message": "Hi", "time_in_call_secs": 1},
+                    {"role": "user", "message": "Hello", "time_in_call_secs": 3},
+                ],
+                "interview_script": "compiled script",
+            }
+        ),
+    )
+    client = forven_api.ForvenClient("https://www.forven.ai/api/v1", "fvk_abc")
+
+    result = client.get_transcript("tenant-1", "AAAA1111")
+
+    assert result["transcript_status"] == "done"
+    assert len(result["transcript_entries"]) == 2
+    assert result["interview_script"] == "compiled script"
+
+
+def test_entries_become_the_mmss_contract():
+    entries = [
+        {"role": "agent", "message": "How is the dog?", "time_in_call_secs": 0},
+        {"role": "user", "message": "Lazy.", "time_in_call_secs": 64},
+        {"role": "user", "message": "Very lazy.", "time_in_call_secs": 3723},
+    ]
+
+    text = forven_api.entries_to_contract_text(entries)
+
+    assert text.splitlines() == [
+        "[00:00] Interviewer: How is the dog?",
+        "[01:04] Participant: Lazy.",
+        "[62:03] Participant: Very lazy.",
+    ]
+
+
+def test_contract_text_skips_entries_without_a_message():
+    entries = [
+        {"role": "user", "message": "", "time_in_call_secs": 1},
+        {"role": "user", "message": "Real.", "time_in_call_secs": 2},
+    ]
+
+    assert forven_api.entries_to_contract_text(entries) == "[00:02] Participant: Real.\n"
+
+
+def test_contract_text_of_nothing_is_empty():
+    assert forven_api.entries_to_contract_text([]) == ""
+    assert forven_api.entries_to_contract_text(None) == ""
