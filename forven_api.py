@@ -1,0 +1,126 @@
+"""Client for Forven's Video Access API (v1).
+
+Auth is a single Bearer header; there are no cookies, sessions, or CSRF tokens.
+Keys are per-environment and never crossed: a prod key reads prod sources, a
+staging key writes staging reels. See developer-docs/video_access_api.md.
+
+Uses urllib rather than requests - this repo has no requests dependency.
+"""
+
+import json
+from dataclasses import dataclass
+from urllib import error as urlerror
+from urllib import parse as urlparse
+from urllib import request as urlrequest
+
+STAGING_BASE = "https://staging.forven.ai/api/v1"
+PRODUCTION_BASE = "https://www.forven.ai/api/v1"
+
+MAX_PAGE_SIZE = 200
+TIMEOUT_SECONDS = 30
+
+
+class ForvenApiError(Exception):
+    """Any non-success response from the API."""
+
+
+class AuthError(ForvenApiError):
+    """401 - key missing, malformed, unknown, or revoked."""
+
+
+class CapabilityError(ForvenApiError):
+    """403 - key lacks allow_download or allow_upload_reels."""
+
+
+class NotVisibleError(ForvenApiError):
+    """404 - feature flag off, unknown tenant, or ref not visible to it.
+
+    The API makes 'does not exist' and 'not visible to you' deliberately
+    indistinguishable. Check the tenant echo before assuming a bug.
+    """
+
+
+class RateLimited(ForvenApiError):
+    """429 - windowed limit exceeded."""
+
+
+_STATUS_ERRORS = {
+    401: AuthError,
+    403: CapabilityError,
+    404: NotVisibleError,
+    429: RateLimited,
+}
+
+
+@dataclass
+class InterviewPage:
+    tenant_public_id: str
+    tenant_name: str
+    rows: list
+    next_cursor: str | None
+
+
+class ForvenClient:
+    def __init__(self, base_url: str, api_key: str):
+        if not api_key:
+            raise ForvenApiError("Missing Forven API key.")
+        self.base_url = base_url.rstrip("/")
+        self._api_key = api_key
+
+    def _request(self, method: str, path: str, *, query: dict | None = None,
+                 body: dict | None = None) -> dict:
+        url = f"{self.base_url}{path}"
+        if query:
+            url = f"{url}?{urlparse.urlencode({k: v for k, v in query.items() if v is not None})}"
+
+        headers = {"Authorization": f"Bearer {self._api_key}", "Accept": "application/json"}
+        data = None
+        if body is not None:
+            data = json.dumps(body).encode("utf-8")
+            headers["Content-Type"] = "application/json"
+
+        request_obj = urlrequest.Request(url=url, data=data, headers=headers, method=method)
+
+        try:
+            with urlrequest.urlopen(request_obj, timeout=TIMEOUT_SECONDS) as response:
+                raw = response.read().decode("utf-8")
+        except urlerror.HTTPError as exc:
+            raise self._to_error(exc)
+        except urlerror.URLError as exc:
+            raise ForvenApiError(f"Unable to reach Forven: {exc.reason}")
+
+        try:
+            return json.loads(raw) if raw else {}
+        except json.JSONDecodeError:
+            raise ForvenApiError("Invalid JSON response from Forven.")
+
+    def _to_error(self, exc) -> ForvenApiError:
+        raw = exc.read().decode("utf-8", errors="ignore")
+        try:
+            parsed = json.loads(raw) if raw else {}
+        except json.JSONDecodeError:
+            parsed = {}
+        detail = parsed.get("message") or parsed.get("error") or raw.strip()
+        cls = _STATUS_ERRORS.get(exc.code, ForvenApiError)
+        return cls(f"Forven API {exc.code}: {detail}")
+
+    def list_interviews(self, tenant_public_id: str, *, since: str | None = None,
+                        source: str | None = None, page_size: int = 100,
+                        cursor: str | None = None) -> InterviewPage:
+        payload = self._request(
+            "GET",
+            f"/tenants/{tenant_public_id}/interviews",
+            query={
+                "since": since,
+                "source": source,
+                "page_size": min(page_size, MAX_PAGE_SIZE),
+                "cursor": cursor,
+            },
+        )
+        tenant = payload.get("tenant") or {}
+        return InterviewPage(
+            tenant_public_id=str(tenant.get("public_id") or ""),
+            tenant_name=str(tenant.get("name") or ""),
+            rows=payload.get("interviews") or [],
+            next_cursor=payload.get("next_cursor"),
+        )
