@@ -109,9 +109,14 @@ def check_source():
     _ok(f"transcript fetched: status={detail.get('transcript_status')}, {len(entries)} entries")
 
     if entries:
-        preview = forven_api.entries_to_contract_text(entries).splitlines()[:2]
-        for line in preview:
-            print(f"        contract: {line[:88]}")
+        # Verify the adapter produces the contract shape WITHOUT printing
+        # participant speech: transcript content is research material and does
+        # not get copied into logs, tickets, or AI tools.
+        contract_lines = forven_api.entries_to_contract_text(entries).splitlines()
+        shaped = sum(1 for line in contract_lines
+                     if line.startswith("[") and "] " in line and ": " in line)
+        _ok(f"adapter produced {shaped}/{len(contract_lines)} well-formed contract lines "
+            f"(content withheld by design)")
 
     try:
         link = client.media_link(config.tenant_public_id, ref, disposition="attachment")
