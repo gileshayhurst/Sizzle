@@ -93,6 +93,15 @@ def download_file(key: str, local_path: str) -> None:
         shutil.copy2(src, local_path)
 
 
+def delete_key(key: str) -> None:
+    """Delete a file from storage. No-op if it does not exist."""
+    if is_cloud():
+        _s3().delete_object(Bucket=_bucket(), Key=key)
+    else:
+        path = _data_root() / key
+        path.unlink(missing_ok=True)
+
+
 def read_json(key: str) -> list | dict:
     """Read and deserialise a JSON file from storage. Returns [] on missing or corrupt."""
     if is_cloud():

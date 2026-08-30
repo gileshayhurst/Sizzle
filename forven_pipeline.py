@@ -46,3 +46,23 @@ def sync(client, *, tenant_public_id: str, since: str | None = None, log=print):
     record_ingested(fresh)
     log(f"ingested {len(fresh)} interview(s) into {session_key}")
     return session_key
+
+
+MEDIA_SUFFIXES = (".mp4", ".webm", ".mov")
+
+
+def purge_media(session_key: str, log=print) -> int:
+    """Delete downloaded interview media, keeping the aligned transcripts.
+
+    Retention obligation from the Video Access API: local copies of interview
+    media are ours to delete once the work no longer needs them. The aligned
+    transcript is small and is what selection actually reads; the video can be
+    re-fetched with one media-link call when it is time to cut.
+    """
+    removed = 0
+    for key in storage.list_keys(session_key):
+        if key.lower().endswith(MEDIA_SUFFIXES):
+            storage.delete_key(key)
+            removed += 1
+    log(f"purged {removed} media file(s) from {session_key}")
+    return removed
