@@ -163,6 +163,28 @@ class ForvenClient:
             query={"disposition": disposition},
         )
 
+    def reel_upload_start(self, tenant_public_id: str, content_type: str = "video/mp4") -> dict:
+        """Get a presigned PUT target for a finished reel. Needs allow_upload_reels."""
+        return self._request(
+            "POST", f"/tenants/{tenant_public_id}/reels/upload-start",
+            body={"content_type": content_type},
+        )
+
+    def reel_register(self, tenant_public_id: str, *, s3_key: str, title: str,
+                      duration_seconds: int, source_interview_refs: list,
+                      metadata: dict | None = None) -> dict:
+        """Register an uploaded reel. s3_key must be the one the PUT used."""
+        return self._request(
+            "POST", f"/tenants/{tenant_public_id}/reels",
+            body={
+                "s3_key": s3_key,
+                "title": title,
+                "duration_seconds": duration_seconds,
+                "source_interview_refs": source_interview_refs,
+                "metadata": metadata or {},
+            },
+        )
+
 
 # The API's roles, mapped to the labels the existing pipeline expects.
 _ROLE_LABELS = {"agent": "Interviewer", "user": "Participant"}
