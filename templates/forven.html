@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Forven — pull interviews</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <style>
+    .fv-wrap { max-width: 1100px; margin: 0 auto; padding: 28px 24px 64px; }
+    .fv-head { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; margin-bottom: 4px; }
+    .fv-title { color: var(--ink); font-size: 1.75rem; font-weight: 700; letter-spacing: -0.01em; }
+    .fv-sub { color: var(--body); font-size: 0.875rem; line-height: 1.55; margin: 0 0 22px; }
+
+    .fv-conns { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; margin-bottom: 22px; }
+    .fv-conn { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
+    .fv-conn h3 { color: var(--muted); font-size: 0.6875rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; margin: 0 0 6px; }
+    .fv-conn .fv-org { color: var(--ink); font-size: 1rem; font-weight: 600; }
+    .fv-conn .fv-meta { color: var(--muted); font-size: 0.75rem; margin-top: 3px; word-break: break-all; }
+    .fv-pill { display: inline-block; font-size: 0.6875rem; font-weight: 700; padding: 2px 8px; border-radius: 999px; margin-left: 8px; vertical-align: middle; }
+    .fv-ok   { background: var(--success-tint); color: var(--success); }
+    .fv-bad  { background: var(--danger-tint);  color: var(--danger-ink); border: 1px solid var(--danger-border); }
+    .fv-warn { background: var(--warning-tint); color: var(--warning); }
+
+    .fv-bar { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
+    .fv-btn { background: var(--amber-strong); color: #fff; border: 0; border-radius: 8px; padding: 9px 16px; font-size: 0.875rem; font-weight: 600; cursor: pointer; }
+    .fv-btn:hover:not(:disabled) { background: var(--amber-strong-hov); }
+    .fv-btn:disabled { opacity: .45; cursor: not-allowed; }
+    .fv-btn-quiet { background: var(--amber-tint); color: var(--amber-ink); }
+    .fv-btn-quiet:hover:not(:disabled) { background: var(--amber-tint-hover); }
+    .fv-count { color: var(--muted); font-size: 0.8125rem; }
+
+    table.fv-tbl { width: 100%; border-collapse: collapse; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+    .fv-tbl th { text-align: left; color: var(--muted); font-size: 0.6875rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; padding: 10px 12px; background: var(--canvas-top); border-bottom: 1px solid var(--border); }
+    .fv-tbl td { padding: 10px 12px; border-bottom: 1px solid var(--border); color: var(--body); font-size: 0.8125rem; vertical-align: top; }
+    .fv-tbl tr:last-child td { border-bottom: 0; }
+    .fv-tbl tr:hover td { background: var(--canvas-hover); }
+    .fv-ref { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--ink); font-weight: 600; }
+    .fv-topic { color: var(--ink); }
+
+    .fv-note { background: var(--surface-warm); border: 1px solid var(--amber-border); border-radius: 10px; padding: 12px 14px; color: var(--body); font-size: 0.8125rem; line-height: 1.55; margin-bottom: 20px; }
+    .fv-result { margin-top: 16px; padding: 12px 14px; border-radius: 10px; font-size: 0.8125rem; line-height: 1.6; display: none; }
+    .fv-result code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--canvas); padding: 1px 5px; border-radius: 4px; }
+    .fv-empty { color: var(--muted); font-size: 0.875rem; padding: 22px 4px; }
+  </style>
+</head>
+<body>
+  <div class="fv-wrap">
+    <div class="fv-head">
+      <span class="fv-title">Forven</span>
+      <span class="fv-count" id="src-env-label"></span>
+    </div>
+    <p class="fv-sub">Interviews available from the Forven platform. Pull the ones you want into a
+      working session, then align them before cutting.</p>
+
+    <div class="fv-conns" id="conns"></div>
+
+    <div class="fv-note">
+      <strong>Metadata only.</strong> This page lists interviews; it does not download media or
+      transcripts. Pulling fetches transcripts and video into a working session — do that only for
+      interviews you intend to use, and delete the media once the reel is cut.
+    </div>
+
+    <div class="fv-bar">
+      <button class="fv-btn fv-btn-quiet" id="refresh">Refresh</button>
+      <button class="fv-btn" id="pull" disabled>Pull selected</button>
+      <span class="fv-count" id="sel-count">none selected</span>
+    </div>
+
+    <div id="listing"><div class="fv-empty">Loading…</div></div>
+    <div class="fv-result" id="result"></div>
+  </div>
+
+<script>
+(function () {
+  const listing = document.getElementById("listing");
+  const connsEl = document.getElementById("conns");
+  const pullBtn = document.getElementById("pull");
+  const selCount = document.getElementById("sel-count");
+  const resultEl = document.getElementById("result");
+  const envLabel = document.getElementById("src-env-label");
+
+  function el(tag, cls, text) {
+    const n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text !== undefined && text !== null) n.textContent = String(text);
+    return n;
+  }
+
+  function renderConnections(conns) {
+    connsEl.replaceChildren();
+    conns.forEach(function (c) {
+      const card = el("div", "fv-conn");
+      card.appendChild(el("h3", null, c.role));
+      const org = el("div", "fv-org", c.tenant_name || "—");
+      const pill = el("span", "fv-pill " + (c.status === "ok" ? "fv-ok" : c.status === "mismatch" ? "fv-bad" : "fv-warn"),
+                      c.status === "ok" ? "matches" : c.status === "mismatch" ? "wrong tenant" : "unverified");
+      org.appendChild(pill);
+      card.appendChild(org);
+      card.appendChild(el("div", "fv-meta", c.detail));
+      connsEl.appendChild(card);
+    });
+  }
+
+  function updateSelection() {
+    const n = document.querySelectorAll(".fv-pick:checked").length;
+    selCount.textContent = n === 0 ? "none selected" : n + " selected";
+    pullBtn.disabled = n === 0;
+  }
+
+  function renderRows(rows) {
+    if (!rows.length) {
+      listing.replaceChildren(el("div", "fv-empty", "No interviews visible to this tenant."));
+      return;
+    }
+    const table = el("table", "fv-tbl");
+    const thead = el("thead");
+    const hr = el("tr");
+    ["", "Ref", "Date", "Length", "Topic", "Source", "Media"].forEach(function (h) {
+      hr.appendChild(el("th", null, h));
+    });
+    thead.appendChild(hr);
+    table.appendChild(thead);
+
+    const tbody = el("tbody");
+    rows.forEach(function (r) {
+      const tr = el("tr");
+      const tdPick = el("td");
+      const box = document.createElement("input");
+      box.type = "checkbox";
+      box.className = "fv-pick";
+      box.value = r.interview_ref;
+      box.addEventListener("change", updateSelection);
+      tdPick.appendChild(box);
+      tr.appendChild(tdPick);
+
+      tr.appendChild(el("td", "fv-ref", r.interview_ref));
+      tr.appendChild(el("td", null, (r.interview_date || "").slice(0, 10) || "—"));
+      tr.appendChild(el("td", null, r.duration_seconds ? r.duration_seconds + "s" : "—"));
+      tr.appendChild(el("td", "fv-topic", r.topic || "—"));
+      tr.appendChild(el("td", null, r.source || "—"));
+      tr.appendChild(el("td", null, r.media_status || "—"));
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+    listing.replaceChildren(table);
+    updateSelection();
+  }
+
+  function showResult(kind, node) {
+    resultEl.className = "fv-result " + (kind === "ok" ? "fv-ok" : "fv-bad");
+    resultEl.style.display = "block";
+    resultEl.replaceChildren(node);
+  }
+
+  function load() {
+    listing.replaceChildren(el("div", "fv-empty", "Loading…"));
+    fetch("/forven/interviews")
+      .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, body: j }; }); })
+      .then(function (res) {
+        renderConnections(res.body.connections || []);
+        envLabel.textContent = res.body.source_env ? "source: " + res.body.source_env : "";
+        if (!res.ok) {
+          listing.replaceChildren(el("div", "fv-empty", res.body.error || "Could not list interviews."));
+          return;
+        }
+        renderRows(res.body.interviews || []);
+      })
+      .catch(function (e) {
+        listing.replaceChildren(el("div", "fv-empty", "Request failed: " + e.message));
+      });
+  }
+
+  document.getElementById("refresh").addEventListener("click", load);
+
+  pullBtn.addEventListener("click", function () {
+    const refs = Array.from(document.querySelectorAll(".fv-pick:checked")).map(function (b) { return b.value; });
+    if (!refs.length) return;
+    pullBtn.disabled = true;
+    pullBtn.textContent = "Pulling…";
+    fetch("/forven/pull", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ refs: refs })
+    })
+      .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, body: j }; }); })
+      .then(function (res) {
+        if (!res.ok) {
+          showResult("bad", el("span", null, res.body.error || "Pull failed."));
+          return;
+        }
+        const wrap = el("div");
+        wrap.appendChild(el("div", null, "Pulled " + res.body.ingested + " interview(s) into a session."));
+        const line = el("div");
+        line.appendChild(el("span", null, "Next, align it: "));
+        const code = el("code", null, "python -m encoder.job " + res.body.session_key);
+        line.appendChild(code);
+        wrap.appendChild(line);
+        showResult("ok", wrap);
+      })
+      .catch(function (e) { showResult("bad", el("span", null, "Request failed: " + e.message)); })
+      .finally(function () {
+        pullBtn.textContent = "Pull selected";
+        updateSelection();
+      });
+  });
+
+  load();
+})();
+</script>
+</body>
+</html>

@@ -45,6 +45,9 @@ from shared import (
     transcript_tier as _transcript_tier,
 )
 import storage
+import forven_api
+import forven_config
+import forven_ingest
 
 RECENT_FOLDERS_PATH = Path(__file__).parent / "recent_folders.json"
 PROMPT_HISTORY_PATH = Path(__file__).parent / "prompt_history.json"
@@ -538,6 +541,101 @@ def create_app(testing: bool = False) -> Flask:
             app_mode=os.environ.get("APP_MODE", "local"),
             generator_url=os.environ.get("GENERATOR_URL", "http://localhost:5001"),
         )
+
+    # --- Forven platform integration -------------------------------------
+    # Interviews come from the Forven Video Access API instead of a local
+    # folder. Listing is metadata only - the list endpoint returns no
+    # participant names, emails, or transcript text. Pulling fetches
+    # transcripts and media into a working session (forven_ingest), which is
+    # the point at which the retention obligation starts.
+
+    def _connection_status(role, endpoint_fn, expected_fn):
+        """Describe one configured tenant, echoing back the org it resolves to.
+
+        A wrong-but-valid tenant id returns another org's data silently, so the
+        echo is surfaced in the UI rather than trusted.
+        """
+        try:
+            config = endpoint_fn()
+        except forven_config.ConfigError as exc:
+            return {"role": role, "tenant_name": None, "status": "unset", "detail": str(exc)}
+
+        client = forven_api.ForvenClient(config.base_url, config.api_key)
+        try:
+            page = client.list_interviews(config.tenant_public_id, page_size=1)
+        except forven_api.ForvenApiError as exc:
+            return {"role": role, "tenant_name": None, "status": "unset",
+                    "detail": f"{type(exc).__name__}: {exc}"}
+
+        expected = expected_fn()
+        if not expected:
+            status, detail = "unverified", config.tenant_public_id
+        elif page.tenant_name == expected:
+            status, detail = "ok", config.tenant_public_id
+        else:
+            status = "mismatch"
+            detail = f"expected {expected!r} — {config.tenant_public_id}"
+        return {"role": role, "tenant_name": page.tenant_name, "status": status, "detail": detail}
+
+    @app.get("/forven")
+    def forven_page():
+        return render_template("forven.html")
+
+    @app.get("/forven/interviews")
+    def forven_interviews():
+        payload = {
+            "source_env": forven_config.source_env(),
+            "connections": [
+                _connection_status("source — interviews from",
+                                   forven_config.source_config,
+                                   forven_config.source_expected_name),
+                _connection_status("destination — reels to",
+                                   forven_config.destination_config,
+                                   forven_config.destination_expected_name),
+            ],
+        }
+
+        try:
+            config = forven_config.source_config()
+        except forven_config.ConfigError as exc:
+            payload["error"] = str(exc)
+            return jsonify(payload), 400
+
+        client = forven_api.ForvenClient(config.base_url, config.api_key)
+        try:
+            payload["interviews"] = list(client.iter_interviews(config.tenant_public_id))
+        except forven_api.ForvenApiError as exc:
+            payload["error"] = f"{type(exc).__name__}: {exc}"
+            return jsonify(payload), 502
+
+        return jsonify(payload)
+
+    @app.post("/forven/pull")
+    def forven_pull():
+        refs = [str(r).strip() for r in (request.get_json(silent=True) or {}).get("refs") or []]
+        refs = [r for r in refs if r]
+        if not refs:
+            return jsonify({"error": "Select at least one interview."}), 400
+
+        try:
+            config = forven_config.source_config()
+        except forven_config.ConfigError as exc:
+            return jsonify({"error": str(exc)}), 400
+
+        client = forven_api.ForvenClient(config.base_url, config.api_key)
+        session_key = storage.new_session_key()
+        try:
+            forven_ingest.ingest(client, tenant_public_id=config.tenant_public_id,
+                                 refs=refs, session_key=session_key)
+        except forven_api.ForvenApiError as exc:
+            return jsonify({"error": f"{type(exc).__name__}: {exc}"}), 502
+
+        # Interviews whose transcript is not ready are skipped, so report what
+        # actually landed rather than what was asked for.
+        written = [k for k in storage.list_keys(session_key) if k.endswith(".txt")]
+        return jsonify({"session_key": session_key,
+                        "ingested": len(written),
+                        "requested": len(refs)})
 
     _VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
     _ALLOWED_UPLOAD_EXTENSIONS = _VIDEO_EXTENSIONS | {".txt"}
