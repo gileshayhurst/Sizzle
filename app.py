@@ -48,6 +48,7 @@ import storage
 import forven_api
 import forven_config
 import forven_ingest
+import sz_store
 
 RECENT_FOLDERS_PATH = Path(__file__).parent / "recent_folders.json"
 PROMPT_HISTORY_PATH = Path(__file__).parent / "prompt_history.json"
@@ -543,39 +544,68 @@ def create_app(testing: bool = False) -> Flask:
         )
 
     # --- Forven platform integration -------------------------------------
-    # Interviews come from the Forven Video Access API instead of a local
-    # folder. Listing is metadata only - the list endpoint returns no
-    # participant names, emails, or transcript text. Pulling fetches
-    # transcripts and media into a working session (forven_ingest), which is
-    # the point at which the retention obligation starts.
+    # Interviews come from the Forven Video Access API. WHICH tenants to read
+    # from and deliver to is data (sz_tenant_pairs), not deployment config, so
+    # one deployment can serve several organisations. Only the API keys are
+    # environment variables - they are the application's credentials.
+    #
+    # Listing is metadata only: the list endpoint returns no participant names,
+    # emails, or transcript text. Pulling fetches transcripts and media, which
+    # is where the retention obligation starts.
 
-    def _connection_status(role, endpoint_fn, expected_fn):
-        """Describe one configured tenant, echoing back the org it resolves to.
+    def _resolve_pair(pair_id=None):
+        """Return (pair, source, destination) for the requested tenant pair.
+
+        Falls back to the environment-only configuration when no pair has been
+        set up yet, so a fresh deployment still works.
+        """
+        pair = None
+        if sz_store.is_configured():
+            try:
+                pair = (sz_store.get_tenant_pair(int(pair_id)) if pair_id
+                        else sz_store.default_tenant_pair())
+            except Exception:
+                app.logger.exception('could not resolve tenant pair')
+                pair = None
+        if pair:
+            source, destination = forven_config.endpoints_for_pair(pair)
+        else:
+            source = forven_config.source_config()
+            destination = forven_config.destination_config()
+        return pair, source, destination
+
+    def _connection_status(role, endpoint, expected_name):
+        """Describe one tenant, echoing back the org it actually resolves to.
 
         A wrong-but-valid tenant id returns another org's data silently, so the
-        echo is surfaced in the UI rather than trusted.
+        echo is surfaced rather than trusted.
         """
+        client = forven_api.ForvenClient(endpoint.base_url, endpoint.api_key)
         try:
-            config = endpoint_fn()
-        except forven_config.ConfigError as exc:
-            return {"role": role, "tenant_name": None, "status": "unset", "detail": str(exc)}
-
-        client = forven_api.ForvenClient(config.base_url, config.api_key)
-        try:
-            page = client.list_interviews(config.tenant_public_id, page_size=1)
+            page = client.list_interviews(endpoint.tenant_public_id, page_size=1)
         except forven_api.ForvenApiError as exc:
             return {"role": role, "tenant_name": None, "status": "unset",
                     "detail": f"{type(exc).__name__}: {exc}"}
 
-        expected = expected_fn()
-        if not expected:
-            status, detail = "unverified", config.tenant_public_id
-        elif page.tenant_name == expected:
-            status, detail = "ok", config.tenant_public_id
+        if not expected_name:
+            status, detail = "unverified", endpoint.tenant_public_id
+        elif page.tenant_name == expected_name:
+            status, detail = "ok", endpoint.tenant_public_id
         else:
             status = "mismatch"
-            detail = f"expected {expected!r} — {config.tenant_public_id}"
-        return {"role": role, "tenant_name": page.tenant_name, "status": status, "detail": detail}
+            detail = f"expected {expected_name!r} — {endpoint.tenant_public_id}"
+        return {"role": role, "tenant_name": page.tenant_name,
+                "status": status, "detail": detail}
+
+    def _available_pairs():
+        if not sz_store.is_configured():
+            return []
+        try:
+            return [{"id": p["id"], "name": p["name"], "is_default": p["is_default"]}
+                    for p in sz_store.list_tenant_pairs()]
+        except Exception:
+            app.logger.exception("could not list tenant pairs")
+            return []
 
     @app.get("/forven")
     def forven_page():
@@ -583,27 +613,31 @@ def create_app(testing: bool = False) -> Flask:
 
     @app.get("/forven/interviews")
     def forven_interviews():
-        payload = {
-            "source_env": forven_config.source_env(),
-            "connections": [
-                _connection_status("source — interviews from",
-                                   forven_config.source_config,
-                                   forven_config.source_expected_name),
-                _connection_status("destination — reels to",
-                                   forven_config.destination_config,
-                                   forven_config.destination_expected_name),
-            ],
-        }
+        payload = {"pairs": _available_pairs()}
 
         try:
-            config = forven_config.source_config()
+            pair, source, destination = _resolve_pair(request.args.get("pair_id"))
         except forven_config.ConfigError as exc:
             payload["error"] = str(exc)
             return jsonify(payload), 400
 
-        client = forven_api.ForvenClient(config.base_url, config.api_key)
+        payload["pair_id"] = pair["id"] if pair else None
+        payload["pair_name"] = pair["name"] if pair else "environment defaults"
+        payload["source_env"] = pair["source_env"] if pair else forven_config.source_env()
+        payload["connections"] = [
+            _connection_status(
+                "source — interviews from", source,
+                pair["source_tenant_name"] if pair else forven_config.source_expected_name(),
+            ),
+            _connection_status(
+                "destination — reels to", destination,
+                pair["dest_tenant_name"] if pair else forven_config.destination_expected_name(),
+            ),
+        ]
+
+        client = forven_api.ForvenClient(source.base_url, source.api_key)
         try:
-            payload["interviews"] = list(client.iter_interviews(config.tenant_public_id))
+            payload["interviews"] = list(client.iter_interviews(source.tenant_public_id))
         except forven_api.ForvenApiError as exc:
             payload["error"] = f"{type(exc).__name__}: {exc}"
             return jsonify(payload), 502
@@ -612,30 +646,43 @@ def create_app(testing: bool = False) -> Flask:
 
     @app.post("/forven/pull")
     def forven_pull():
-        refs = [str(r).strip() for r in (request.get_json(silent=True) or {}).get("refs") or []]
+        body = request.get_json(silent=True) or {}
+        refs = [str(r).strip() for r in body.get("refs") or []]
         refs = [r for r in refs if r]
         if not refs:
             return jsonify({"error": "Select at least one interview."}), 400
 
         try:
-            config = forven_config.source_config()
+            pair, source, _ = _resolve_pair(body.get("pair_id"))
         except forven_config.ConfigError as exc:
             return jsonify({"error": str(exc)}), 400
 
-        client = forven_api.ForvenClient(config.base_url, config.api_key)
+        client = forven_api.ForvenClient(source.base_url, source.api_key)
         session_key = storage.new_session_key()
         try:
-            forven_ingest.ingest(client, tenant_public_id=config.tenant_public_id,
+            forven_ingest.ingest(client, tenant_public_id=source.tenant_public_id,
                                  refs=refs, session_key=session_key)
         except forven_api.ForvenApiError as exc:
             return jsonify({"error": f"{type(exc).__name__}: {exc}"}), 502
 
         # Interviews whose transcript is not ready are skipped, so report what
         # actually landed rather than what was asked for.
-        written = [k for k in storage.list_keys(session_key) if k.endswith(".txt")]
+        landed = [Path(k).stem for k in storage.list_keys(session_key)
+                  if k.endswith(".txt")]
+
+        if landed and sz_store.is_configured():
+            try:
+                sz_store.record_ingested(landed,
+                                         tenant_public_id=source.tenant_public_id,
+                                         session_key=session_key)
+            except Exception:
+                # The pull succeeded; failing to index it must not lose it.
+                app.logger.exception("could not record ingest index")
+
         return jsonify({"session_key": session_key,
-                        "ingested": len(written),
-                        "requested": len(refs)})
+                        "ingested": len(landed),
+                        "requested": len(refs),
+                        "pair_name": pair["name"] if pair else None})
 
     _VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
     _ALLOWED_UPLOAD_EXTENSIONS = _VIDEO_EXTENSIONS | {".txt"}

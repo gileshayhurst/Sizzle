@@ -28,6 +28,9 @@
     .fv-btn-quiet { background: var(--amber-tint); color: var(--amber-ink); }
     .fv-btn-quiet:hover:not(:disabled) { background: var(--amber-tint-hover); }
     .fv-count { color: var(--muted); font-size: 0.8125rem; }
+    .fv-select { background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+                 padding: 8px 10px; font-size: 0.875rem; color: var(--ink); }
+    .fv-select:disabled { color: var(--faint); }
 
     table.fv-tbl { width: 100%; border-collapse: collapse; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
     .fv-tbl th { text-align: left; color: var(--muted); font-size: 0.6875rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; padding: 10px 12px; background: var(--canvas-top); border-bottom: 1px solid var(--border); }
@@ -61,6 +64,8 @@
     </div>
 
     <div class="fv-bar">
+      <label for="pair" class="fv-count">Organisation</label>
+      <select id="pair" class="fv-select"></select>
       <button class="fv-btn fv-btn-quiet" id="refresh">Refresh</button>
       <button class="fv-btn" id="pull" disabled>Pull selected</button>
       <span class="fv-count" id="sel-count">none selected</span>
@@ -78,12 +83,34 @@
   const selCount = document.getElementById("sel-count");
   const resultEl = document.getElementById("result");
   const envLabel = document.getElementById("src-env-label");
+  const pairEl = document.getElementById("pair");
 
   function el(tag, cls, text) {
     const n = document.createElement(tag);
     if (cls) n.className = cls;
     if (text !== undefined && text !== null) n.textContent = String(text);
     return n;
+  }
+
+  function renderPairs(pairs, activeId) {
+    pairEl.replaceChildren();
+    if (!pairs.length) {
+      const opt = el("option", null, "environment defaults");
+      pairEl.appendChild(opt);
+      pairEl.disabled = true;
+      return;
+    }
+    pairEl.disabled = false;
+    pairs.forEach(function (p) {
+      const opt = el("option", null, p.name + (p.is_default ? " (default)" : ""));
+      opt.value = p.id;
+      if (activeId !== null && String(p.id) === String(activeId)) opt.selected = true;
+      pairEl.appendChild(opt);
+    });
+  }
+
+  function selectedPairId() {
+    return pairEl.disabled ? null : pairEl.value;
   }
 
   function renderConnections(conns) {
@@ -154,11 +181,14 @@
 
   function load() {
     listing.replaceChildren(el("div", "fv-empty", "Loading…"));
-    fetch("/forven/interviews")
+    const chosen = selectedPairId();
+    fetch("/forven/interviews" + (chosen ? "?pair_id=" + encodeURIComponent(chosen) : ""))
       .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, body: j }; }); })
       .then(function (res) {
+        renderPairs(res.body.pairs || [], res.body.pair_id);
         renderConnections(res.body.connections || []);
-        envLabel.textContent = res.body.source_env ? "source: " + res.body.source_env : "";
+        envLabel.textContent = (res.body.pair_name || "") +
+          (res.body.source_env ? " · source: " + res.body.source_env : "");
         if (!res.ok) {
           listing.replaceChildren(el("div", "fv-empty", res.body.error || "Could not list interviews."));
           return;
@@ -171,6 +201,7 @@
   }
 
   document.getElementById("refresh").addEventListener("click", load);
+  pairEl.addEventListener("change", load);
 
   pullBtn.addEventListener("click", function () {
     const refs = Array.from(document.querySelectorAll(".fv-pick:checked")).map(function (b) { return b.value; });
@@ -180,7 +211,7 @@
     fetch("/forven/pull", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ refs: refs })
+      body: JSON.stringify({ refs: refs, pair_id: selectedPairId() })
     })
       .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, body: j }; }); })
       .then(function (res) {
