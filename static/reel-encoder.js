@@ -328,6 +328,10 @@ window.ReelEncoder = {
     // ── Encode each segment's clip, in order, into one stream ───────────────────
     let ts = 0; // seconds
     const segmentStarts = [];
+    // Which interviews actually end up in the cut. Forven's reel-register call
+    // needs exactly these: extra refs wrongly restrict who may see the reel,
+    // missing ones break its participant-erasure index.
+    const sourceVideos = new Set();
 
     try {
       for (let i = 0; i < segments.length; i++) {
@@ -343,6 +347,9 @@ window.ReelEncoder = {
         // start or count it, or duration/clip_count would over-report again.
         if (next > ts) {
           segmentStarts.push(ts);
+          // Recorded here, in the branch where the clip SURVIVED - a segment
+          // that was skipped contributes no footage and must not be claimed.
+          sourceVideos.add(seg.video);
           ts = next;
           log(`✓ Clip ${i + 1} done`);
         } else {
@@ -402,6 +409,7 @@ window.ReelEncoder = {
         duration_seconds: Math.round(totalDurationSec),
         clip_count: segmentStarts.length,
         segment_starts: segmentStarts,
+        source_videos: [...sourceVideos].sort(),
         captions_key: captionsKey,
       }),
       signal,

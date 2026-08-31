@@ -1958,6 +1958,9 @@ function showResult(result) {
   state.resultSegmentStarts = result.segment_starts || [];
   state.resultDownloadUrl = result.download_url || null;
   state.resultPath = result.path || null;
+  // The library id is what /forven/deliver takes as reel_id.
+  state.resultEntryId = result.entry_id || null;
+  _resetDeliverButton();
 
   // Always serve through the generator endpoint — it serves directly from the
   // local temp file (kept alive until container restart) so playback works
@@ -2537,6 +2540,67 @@ $('btn-close-player').addEventListener('click', () => {
   $('library-video').pause();
   $('library-video').src = '';
   _closeModal('library-player-overlay');
+});
+
+// --- Deliver to Forven -------------------------------------------------------
+function _resetDeliverButton() {
+  const btn = $('btn-deliver-forven');
+  const status = $('deliver-status');
+  if (!btn) return;
+  status.classList.add('hidden');
+  status.classList.remove('ok', 'bad');
+  status.textContent = '';
+  // No library entry means the reel never reached storage, so there is nothing
+  // to hand over.
+  btn.disabled = !state.resultEntryId;
+  btn.textContent = 'Deliver to Forven';
+}
+
+$('btn-deliver-forven').addEventListener('click', async () => {
+  const btn = $('btn-deliver-forven');
+  const status = $('deliver-status');
+  if (!state.resultEntryId) return;
+
+  const restore = (msg) => {
+    status.classList.remove('hidden');
+    status.classList.add('bad');
+    status.textContent = msg;
+    btn.disabled = false;
+    btn.textContent = 'Deliver to Forven';
+  };
+
+  btn.disabled = true;
+  btn.textContent = 'Delivering...';
+  status.classList.remove('hidden', 'ok', 'bad');
+  status.textContent = 'Sending to Forven...';
+
+  let resp, data;
+  try {
+    resp = await fetch('/forven/deliver', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reel_id: state.resultEntryId }),
+    });
+    data = await resp.json();
+  } catch (err) {
+    restore('Delivery failed: ' + err.message);
+    return;
+  }
+  if (!resp.ok) {
+    restore(data.error || 'Delivery failed.');
+    return;
+  }
+
+  // Name the destination. Delivering to the wrong organisation is the failure
+  // worth catching, and it is invisible unless the confirmation says where the
+  // reel landed. The button stays disabled afterwards: registering the same
+  // reel twice leaves two copies in the customer tenant with nothing to tell
+  // them apart.
+  status.classList.remove('hidden');
+  status.classList.add('ok');
+  status.textContent = 'Delivered to ' + (data.tenant_name || 'Forven')
+    + ' as ' + data.reel_ref + ' - it appears under Shared With Us.';
+  btn.textContent = 'Delivered';
 });
 
 // Load recent folders on startup

@@ -1177,3 +1177,10 @@ body {
   font-size: 12px;
   color: var(--muted);
 }
+
+/* Result-screen delivery feedback. Names the organisation the reel went to:
+   delivering to the wrong tenant is the failure that matters, and it is
+   invisible unless the confirmation says where it landed. */
+.deliver-status { font-size: 0.8125rem; margin-bottom: 8px; }
+.deliver-status.ok { color: var(--success); }
+.deliver-status.bad { color: var(--danger-ink); }
