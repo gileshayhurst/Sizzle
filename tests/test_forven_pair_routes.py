@@ -87,11 +87,13 @@ def test_a_pair_can_be_removed(client, monkeypatch):
 
 
 def test_a_database_that_is_down_does_not_stop_the_app_booting(monkeypatch):
-    """Everything except the Forven pages works without a database."""
+    """Schema creation runs at startup, so a database that is unreachable could
+    take the whole app down with it. It is logged and stepped over instead, and
+    the pages still serve - /forven falls back to environment-only config."""
     monkeypatch.setattr(sz_store, "is_configured", lambda: True)
     monkeypatch.setattr(sz_store, "init_schema",
                         lambda: (_ for _ in ()).throw(RuntimeError("no route to host")))
 
     app = create_app(testing=False)
 
-    assert app.test_client().get("/").status_code == 200
+    assert app.test_client().get("/forven").status_code == 200

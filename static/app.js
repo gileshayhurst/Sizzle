@@ -2551,9 +2551,9 @@ loadRecentFolders();
   // Only ever a session key. Anything else is someone probing for a path to
   // open, and /load-folder would reject it anyway.
   if (!handed || !/^sessions\/[0-9a-fA-F-]{8,64}$/.test(handed)) return;
-  // Drop it from the address bar so a refresh does not re-open, and a shared
-  // link does not carry someone else's session.
-  history.replaceState({}, '', location.pathname);
+  // Deliberately left in the address bar: / sends you to /forven when there
+  // is no session, so stripping it would turn a refresh into "start again".
+  // It is not a secret - this app has no authentication at all yet.
   openFolder(handed, 'Forven interviews');
 })();
 

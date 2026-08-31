@@ -52,13 +52,16 @@ def client():
         yield c
 
 
-def test_index_returns_200(client):
+def test_index_sends_you_to_forven_when_you_have_no_session(client):
+    """Interviews come from Forven, so that is the way in."""
     resp = client.get("/")
+    assert resp.status_code == 302
+    assert resp.headers["Location"].endswith("/forven")
+
+
+def test_index_returns_html_for_a_chosen_session(client):
+    resp = client.get("/?session=sessions/abc")
     assert resp.status_code == 200
-
-
-def test_index_returns_html(client):
-    resp = client.get("/")
     assert b"<!DOCTYPE html>" in resp.data or b"<html" in resp.data
 
 

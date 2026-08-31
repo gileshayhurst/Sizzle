@@ -26,7 +26,7 @@ if not shutil.which("ffmpeg") and _sys.platform == "win32":
         os.environ["PATH"] = str(_bin) + os.pathsep + os.environ.get("PATH", "")
         break
 
-from flask import Flask, jsonify, render_template, request, send_file
+from flask import Flask, jsonify, redirect, render_template, request, send_file
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 
@@ -549,6 +549,11 @@ def create_app(testing: bool = False) -> Flask:
 
     @app.get("/")
     def index():
+        # Interviews come from Forven, so that is where you start. This screen
+        # is the workspace for a session someone already chose; arriving with
+        # no session means they have not chosen one yet.
+        if not request.args.get("session"):
+            return redirect("/forven")
         return render_template(
             "index.html",
             app_mode=os.environ.get("APP_MODE", "local"),
