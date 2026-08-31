@@ -536,6 +536,17 @@ def create_app(testing: bool = False) -> Flask:
     # presigned PUT and never hit this host (see /upload/prepare).
     app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024
 
+    # The sz_ tables have to exist before the first request touches them, and
+    # this app has no migration step. CREATE TABLE IF NOT EXISTS is idempotent,
+    # so every boot re-asserts the schema harmlessly. A database that is down
+    # must not take the whole app with it: everything except the Forven pages
+    # works without one.
+    if not testing and sz_store.is_configured():
+        try:
+            sz_store.init_schema()
+        except Exception:
+            app.logger.exception("could not create the Sizzle Reel schema")
+
     @app.get("/")
     def index():
         return render_template(
@@ -684,6 +695,61 @@ def create_app(testing: bool = False) -> Flask:
                         "ingested": len(landed),
                         "requested": len(refs),
                         "pair_name": pair["name"] if pair else None})
+
+    @app.post("/forven/pairs")
+    def forven_add_pair():
+        """Add or update an organisation pair.
+
+        Without this the first pair could only be created with a psql prompt,
+        which leaves a fresh deployment unusable by anyone but a developer.
+        """
+        if not sz_store.is_configured():
+            return jsonify({
+                "error": "No database configured, so organisations cannot be "
+                         "saved. Set DATABASE_URL."
+            }), 503
+
+        body = request.get_json(silent=True) or {}
+        fields = {k: (body.get(k) or "").strip()
+                  for k in ("name", "source_tenant_id", "dest_tenant_id",
+                            "source_tenant_name", "dest_tenant_name")}
+        missing = [k for k in ("name", "source_tenant_id", "dest_tenant_id")
+                   if not fields[k]]
+        if missing:
+            return jsonify({"error": "Required: " + ", ".join(missing)}), 400
+
+        source_env = (body.get("source_env") or "production").strip()
+        dest_env = (body.get("dest_env") or "staging").strip()
+        if source_env not in ("production", "staging") or dest_env not in ("production", "staging"):
+            return jsonify({"error": "Environments must be production or staging."}), 400
+
+        try:
+            pair = sz_store.upsert_tenant_pair(
+                name=fields["name"],
+                source_tenant_id=fields["source_tenant_id"],
+                dest_tenant_id=fields["dest_tenant_id"],
+                source_tenant_name=fields["source_tenant_name"] or None,
+                dest_tenant_name=fields["dest_tenant_name"] or None,
+                source_env=source_env,
+                dest_env=dest_env,
+                is_default=bool(body.get("is_default")),
+            )
+        except Exception as exc:
+            app.logger.exception("could not save tenant pair")
+            return jsonify({"error": f"Could not save: {exc}"}), 500
+
+        return jsonify({"id": pair["id"], "name": pair["name"]})
+
+    @app.delete("/forven/pairs/<int:pair_id>")
+    def forven_delete_pair(pair_id):
+        if not sz_store.is_configured():
+            return jsonify({"error": "No database configured."}), 503
+        try:
+            removed = sz_store.delete_tenant_pair(pair_id)
+        except Exception as exc:
+            app.logger.exception("could not delete tenant pair")
+            return jsonify({"error": f"Could not delete: {exc}"}), 500
+        return jsonify({"deleted": removed})
 
     @app.get("/forven/reels")
     def forven_reels():

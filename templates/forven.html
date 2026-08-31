@@ -44,6 +44,8 @@
     .fv-result { margin-top: 16px; padding: 12px 14px; border-radius: 10px; font-size: 0.8125rem; line-height: 1.6; display: none; }
     .fv-result code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--canvas); padding: 1px 5px; border-radius: 4px; }
     .fv-empty { color: var(--muted); font-size: 0.875rem; padding: 22px 4px; }
+    .fv-pairform { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px; margin-top: 10px; }
+    .fv-pairform input, .fv-pairform select { padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: inherit; font-size: 0.875rem; font-family: inherit; }
   </style>
 </head>
 <body>
@@ -70,6 +72,33 @@
       <button class="fv-btn" id="pull" disabled>Pull selected</button>
       <span class="fv-count" id="sel-count">none selected</span>
     </div>
+
+    <details class="fv-conn" id="add-pair" style="margin-bottom:16px">
+      <summary style="cursor:pointer">Add an organisation</summary>
+      <p class="fv-sub">The tenant ids come from Forven. Keys stay in the
+        environment; only which organisations to read from and write to are
+        stored here.</p>
+      <div class="fv-pairform">
+        <input id="p-name" placeholder="Label, e.g. Zoe Enterprises">
+        <select id="p-source-env">
+          <option value="production">Read from production</option>
+          <option value="staging">Read from staging</option>
+        </select>
+        <input id="p-source-id" placeholder="Source tenant id">
+        <input id="p-source-name" placeholder="Expected source name (optional)">
+        <select id="p-dest-env">
+          <option value="staging">Write to staging</option>
+          <option value="production">Write to production</option>
+        </select>
+        <input id="p-dest-id" placeholder="Destination tenant id">
+        <input id="p-dest-name" placeholder="Expected destination name (optional)">
+      </div>
+      <label class="fv-meta" style="display:block;margin-top:8px">
+        <input type="checkbox" id="p-default"> Use this one by default
+      </label>
+      <button class="fv-btn" id="save-pair" style="margin-top:10px">Save organisation</button>
+      <span class="fv-count" id="pair-msg" style="margin-left:10px"></span>
+    </details>
 
     <div id="listing"><div class="fv-empty">Loading…</div></div>
     <div class="fv-result" id="result"></div>
@@ -213,6 +242,35 @@
 
   document.getElementById("refresh").addEventListener("click", load);
   document.getElementById("refresh-reels").addEventListener("click", loadReels);
+
+  document.getElementById("save-pair").addEventListener("click", function () {
+    const msg = document.getElementById("pair-msg");
+    const val = function (id) { return document.getElementById(id).value.trim(); };
+    msg.textContent = "Saving...";
+    fetch("/forven/pairs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: val("p-name"),
+        source_env: document.getElementById("p-source-env").value,
+        source_tenant_id: val("p-source-id"),
+        source_tenant_name: val("p-source-name"),
+        dest_env: document.getElementById("p-dest-env").value,
+        dest_tenant_id: val("p-dest-id"),
+        dest_tenant_name: val("p-dest-name"),
+        is_default: document.getElementById("p-default").checked
+      })
+    })
+      .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, body: j }; }); })
+      .then(function (res) {
+        msg.textContent = res.ok ? "Saved." : (res.body.error || "Could not save.");
+        if (res.ok) {
+          document.getElementById("add-pair").open = false;
+          load();
+        }
+      })
+      .catch(function (e) { msg.textContent = "Could not save: " + e.message; });
+  });
 
   // Cutting needs per-sentence timings; Forven's transcripts are turn-level on
   // a different clock. Alignment runs as a Render job, so dispatch then poll
