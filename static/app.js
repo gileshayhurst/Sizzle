@@ -2542,6 +2542,21 @@ $('btn-close-player').addEventListener('click', () => {
 // Load recent folders on startup
 loadRecentFolders();
 
+// A session handed over from /forven opens straight into the normal flow, so
+// pulling interviews out of Forven and cutting a reel are one continuous path
+// rather than two apps that happen to share storage. openFolder does the rest,
+// including the alignment pass, exactly as it does for an uploaded folder.
+(function openHandedOverSession() {
+  const handed = new URLSearchParams(location.search).get('session');
+  // Only ever a session key. Anything else is someone probing for a path to
+  // open, and /load-folder would reject it anyway.
+  if (!handed || !/^sessions\/[0-9a-fA-F-]{8,64}$/.test(handed)) return;
+  // Drop it from the address bar so a refresh does not re-open, and a shared
+  // link does not carry someone else's session.
+  history.replaceState({}, '', location.pathname);
+  openFolder(handed, 'Forven interviews');
+})();
+
 // Wake the generator service (Render free tier sleeps after ~15 min idle) so
 // it's usually up by the time the user opens a folder or generates a reel.
 fetch(GENERATOR_URL + '/library').catch(() => {});

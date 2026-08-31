@@ -204,10 +204,16 @@ def record_ingested(refs, *, tenant_public_id: str, session_key: str) -> int:
 
 
 def mark_aligned(refs) -> int:
+    """Stamp when alignment first completed. Returns rows newly marked.
+
+    Already-marked rows are left alone: the caller is a status poll that fires
+    every few seconds, and re-stamping would turn "when this was aligned" into
+    "when someone last looked at it".
+    """
     with cursor() as cur:
         cur.execute(
             "UPDATE sz_ingested_interviews SET aligned_at = now() "
-            "WHERE interview_ref = ANY(%s)",
+            "WHERE interview_ref = ANY(%s) AND aligned_at IS NULL",
             (list(refs),),
         )
         return cur.rowcount

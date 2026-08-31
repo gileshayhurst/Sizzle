@@ -295,32 +295,33 @@
           return;
         }
         if (res.body.skipped) {
-          statusNode.textContent = "Already aligned - ready to generate.";
+          statusNode.textContent = "Already aligned - use the button above.";
           return;
         }
         statusNode.textContent = "Aligning...";
-        pollAlign(res.body.job_id, statusNode);
+        pollAlign(res.body.job_id, sessionKey, statusNode);
       })
       .catch(function (e) { statusNode.textContent = "Alignment failed: " + e.message; });
   }
 
-  function pollAlign(jobId, statusNode) {
-    fetch("/encode-status/" + encodeURIComponent(jobId))
+  function pollAlign(jobId, sessionKey, statusNode) {
+    fetch("/encode-status/" + encodeURIComponent(jobId)
+          + "?session_key=" + encodeURIComponent(sessionKey))
       .then(function (r) { return r.json(); })
       .then(function (j) {
         const state = (j.status || "").toLowerCase();
         if (state.indexOf("succeed") === 0 || state === "done") {
-          statusNode.textContent = "Aligned. Open the generator to build a reel.";
+          statusNode.textContent = "Aligned - use the button above to build a reel.";
         } else if (state.indexOf("fail") === 0 || state.indexOf("cancel") === 0) {
           statusNode.textContent = "Alignment " + state + ".";
         } else {
           statusNode.textContent = "Aligning... (" + (j.status || "running") + ")";
-          setTimeout(function () { pollAlign(jobId, statusNode); }, 5000);
+          setTimeout(function () { pollAlign(jobId, sessionKey, statusNode); }, 5000);
         }
       })
       // A blip polling status must not look like a failed alignment: back off
       // and ask again.
-      .catch(function () { setTimeout(function () { pollAlign(jobId, statusNode); }, 8000); });
+      .catch(function () { setTimeout(function () { pollAlign(jobId, sessionKey, statusNode); }, 8000); });
   }
 
   function loadReels() {
@@ -421,6 +422,15 @@
         });
         line.appendChild(alignBtn);
         line.appendChild(alignStatus);
+
+        const go = el("div");
+        go.style.marginTop = "12px";
+        const createBtn = el("a", "fv-btn", "Create a reel from these interviews");
+        createBtn.href = "/?session=" + encodeURIComponent(res.body.session_key);
+        createBtn.style.textDecoration = "none";
+        createBtn.style.display = "inline-block";
+        go.appendChild(createBtn);
+        wrap.appendChild(go);
         wrap.appendChild(line);
         showResult("ok", wrap);
       })

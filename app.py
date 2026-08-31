@@ -1059,6 +1059,27 @@ def create_app(testing: bool = False) -> Flask:
         return jsonify({"job_id": job["job_id"], "status": job["status"],
                         "interviews": len(pending)})
 
+    def _record_alignment(session_key):
+        """Mark the interviews this session actually got aligned.
+
+        Truth comes from the artifact, not from the job exiting zero. The
+        encoder writes <REF>.forven.txt (the preserved original) only for
+        interviews it really encoded, and skips any whose sentences would not
+        anchor - those keep turn-level timings and are NOT aligned. Marking the
+        whole session on a green job would claim otherwise, and the claim would
+        be wrong for exactly the interviews that cut badly.
+        """
+        if not sz_store.is_configured():
+            return
+        try:
+            refs = [key.rsplit("/", 1)[-1][: -len(".forven.txt")]
+                    for key in storage.list_keys(session_key)
+                    if key.endswith(".forven.txt")]
+            if refs:
+                sz_store.mark_aligned(refs)
+        except Exception:
+            app.logger.exception("could not record alignment for %s", session_key)
+
     @app.get("/encode-status/<job_id>")
     @limiter.limit("120 per minute")
     def encode_status(job_id):
@@ -1067,11 +1088,19 @@ def create_app(testing: bool = False) -> Flask:
         if not render_jobs.is_configured():
             return jsonify({"error": "Encoder jobs are not configured"}), 503
         try:
-            return jsonify(render_jobs.get_job(job_id))
+            job = render_jobs.get_job(job_id)
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
         except render_jobs.RenderError as exc:
             return jsonify({"error": str(exc)}), 502
+
+        # The encoder is deliberately standalone - it holds no database
+        # credentials and its only contract is the transcript file format - so
+        # the app records the outcome on its behalf, from storage.
+        session_key = request.args.get("session_key", "")
+        if job.get("status") == "succeeded" and render_jobs.SESSION_KEY_RE.match(session_key):
+            _record_alignment(session_key)
+        return jsonify(job)
 
     @app.post("/upload/commit")
     def upload_commit():
