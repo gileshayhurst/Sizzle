@@ -47,6 +47,7 @@ from shared import (
 import storage
 import forven_api
 import forven_config
+import forven_deliver
 import forven_ingest
 import sz_store
 
@@ -683,6 +684,127 @@ def create_app(testing: bool = False) -> Flask:
                         "ingested": len(landed),
                         "requested": len(refs),
                         "pair_name": pair["name"] if pair else None})
+
+    @app.get("/forven/reels")
+    def forven_reels():
+        """Reels in the library, with whether each can be delivered to Forven.
+
+        A reel is deliverable when it has an object key AND records which
+        interviews it was cut from. Entries made before the generator recorded
+        source_videos cannot be delivered without someone confirming the
+        sources, because register demands exactly the interviews in the cut.
+        """
+        try:
+            library = storage.load_library()
+        except Exception as exc:
+            return jsonify({"error": f"Could not read the library: {exc}"}), 502
+
+        reels = []
+        for entry in library:
+            sources = entry.get("source_videos") or []
+            refs = sorted({Path(name).stem for name in sources})
+            reels.append({
+                "id": entry.get("id"),
+                "filename": entry.get("filename"),
+                "prompt": entry.get("prompt"),
+                "duration_seconds": entry.get("duration_seconds"),
+                "clip_count": entry.get("clip_count"),
+                "created_at": entry.get("created_at"),
+                "reel_s3_key": entry.get("reel_s3_key"),
+                "source_refs": refs,
+                "deliverable": bool(entry.get("reel_s3_key") and refs),
+            })
+        reels.sort(key=lambda r: r.get("created_at") or "", reverse=True)
+        return jsonify({"reels": reels})
+
+    @app.post("/forven/deliver")
+    def forven_deliver_reel():
+        """Upload a finished reel to Forven and register it.
+
+        Runs upload-start, PUT, register - and records the outcome so the reel
+        can be traced back to what Forven called it.
+        """
+        body = request.get_json(silent=True) or {}
+        reel_id = (body.get("reel_id") or "").strip()
+        title = (body.get("title") or "").strip()
+        if not reel_id:
+            return jsonify({"error": "reel_id is required."}), 400
+
+        try:
+            pair, _, destination = _resolve_pair(body.get("pair_id"))
+        except forven_config.ConfigError as exc:
+            return jsonify({"error": str(exc)}), 400
+
+        try:
+            entry = next(e for e in storage.load_library() if e.get("id") == reel_id)
+        except StopIteration:
+            return jsonify({"error": "No such reel."}), 404
+        except Exception as exc:
+            return jsonify({"error": f"Could not read the library: {exc}"}), 502
+
+        s3_key = entry.get("reel_s3_key")
+        if not s3_key:
+            return jsonify({"error": "This reel has no stored file to deliver."}), 422
+
+        refs = sorted({Path(n).stem for n in (entry.get("source_videos") or [])})
+        if not refs:
+            return jsonify({
+                "error": "This reel does not record which interviews it came from, "
+                         "so it cannot be delivered. Regenerate it."
+            }), 422
+
+        # The reel lives in our object storage; Forven wants the bytes.
+        local = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
+        local.close()
+        try:
+            storage.download_file(s3_key, local.name)
+            client = forven_api.ForvenClient(destination.base_url, destination.api_key)
+            result = forven_deliver.deliver(
+                client,
+                tenant_public_id=destination.tenant_public_id,
+                reel_path=local.name,
+                title=title or entry.get("prompt") or entry.get("filename") or "Sizzle reel",
+                duration_seconds=int(entry.get("duration_seconds") or 0) or 1,
+                source_interview_refs=refs,
+                metadata={"library_id": reel_id, "clips": entry.get("clip_count")},
+            )
+        except forven_api.ForvenApiError as exc:
+            return jsonify({"error": f"{type(exc).__name__}: {exc}"}), 502
+        except Exception as exc:
+            app.logger.exception("reel delivery failed reel_id=%s", reel_id)
+            return jsonify({"error": f"Delivery failed: {exc}"}), 500
+        finally:
+            try:
+                os.remove(local.name)
+            except OSError:
+                pass
+
+        if sz_store.is_configured():
+            try:
+                stored = sz_store.create_reel(
+                    title=title or entry.get("prompt") or "Sizzle reel",
+                    prompt=entry.get("prompt") or "",
+                    session_key=entry.get("source_folder") or "",
+                    tenant_pair_id=pair["id"] if pair else None,
+                    clips=[{"interview_ref": ref, "start_seconds": 0.0,
+                            "end_seconds": 0.0} for ref in refs],
+                )
+                sz_store.set_media(stored["id"], media_key=s3_key,
+                                   duration_seconds=entry.get("duration_seconds"))
+                sz_store.mark_delivered(stored["id"],
+                                        reel_ref=result.get("reel_ref"),
+                                        reel_public_id=result.get("reel_public_id"))
+            except Exception:
+                # Delivered is delivered; failing to record it must not report
+                # a failure the customer would retry.
+                app.logger.exception("could not record delivery reel_id=%s", reel_id)
+
+        return jsonify({
+            "reel_ref": result.get("reel_ref"),
+            "reel_public_id": result.get("reel_public_id"),
+            "source_refs": refs,
+            "tenant_name": pair["dest_tenant_name"] if pair else None,
+        })
 
     _VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
     _ALLOWED_UPLOAD_EXTENSIONS = _VIDEO_EXTENSIONS | {".txt"}

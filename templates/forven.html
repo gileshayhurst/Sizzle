@@ -73,6 +73,15 @@
 
     <div id="listing"><div class="fv-empty">Loading…</div></div>
     <div class="fv-result" id="result"></div>
+
+    <div class="fv-head" style="margin-top:38px">
+      <span class="fv-title" style="font-size:1.25rem">Finished reels</span>
+      <button class="fv-btn fv-btn-quiet" id="refresh-reels">Refresh</button>
+    </div>
+    <p class="fv-sub">Reels the generator has produced. Deliver one to send it
+      back into Forven, where it appears under Shared With Us.</p>
+    <div id="reels"><div class="fv-empty">Loading...</div></div>
+    <div class="fv-result" id="deliver-result"></div>
   </div>
 
 <script>
@@ -84,6 +93,8 @@
   const resultEl = document.getElementById("result");
   const envLabel = document.getElementById("src-env-label");
   const pairEl = document.getElementById("pair");
+  const reelsEl = document.getElementById("reels");
+  const deliverResult = document.getElementById("deliver-result");
 
   function el(tag, cls, text) {
     const n = document.createElement(tag);
@@ -201,7 +212,120 @@
   }
 
   document.getElementById("refresh").addEventListener("click", load);
-  pairEl.addEventListener("change", load);
+  document.getElementById("refresh-reels").addEventListener("click", loadReels);
+
+  // Cutting needs per-sentence timings; Forven's transcripts are turn-level on
+  // a different clock. Alignment runs as a Render job, so dispatch then poll
+  // rather than holding the request open.
+  function align(sessionKey, statusNode) {
+    statusNode.textContent = "Starting alignment...";
+    fetch("/encode-session", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session_key: sessionKey })
+    })
+      .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, body: j }; }); })
+      .then(function (res) {
+        if (!res.ok) {
+          statusNode.textContent = "Alignment failed: " + (res.body.error || "");
+          return;
+        }
+        if (res.body.skipped) {
+          statusNode.textContent = "Already aligned - ready to generate.";
+          return;
+        }
+        statusNode.textContent = "Aligning...";
+        pollAlign(res.body.job_id, statusNode);
+      })
+      .catch(function (e) { statusNode.textContent = "Alignment failed: " + e.message; });
+  }
+
+  function pollAlign(jobId, statusNode) {
+    fetch("/encode-status/" + encodeURIComponent(jobId))
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        const state = (j.status || "").toLowerCase();
+        if (state.indexOf("succeed") === 0 || state === "done") {
+          statusNode.textContent = "Aligned. Open the generator to build a reel.";
+        } else if (state.indexOf("fail") === 0 || state.indexOf("cancel") === 0) {
+          statusNode.textContent = "Alignment " + state + ".";
+        } else {
+          statusNode.textContent = "Aligning... (" + (j.status || "running") + ")";
+          setTimeout(function () { pollAlign(jobId, statusNode); }, 5000);
+        }
+      })
+      // A blip polling status must not look like a failed alignment: back off
+      // and ask again.
+      .catch(function () { setTimeout(function () { pollAlign(jobId, statusNode); }, 8000); });
+  }
+
+  function loadReels() {
+    reelsEl.replaceChildren(el("div", "fv-empty", "Loading..."));
+    fetch("/forven/reels")
+      .then(function (r) { return r.json(); })
+      .then(function (body) { renderReels(body.reels || []); })
+      .catch(function (e) {
+        reelsEl.replaceChildren(el("div", "fv-empty", "Could not load reels: " + e.message));
+      });
+  }
+
+  function renderReels(reels) {
+    if (!reels.length) {
+      reelsEl.replaceChildren(el("div", "fv-empty", "No reels generated yet."));
+      return;
+    }
+    const stack = el("div");
+    reels.forEach(function (reel) {
+      const row = el("div", "fv-conn");
+      row.style.marginBottom = "10px";
+      row.appendChild(el("div", "fv-org", reel.prompt || reel.filename || "Untitled reel"));
+      const bits = [];
+      if (reel.clip_count) { bits.push(reel.clip_count + " clips"); }
+      if (reel.duration_seconds) { bits.push(Math.round(reel.duration_seconds) + "s"); }
+      if (reel.source_refs.length) { bits.push("from " + reel.source_refs.join(", ")); }
+      row.appendChild(el("div", "fv-meta", bits.join("  -  ")));
+
+      if (reel.deliverable) {
+        const btn = el("button", "fv-btn", "Deliver to Forven");
+        btn.style.marginTop = "10px";
+        btn.addEventListener("click", function () { deliver(reel, btn); });
+        row.appendChild(btn);
+      } else {
+        row.appendChild(el("div", "fv-meta", reel.reel_s3_key
+          ? "Cannot deliver: this reel does not record which interviews it came from. Regenerate it."
+          : "Cannot deliver: no stored file."));
+      }
+      stack.appendChild(row);
+    });
+    reelsEl.replaceChildren(stack);
+  }
+
+  function deliver(reel, btn) {
+    btn.disabled = true;
+    btn.textContent = "Delivering...";
+    deliverResult.style.display = "none";
+    fetch("/forven/deliver", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reel_id: reel.id, pair_id: selectedPairId() })
+    })
+      .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, body: j }; }); })
+      .then(function (res) {
+        deliverResult.className = "fv-result " + (res.ok ? "fv-ok" : "fv-bad");
+        deliverResult.style.display = "block";
+        deliverResult.textContent = res.ok
+          ? "Delivered to " + (res.body.tenant_name || "Forven") + " as " + res.body.reel_ref
+            + " - it appears under Shared With Us."
+          : (res.body.error || "Delivery failed.");
+      })
+      .catch(function (e) {
+        deliverResult.className = "fv-result fv-bad";
+        deliverResult.style.display = "block";
+        deliverResult.textContent = "Delivery failed: " + e.message;
+      })
+      .then(function () { btn.disabled = false; btn.textContent = "Deliver to Forven"; });
+  }
+  pairEl.addEventListener("change", function () { load(); loadReels(); });
 
   pullBtn.addEventListener("click", function () {
     const refs = Array.from(document.querySelectorAll(".fv-pick:checked")).map(function (b) { return b.value; });
@@ -223,8 +347,16 @@
         wrap.appendChild(el("div", null, "Pulled " + res.body.ingested + " interview(s) into a session."));
         const line = el("div");
         line.appendChild(el("span", null, "Next, align it: "));
-        const code = el("code", null, "python -m encoder.job " + res.body.session_key);
-        line.appendChild(code);
+        line.appendChild(el("span", null, "Alignment is required before cutting. "));
+        const alignBtn = el("button", "fv-btn", "Align now");
+        const alignStatus = el("span", "fv-count", "");
+        alignStatus.style.marginLeft = "10px";
+        alignBtn.addEventListener("click", function () {
+          alignBtn.disabled = true;
+          align(res.body.session_key, alignStatus);
+        });
+        line.appendChild(alignBtn);
+        line.appendChild(alignStatus);
         wrap.appendChild(line);
         showResult("ok", wrap);
       })
@@ -236,6 +368,7 @@
   });
 
   load();
+  loadReels();
 })();
 </script>
 </body>

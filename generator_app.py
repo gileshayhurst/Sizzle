@@ -590,6 +590,12 @@ def _run_generation_impl(job_id: str, folder: str,
         "clip_count": len(clip_durations),
         "segment_starts": segment_starts,
         "created_at": datetime.now().isoformat(timespec="seconds"),
+        # Which interviews actually made it into the cut. Forven's reel-register
+        # call needs exactly these as source_interview_refs: extra refs wrongly
+        # restrict where the reel may be shown, missing ones break its
+        # participant-erasure index. Derived from the segments that SURVIVED,
+        # not from what was selected.
+        "source_videos": sorted(segment_video_names),
     }
     if storage.is_cloud() and session_key and reel_download_url:
         # Only record the S3 key when the upload actually succeeded; otherwise
@@ -934,6 +940,10 @@ def create_app(testing: bool = False) -> Flask:
             "segment_starts": body.get("segment_starts", []),
             "created_at": datetime.now().isoformat(timespec="seconds"),
             "reel_s3_key": f"{session_key}/{output_filename}",
+            # Same contract as the server-side path: without these the reel
+            # cannot be delivered to Forven, because register needs exactly
+            # the interviews in the cut.
+            "source_videos": sorted(body.get("source_videos") or []),
         }
         captions_key = (body.get("captions_key") or "").strip()
         if captions_key:
