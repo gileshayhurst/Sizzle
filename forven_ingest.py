@@ -6,6 +6,9 @@ know the interviews came from an API rather than a folder - everything
 downstream is unchanged.
 """
 
+import os
+import shutil
+import tempfile
 from urllib import request as urlrequest
 
 import storage
@@ -15,9 +18,25 @@ DOWNLOAD_TIMEOUT_SECONDS = 300
 
 
 def _download_to_storage(url: str, key: str) -> None:
-    """Stream a presigned media URL straight into storage."""
-    with urlrequest.urlopen(url, timeout=DOWNLOAD_TIMEOUT_SECONDS) as response:
-        storage.upload_stream(key, response)
+    """Stream a presigned media URL into storage.
+
+    Downloads to a temp file and hands that to storage.upload_file, which works
+    in BOTH local and cloud mode - storage.upload_stream is cloud-only and
+    raises in local mode. Going via a file also keeps a multi-hundred-megabyte
+    interview off the heap.
+    """
+    handle, temp_path = tempfile.mkstemp(suffix=".download")
+    os.close(handle)
+    try:
+        with urlrequest.urlopen(url, timeout=DOWNLOAD_TIMEOUT_SECONDS) as response:
+            with open(temp_path, "wb") as out:
+                shutil.copyfileobj(response, out)
+        storage.upload_file(temp_path, key)
+    finally:
+        try:
+            os.remove(temp_path)
+        except OSError:
+            pass
 
 
 def ingest(client, *, tenant_public_id: str, refs: list, session_key: str,

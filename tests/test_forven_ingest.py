@@ -50,3 +50,40 @@ def test_ingest_skips_an_interview_with_no_transcript(monkeypatch):
                          session_key="sessions/abc")
 
     assert written == {}
+
+
+def test_download_uses_upload_file_so_it_works_in_local_mode(monkeypatch, tmp_path):
+    """storage.upload_stream is cloud-only and raises in local mode."""
+    import io
+
+    class _FakeResponse:
+        def __init__(self, data):
+            self._buf = io.BytesIO(data)
+
+        def read(self, size=-1):
+            return self._buf.read(size)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    uploaded = {}
+
+    def fake_upload_file(local_path, key):
+        with open(local_path, "rb") as handle:
+            uploaded[key] = handle.read()
+
+    def exploding_upload_stream(key, readable):
+        raise AssertionError("upload_stream is cloud-only and must not be used here")
+
+    monkeypatch.setattr(forven_ingest.urlrequest, "urlopen",
+                        lambda url, timeout=None: _FakeResponse(b"video-bytes"))
+    monkeypatch.setattr(forven_ingest.storage, "upload_file", fake_upload_file)
+    monkeypatch.setattr(forven_ingest.storage, "upload_stream", exploding_upload_stream,
+                        raising=False)
+
+    forven_ingest._download_to_storage("https://s3.example/x", "sessions/abc/X.mp4")
+
+    assert uploaded["sessions/abc/X.mp4"] == b"video-bytes"

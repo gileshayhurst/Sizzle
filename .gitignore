@@ -51,3 +51,6 @@ Compare/
 
 # npm workspace — exists only to vendor mediabunny into static/vendor/
 node_modules/
+
+# Ingested interviews - participant media and transcripts, never committed
+sessions/
