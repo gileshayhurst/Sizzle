@@ -6,3 +6,4 @@ flask-limiter
 flask-sock
 boto3
 faster-whisper
+psycopg2-binary

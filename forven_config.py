@@ -1,7 +1,18 @@
-"""Two credential pairs, never mixed, plus the tenant echo guard.
+"""Resolving which Forven tenants to act on, and with which key.
 
-Sources are read from PRODUCTION; reels are delivered to STAGING. Keys are
-per-environment and a key from one environment means nothing in the other.
+The split matters:
+
+  * API KEYS live in the environment. They are the application's credentials,
+    one per Forven environment, and they are secrets.
+  * TENANTS live in the database (sz_tenant_pairs). Whose interviews and where
+    the reels go is the thing that varies between customers, so it is data -
+    adding another organisation is a row, not a redeploy.
+
+Keys are per-environment and never crossed: a staging key means nothing
+against production.
+
+The environment-only path below remains as a fallback so a deployment works
+before any tenant pair has been configured.
 """
 
 import os
@@ -30,6 +41,35 @@ def _require(name: str) -> str:
     if not value:
         raise ConfigError(f"{name} is not set.")
     return value
+
+
+def key_for_env(env: str) -> str:
+    """The application's API key for one Forven environment."""
+    name = "FORVEN_STAGING_API_KEY" if env == "staging" else "FORVEN_PROD_API_KEY"
+    return _require(name)
+
+
+def base_for_env(env: str) -> str:
+    return STAGING_BASE if env == "staging" else PRODUCTION_BASE
+
+
+def endpoints_for_pair(pair: dict) -> tuple:
+    """(source, destination) endpoints for a configured tenant pair.
+
+    The pair supplies the environments and tenant ids; the environment supplies
+    the matching key.
+    """
+    source = Endpoint(
+        base_for_env(pair["source_env"]),
+        key_for_env(pair["source_env"]),
+        pair["source_tenant_id"],
+    )
+    destination = Endpoint(
+        base_for_env(pair["dest_env"]),
+        key_for_env(pair["dest_env"]),
+        pair["dest_tenant_id"],
+    )
+    return source, destination
 
 
 def source_env() -> str:
