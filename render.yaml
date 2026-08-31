@@ -27,6 +27,20 @@ services:
         sync: false
       - key: S3_ENDPOINT_URL
         sync: false
+      # Forven Video Access API. Keys only - which organisations to read from
+      # and write to are rows in sz_tenant_pairs, so adding a customer does not
+      # mean redeploying. Per-environment: a staging key is rejected by
+      # production and vice versa.
+      - key: FORVEN_PROD_API_KEY
+        sync: false
+      - key: FORVEN_STAGING_API_KEY
+        sync: false
+      # Sizzle Reel state: tenant pairs, delivered reels, and which interviews
+      # each was cut from. Only this service touches it - the generator and
+      # encoder do not. Unset means /forven falls back to environment-only
+      # configuration and records nothing.
+      - key: DATABASE_URL
+        sync: false
 
   - type: web
     name: sizzle-generator
