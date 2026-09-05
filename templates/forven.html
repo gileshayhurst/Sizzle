@@ -409,7 +409,14 @@
           return;
         }
         const wrap = el("div");
-        wrap.appendChild(el("div", null, "Pulled " + res.body.ingested + " interview(s) into a session."));
+        let summary = "Pulled " + res.body.ingested + " interview(s) into a session.";
+        if (res.body.reused) {
+          // Worth saying out loud: the reused ones skip the download and the
+          // alignment pass entirely, which is where the time goes.
+          summary += " " + res.body.reused + " reused from an earlier pull "
+                   + "(no re-download, no re-alignment).";
+        }
+        wrap.appendChild(el("div", null, summary));
         const line = el("div");
         line.appendChild(el("span", null, "Next, align it: "));
         line.appendChild(el("span", null, "Alignment is required before cutting. "));

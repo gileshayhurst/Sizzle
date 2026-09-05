@@ -93,6 +93,26 @@ def download_file(key: str, local_path: str) -> None:
         shutil.copy2(src, local_path)
 
 
+def copy_key(src_key: str, dest_key: str) -> None:
+    """Copy one object from src_key to dest_key.
+
+    In cloud mode the store does this server-side, so re-using a 1.4 GB
+    interview costs one API call rather than a download and an upload through
+    this process.
+    """
+    if is_cloud():
+        _s3().copy_object(
+            Bucket=_bucket(),
+            Key=dest_key,
+            CopySource={"Bucket": _bucket(), "Key": src_key},
+        )
+    else:
+        import shutil
+        dest = _data_root() / dest_key
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(_data_root() / src_key, dest)
+
+
 def delete_key(key: str) -> None:
     """Delete a file from storage. No-op if it does not exist."""
     if is_cloud():

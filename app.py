@@ -661,6 +661,56 @@ def create_app(testing: bool = False) -> Flask:
 
         return jsonify(payload)
 
+    def _reuse_held_interviews(refs, session_key):
+        """Copy interviews we already hold into this session.
+
+        Returns (reused_refs, aligned_refs). The index says where we put things,
+        but files get deleted, so the copy is what decides - a ref only counts
+        as reused once both its video and its transcript are actually in place.
+
+        Whether the copied transcript is aligned is read from the file, not from
+        the index: the encoder overwrites the transcript in place, so the file
+        is the truth and a stale index row cannot cause a plain transcript to be
+        recorded as aligned.
+        """
+        if not sz_store.is_configured():
+            return [], []
+        try:
+            held = sz_store.ingested_sessions(refs)
+        except Exception:
+            app.logger.exception("could not read the ingest index")
+            return [], []
+
+        reused, aligned = [], []
+        for ref, row in held.items():
+            source_prefix = row.get("session_key")
+            if not source_prefix or source_prefix == session_key:
+                continue
+            try:
+                keys = set(storage.list_keys(source_prefix))
+                text_key = f"{source_prefix}/{ref}.txt"
+                video_key = next(
+                    (k for k in keys
+                     if k.rpartition(".")[0] == f"{source_prefix}/{ref}"
+                     and f".{k.rpartition('.')[2].lower()}" in _VIDEO_KEY_SUFFIXES),
+                    None)
+                if text_key not in keys or video_key is None:
+                    continue
+                suffix = video_key.rpartition(".")[2]
+                storage.copy_key(text_key, f"{session_key}/{ref}.txt")
+                storage.copy_key(video_key, f"{session_key}/{ref}.{suffix}")
+            except Exception:
+                # A copy that fails is not fatal: the ref simply is not reused
+                # and gets fetched from Forven like any other.
+                app.logger.exception("could not reuse %s", ref)
+                continue
+
+            reused.append(ref)
+            if not _sessions_needing_encode([f"{session_key}/{ref}.txt",
+                                             f"{session_key}/{ref}.{suffix}"]):
+                aligned.append(ref)
+        return reused, aligned
+
     @app.post("/forven/pull")
     def forven_pull():
         body = request.get_json(silent=True) or {}
@@ -674,13 +724,27 @@ def create_app(testing: bool = False) -> Flask:
         except forven_config.ConfigError as exc:
             return jsonify({"error": str(exc)}), 400
 
-        client = forven_api.ForvenClient(source.base_url, source.api_key)
         session_key = storage.new_session_key()
-        try:
-            forven_ingest.ingest(client, tenant_public_id=source.tenant_public_id,
-                                 refs=refs, session_key=session_key)
-        except forven_api.ForvenApiError as exc:
-            return jsonify({"error": f"{type(exc).__name__}: {exc}"}), 502
+
+        # An interview we have pulled before is copied across rather than
+        # downloaded and aligned again. Alignment is the expensive step - the
+        # whole video through faster-whisper on a job - and the recording does
+        # not change, so paying for it once per reel was pure waste.
+        # refresh=true forces a fresh fetch, for the case Forven re-transcribes
+        # an interview and the copy we hold goes stale.
+        reused, aligned_reuse = [], []
+        if not body.get("refresh"):
+            reused, aligned_reuse = _reuse_held_interviews(refs, session_key)
+
+        to_fetch = [r for r in refs if r not in reused]
+        if to_fetch:
+            client = forven_api.ForvenClient(source.base_url, source.api_key)
+            try:
+                forven_ingest.ingest(client,
+                                     tenant_public_id=source.tenant_public_id,
+                                     refs=to_fetch, session_key=session_key)
+            except forven_api.ForvenApiError as exc:
+                return jsonify({"error": f"{type(exc).__name__}: {exc}"}), 502
 
         # Interviews whose transcript is not ready are skipped, so report what
         # actually landed rather than what was asked for.
@@ -688,17 +752,25 @@ def create_app(testing: bool = False) -> Flask:
                   if k.endswith(".txt")]
 
         if landed and sz_store.is_configured():
-            try:
-                sz_store.record_ingested(landed,
-                                         tenant_public_id=source.tenant_public_id,
-                                         session_key=session_key)
-            except Exception:
-                # The pull succeeded; failing to index it must not lose it.
-                app.logger.exception("could not record ingest index")
+            # Recorded in two groups: a copied-in aligned transcript keeps its
+            # alignment, a freshly fetched one is plain and must lose it.
+            groups = [([r for r in landed if r in aligned_reuse], True),
+                      ([r for r in landed if r not in aligned_reuse], False)]
+            for group, preserve in groups:
+                if not group:
+                    continue
+                try:
+                    sz_store.record_ingested(
+                        group, tenant_public_id=source.tenant_public_id,
+                        session_key=session_key, preserve_aligned=preserve)
+                except Exception:
+                    # The pull succeeded; failing to index it must not lose it.
+                    app.logger.exception("could not record ingest index")
 
         return jsonify({"session_key": session_key,
                         "ingested": len(landed),
                         "requested": len(refs),
+                        "reused": len(reused),
                         "pair_name": pair["name"] if pair else None})
 
     @app.post("/forven/pairs")

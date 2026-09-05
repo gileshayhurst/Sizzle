@@ -179,15 +179,27 @@ def already_ingested() -> set:
         return {row["interview_ref"] for row in cur.fetchall()}
 
 
-def record_ingested(refs, *, tenant_public_id: str, session_key: str) -> int:
+def record_ingested(refs, *, tenant_public_id: str, session_key: str,
+                    preserve_aligned: bool = False) -> int:
     """Note which interviews were pulled, and where they landed.
 
     Idempotent: re-ingesting a ref updates where it lives rather than failing,
     because a later pull genuinely supersedes the earlier one.
+
+    A fresh pull brings a plain transcript down from Forven, so any previous
+    alignment no longer describes the file that is there and is cleared. Pass
+    preserve_aligned when the copy carried into the new session is the ALIGNED
+    one - clearing it there would send a finished interview back through the
+    encoder for nothing, which is the whole cost this reuse exists to avoid.
     """
     rows = [(ref, tenant_public_id, session_key) for ref in refs]
     if not rows:
         return 0
+    # Two statements rather than a parameter: execute_values reserves its only
+    # placeholder for the VALUES list, and preserve_aligned is our own flag,
+    # never caller input.
+    aligned_clause = ('sz_ingested_interviews.aligned_at' if preserve_aligned
+                      else 'NULL')
     with cursor() as cur:
         psycopg2.extras.execute_values(
             cur,
@@ -197,10 +209,30 @@ def record_ingested(refs, *, tenant_public_id: str, session_key: str) -> int:
                ON CONFLICT (interview_ref) DO UPDATE
                    SET session_key = EXCLUDED.session_key,
                        ingested_at = now(),
-                       aligned_at  = NULL""",
+                       aligned_at  = """ + aligned_clause,
             rows,
         )
         return len(rows)
+
+
+def ingested_sessions(refs) -> dict:
+    """Where each of these interviews already lives, if we have pulled it.
+
+    Returns {interview_ref: {"session_key": ..., "aligned_at": ...}} for the
+    refs we know about. The caller still has to check the files are really
+    there - this index records what we did, not what survived.
+    """
+    if not refs:
+        return {}
+    with cursor() as cur:
+        cur.execute(
+            "SELECT interview_ref, session_key, aligned_at "
+            "FROM sz_ingested_interviews WHERE interview_ref = ANY(%s)",
+            (list(refs),),
+        )
+        return {r["interview_ref"]: {"session_key": r["session_key"],
+                                     "aligned_at": r["aligned_at"]}
+                for r in cur.fetchall()}
 
 
 def mark_aligned(refs) -> int:
